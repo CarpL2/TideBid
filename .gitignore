@@ -1,0 +1,81 @@
+# Operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDEs and editors
+.idea/
+*.iml
+*.ipr
+*.iws
+.fleet/
+.vscode/
+.classpath
+.project
+.settings/
+*.swp
+*.swo
+*~
+
+# Java and Maven
+*.class
+**/target/
+dependency-reduced-pom.xml
+.flattened-pom.xml
+hs_err_pid*
+replay_pid*
+
+# Node.js and frontend
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+**/.nyc_output/
+**/playwright-report/
+**/test-results/
+.pnpm-store/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local environment and overrides
+.env
+.env.*
+!.env.example
+application-local.yml
+application-local.yaml
+application-local.properties
+bootstrap-local.yml
+bootstrap-local.yaml
+bootstrap-local.properties
+compose.override.yml
+compose.override.yaml
+
+# Secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets/
+.keys/
+
+# Runtime state and logs
+*.log
+*.pid
+logs/
+run/
+.runtime/
+
+# Local container data
+infra/data/
+docker-data/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
