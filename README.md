@@ -2,7 +2,7 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. The repository structure, local infrastructure, services, frontend, and verification scripts are being implemented incrementally; the application is not runnable yet.
+The project is currently in the foundation stage. The Maven parent and four shared modules are implemented and verified; deployable services, local infrastructure, frontend, and startup scripts are still in progress.
 
 ## Core flow
 
@@ -52,6 +52,12 @@ node --version
 pnpm --version
 docker version
 docker compose version
+```
+
+Build and test the modules currently in the repository:
+
+```powershell
+mvn verify
 ```
 
 ## Local ports

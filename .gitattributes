@@ -31,3 +31,4 @@
 *.pdf binary
 *.jar binary
 *.zip binary
+*.imports text eol=lf
