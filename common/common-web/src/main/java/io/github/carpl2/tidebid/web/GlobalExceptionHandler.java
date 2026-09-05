@@ -12,9 +12,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Maps expected failures to a stable JSON response without exposing stack traces.
@@ -62,6 +65,21 @@ public final class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         return failure(CommonErrorCode.INVALID_ARGUMENT, "Request body is malformed", request);
+    }
+
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<ApiResponse<Void>> handleNotFound(Exception exception, HttpServletRequest request) {
+        return failure(CommonErrorCode.NOT_FOUND, CommonErrorCode.NOT_FOUND.defaultMessage(), request);
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotAllowed(
+            HttpRequestMethodNotSupportedException exception,
+            HttpServletRequest request
+    ) {
+        return ResponseEntity.status(CommonErrorCode.METHOD_NOT_ALLOWED.httpStatus())
+                .headers(exception.getHeaders())
+                .body(ApiResponse.failure(CommonErrorCode.METHOD_NOT_ALLOWED, traceId(request)));
     }
 
     @ExceptionHandler(Exception.class)

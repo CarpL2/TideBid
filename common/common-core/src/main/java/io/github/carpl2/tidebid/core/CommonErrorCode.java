@@ -8,6 +8,8 @@ public enum CommonErrorCode implements ErrorCode {
     INVALID_ARGUMENT("COMMON_INVALID_ARGUMENT", "Invalid request", 400),
     UNAUTHENTICATED("COMMON_UNAUTHENTICATED", "Authentication is required", 401),
     FORBIDDEN("COMMON_FORBIDDEN", "Access is forbidden", 403),
+    NOT_FOUND("COMMON_NOT_FOUND", "Resource not found", 404),
+    METHOD_NOT_ALLOWED("COMMON_METHOD_NOT_ALLOWED", "Request method is not allowed", 405),
     CONFLICT("COMMON_CONFLICT", "The request conflicts with current state", 409),
     TOO_MANY_REQUESTS("COMMON_TOO_MANY_REQUESTS", "Too many requests", 429),
     INTERNAL_ERROR("COMMON_INTERNAL_ERROR", "An internal error occurred", 500),

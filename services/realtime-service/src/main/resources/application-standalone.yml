@@ -1,0 +1,13 @@
+# Skeleton-only mode: no external registration or remote configuration.
+spring:
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+        import-check:
+          enabled: false
+    service-registry:
+      auto-registration:
+        enabled: false

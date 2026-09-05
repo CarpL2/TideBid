@@ -2,7 +2,7 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. The Maven parent and four shared modules are implemented and verified; deployable services, local infrastructure, frontend, and startup scripts are still in progress.
+The project is currently in the foundation stage. Four shared modules and six executable service skeletons are available. Each service exposes health and application information; registration, login, wallets, bidding, frontend, and infrastructure scripts are not implemented yet.
 
 ## Core flow
 
@@ -13,7 +13,7 @@ The project is currently in the foundation stage. The Maven parent and four shar
 5. Closing produces a reliable event, creates an order, and releases or deducts virtual funds.
 6. An optional AI assistant can propose item metadata from images without blocking the auction flow.
 
-## Planned modules
+## Modules
 
 | Module | Responsibility |
 | --- | --- |
@@ -59,6 +59,69 @@ Build and test the modules currently in the repository:
 ```powershell
 mvn verify
 ```
+
+## Run a service skeleton
+
+Build from the repository root, then run any executable JAR in a separate terminal:
+
+```powershell
+mvn clean verify
+java -jar services/gateway-service/target/gateway-service.jar
+```
+
+Open `http://127.0.0.1:9000/actuator/health` to see `{"status":"UP"}`, or
+`http://127.0.0.1:9000/actuator/info` to see the application name. Stop the process with Ctrl+C.
+If your local Maven environment uses a custom settings file, pass it using `mvn -s <path-to-settings.xml> clean verify`.
+
+| Service | Executable JAR | Application name |
+| --- | --- | --- |
+| Gateway | `services/gateway-service/target/gateway-service.jar` | `tidebid-gateway` |
+| Account | `services/account-service/target/account-service.jar` | `tidebid-account` |
+| Auction | `services/auction-service/target/auction-service.jar` | `tidebid-auction` |
+| Trade | `services/trade-service/target/trade-service.jar` | `tidebid-trade` |
+| Realtime | `services/realtime-service/target/realtime-service.jar` | `tidebid-realtime` |
+| AI | `services/ai-service/target/ai-service.jar` | `tidebid-ai` |
+
+The default profile is `standalone`. It disables Nacos configuration and registration, needs no
+Docker or cloud keys, and binds each service to loopback (`127.0.0.1`). A healthy skeleton does
+not imply database, broker, authentication, or end-to-end readiness.
+
+Each service has three configuration files:
+
+- `application.yml`: application name, port, Actuator, serialization, and logging defaults.
+- `application-standalone.yml`: explicit switches for operation without Nacos.
+- `application-nacos.yml`: remote configuration and service registration for infrastructure integration.
+
+Only `health` and `info` are exposed through Actuator; the discovery page, `env`, and `beans`
+are not exposed. Actuator keeps its standard response format. Unknown application paths return a
+404 JSON error with `code`, `message`, `data`, and `traceId`.
+The gateway currently has no business routes or JWT enforcement; visiting `/` returns 404.
+
+Gateway uses WebFlux/Netty and its own reactive error/trace handling. MVC services obtain their
+trace filter and exception advice from `common-web` auto-configuration.
+The application tests start real HTTP servers on random ports in `standalone` mode.
+Endpoints under `/_test/` exist only in test code and are not packaged in application JARs.
+
+## Nacos integration profile (infrastructure still pending)
+
+Once Nacos is running, create namespace ID `tidebid-dev` and group `TIDEBID_GROUP`, containing
+`tidebid-common.yml` plus one `tidebid-<service>.yml` per service (for example, `tidebid-account.yml`).
+Set `TIDEBID_NACOS_SERVER_ADDR`, `TIDEBID_NACOS_NAMESPACE`, `TIDEBID_NACOS_USERNAME`, and
+`TIDEBID_NACOS_PASSWORD` in the process environment before starting:
+
+```powershell
+java -jar services/gateway-service/target/gateway-service.jar --spring.profiles.active=nacos
+```
+
+The imports use `spring.config.import` without `optional:`; configuration read/parse failures
+must not be silently ignored. This SDK can merely warn when a Data ID is empty, so actual
+configuration presence and loading must also be checked during infrastructure integration.
+Automatic refresh is disabled in the imports; restart the process after changing configuration.
+The configuration import script and live registration checks will be supplied with the infrastructure milestone.
+Java does not automatically load the repository's `.env`; the startup scripts for that are still pending.
+
+Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/starter.html),
+[Spring Boot executable JAR packaging](https://docs.spring.io/spring-boot/3.5/maven-plugin/packaging.html).
 
 ## Local ports
 

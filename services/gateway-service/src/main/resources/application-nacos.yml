@@ -1,0 +1,26 @@
+# Requires running Nacos and both Data IDs; import failures must stop startup.
+spring:
+  config:
+    import:
+      - "nacos:tidebid-common.yml?group=TIDEBID_GROUP&refreshEnabled=false"
+      - "nacos:${spring.application.name}.yml?group=TIDEBID_GROUP&refreshEnabled=false"
+  cloud:
+    nacos:
+      username: ${TIDEBID_NACOS_USERNAME}
+      password: ${TIDEBID_NACOS_PASSWORD}
+      discovery:
+        enabled: true
+        server-addr: ${TIDEBID_NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${TIDEBID_NACOS_NAMESPACE:tidebid-dev}
+        group: TIDEBID_GROUP
+      config:
+        enabled: true
+        server-addr: ${TIDEBID_NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${TIDEBID_NACOS_NAMESPACE:tidebid-dev}
+        group: TIDEBID_GROUP
+        file-extension: yml
+        import-check:
+          enabled: true
+    service-registry:
+      auto-registration:
+        enabled: true

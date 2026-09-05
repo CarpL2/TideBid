@@ -1,0 +1,43 @@
+server:
+  address: 127.0.0.1
+  port: 9000
+  shutdown: graceful
+
+spring:
+  application:
+    name: tidebid-gateway
+  profiles:
+    default: standalone
+  main:
+    web-application-type: reactive
+  threads:
+    virtual:
+      enabled: false
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+management:
+  endpoints:
+    web:
+      discovery:
+        enabled: false
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: ${spring.application.name}
+    stage: foundation
+
+logging:
+  pattern:
+    level: "%5p [traceId=%X{traceId:-}]"
