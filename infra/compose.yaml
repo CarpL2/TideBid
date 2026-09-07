@@ -6,6 +6,7 @@ services:
     environment:
       TZ: UTC
       MYSQL_ROOT_PASSWORD: "${TIDEBID_MYSQL_ROOT_PASSWORD:?Set TIDEBID_MYSQL_ROOT_PASSWORD in .env}"
+      MYSQL_ROOT_HOST: "%"
       MYSQL_DATABASE: nacos_config
       MYSQL_USER: nacos
       MYSQL_PASSWORD: "${TIDEBID_NACOS_DB_PASSWORD:?Set TIDEBID_NACOS_DB_PASSWORD in .env}"
@@ -27,6 +28,27 @@ services:
       start_period: 30s
     stop_grace_period: 30s
     mem_limit: 768m
+    networks:
+      - tidebid-network
+
+  mysql-bootstrap:
+    image: mysql:8.4.10
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_PWD: "${TIDEBID_MYSQL_ROOT_PASSWORD:?Set TIDEBID_MYSQL_ROOT_PASSWORD in .env}"
+      TIDEBID_ACCOUNT_DB_PASSWORD: "${TIDEBID_ACCOUNT_DB_PASSWORD:?Set TIDEBID_ACCOUNT_DB_PASSWORD in .env}"
+      TIDEBID_AUCTION_DB_PASSWORD: "${TIDEBID_AUCTION_DB_PASSWORD:?Set TIDEBID_AUCTION_DB_PASSWORD in .env}"
+      TIDEBID_TRADE_DB_PASSWORD: "${TIDEBID_TRADE_DB_PASSWORD:?Set TIDEBID_TRADE_DB_PASSWORD in .env}"
+      TIDEBID_AI_DB_PASSWORD: "${TIDEBID_AI_DB_PASSWORD:?Set TIDEBID_AI_DB_PASSWORD in .env}"
+    entrypoint: ["/bin/bash", "/bootstrap/bootstrap-databases.sh"]
+    volumes:
+      - ./mysql/bootstrap/bootstrap-databases.sh:/bootstrap/bootstrap-databases.sh:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+    mem_limit: 128m
     networks:
       - tidebid-network
 
@@ -107,6 +129,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      mysql-bootstrap:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/v3/console/health/readiness | grep -Eq '\"data\"[[:space:]]*:[[:space:]]*\"ok\"'"]
       interval: 10s

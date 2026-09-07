@@ -113,10 +113,17 @@ Windows MySQL installation on `localhost:3306`. In DataGrip, keep old projects o
 create a separate TideBid data source on port 13306. Containers still reach this database as
 `mysql:3306`; only access from the Windows host uses 13306.
 
-Compose also runs a short-lived `rocketmq-volume-init` job before RocketMQ starts. It gives the
-new named volumes to the non-root RocketMQ user and then exits successfully; seeing that one job
-as `Exited (0)` is expected. The standalone Proxy has a bounded restart policy because the Broker
-can open its TCP port shortly before it finishes registering with the NameServer.
+Compose runs two short-lived initialization jobs. `mysql-bootstrap` creates the four business
+schemas and the four restricted service accounts after MySQL becomes healthy, then verifies that
+each account can write only its own schema. `rocketmq-volume-init` gives new named volumes to the
+non-root RocketMQ user before RocketMQ starts. Both jobs finish as `Exited (0)`; that status is
+expected. The standalone Proxy has a bounded restart policy because the Broker can open its TCP
+port shortly before it finishes registering with the NameServer.
+
+A DataGrip connection using local root credentials on port 13306 can inspect every TideBid schema.
+Application services will not use root: `tidebid_account_app`, `tidebid_auction_app`,
+`tidebid_trade_app`, and `tidebid_ai_app` are each limited to the matching schema. Gateway and the
+realtime service do not own a MySQL schema.
 
 Create the ignored local environment file before the first start:
 
@@ -136,8 +143,8 @@ $random.Dispose()
 ```
 
 The printed value belongs only in the ignored `.env`. Use different random values for
-`TIDEBID_NACOS_AUTH_IDENTITY_KEY` and `TIDEBID_NACOS_AUTH_IDENTITY_VALUE`, and use strong local
-passwords for MySQL, Redis, and Nacos.
+`TIDEBID_NACOS_AUTH_IDENTITY_KEY` and `TIDEBID_NACOS_AUTH_IDENTITY_VALUE`, and use strong, distinct
+local passwords for the MySQL root account, four service database accounts, Redis, and Nacos.
 
 Validate and start the infrastructure from the repository root:
 
