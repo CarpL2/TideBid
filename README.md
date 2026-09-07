@@ -2,7 +2,7 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. Four shared modules and six executable service skeletons are available. Each service exposes health and application information; registration, login, wallets, bidding, frontend, and infrastructure scripts are not implemented yet.
+The project is currently in the foundation stage. Four shared modules, six executable service skeletons, and a local middleware Compose definition are available. Each service exposes health and application information; registration, login, wallets, bidding, frontend, and one-command lifecycle scripts are not implemented yet.
 
 ## Core flow
 
@@ -102,6 +102,72 @@ trace filter and exception advice from `common-web` auto-configuration.
 The application tests start real HTTP servers on random ports in `standalone` mode.
 Endpoints under `/_test/` exist only in test code and are not packaged in application JARs.
 
+## Local middleware
+
+The Compose environment contains MySQL, Redis, Nacos, one RocketMQ NameServer, Broker and Proxy,
+and RocketMQ Dashboard. All images use fixed patch versions, all published ports bind only to
+`127.0.0.1`, and persistent state is stored in named Docker volumes.
+
+TideBid publishes its MySQL container on `127.0.0.1:13306` so it can coexist with an existing
+Windows MySQL installation on `localhost:3306`. In DataGrip, keep old projects on port 3306 and
+create a separate TideBid data source on port 13306. Containers still reach this database as
+`mysql:3306`; only access from the Windows host uses 13306.
+
+Compose also runs a short-lived `rocketmq-volume-init` job before RocketMQ starts. It gives the
+new named volumes to the non-root RocketMQ user and then exits successfully; seeing that one job
+as `Exited (0)` is expected. The standalone Proxy has a bounded restart policy because the Broker
+can open its TCP port shortly before it finishes registering with the NameServer.
+
+Create the ignored local environment file before the first start:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Replace every `change-me` value in `.env`. `TIDEBID_NACOS_AUTH_TOKEN` must be Base64 for at least
+32 random bytes. One way to generate it in PowerShell is:
+
+```powershell
+$tokenBytes = New-Object byte[] 48
+$random = [Security.Cryptography.RandomNumberGenerator]::Create()
+$random.GetBytes($tokenBytes)
+[Convert]::ToBase64String($tokenBytes)
+$random.Dispose()
+```
+
+The printed value belongs only in the ignored `.env`. Use different random values for
+`TIDEBID_NACOS_AUTH_IDENTITY_KEY` and `TIDEBID_NACOS_AUTH_IDENTITY_VALUE`, and use strong local
+passwords for MySQL, Redis, and Nacos.
+
+Validate and start the infrastructure from the repository root:
+
+```powershell
+docker compose --env-file .env -f infra/compose.yaml config --quiet
+docker compose --env-file .env -f infra/compose.yaml up -d
+docker compose --env-file .env -f infra/compose.yaml ps
+```
+
+The first pull is large because Nacos and RocketMQ are Java images. Wait until every long-running
+service is healthy before using the consoles. Nacos is available at `http://127.0.0.1:8080`, and RocketMQ
+Dashboard at `http://127.0.0.1:8088`. Host Java applications use the RocketMQ Proxy endpoint
+`127.0.0.1:8081`, not the Broker's internal Docker hostname.
+
+Nacos 3 no longer supplies a default administrator password. On a fresh volume the console asks
+to initialize the `nacos` administrator. The idempotent initialization and configuration import
+script will be implemented in the Nacos integration milestone; `TIDEBID_NACOS_PASSWORD` is the
+password reserved for that step.
+
+Stop and resume the same containers without deleting data:
+
+```powershell
+docker compose --env-file .env -f infra/compose.yaml stop
+docker compose --env-file .env -f infra/compose.yaml start
+```
+
+`docker compose --env-file .env -f infra/compose.yaml down` removes the containers and project network but keeps
+named volumes. Do not add `-v` unless you deliberately intend to erase the local MySQL, Redis,
+and RocketMQ data. The one-command checked start/stop scripts are a later foundation milestone.
+
 ## Nacos integration profile (infrastructure still pending)
 
 Once Nacos is running, create namespace ID `tidebid-dev` and group `TIDEBID_GROUP`, containing
@@ -121,7 +187,9 @@ The configuration import script and live registration checks will be supplied wi
 Java does not automatically load the repository's `.env`; the startup scripts for that are still pending.
 
 Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/starter.html),
-[Spring Boot executable JAR packaging](https://docs.spring.io/spring-boot/3.5/maven-plugin/packaging.html).
+[Spring Boot executable JAR packaging](https://docs.spring.io/spring-boot/3.5/maven-plugin/packaging.html),
+[Nacos 3 Docker deployment](https://github.com/nacos-group/nacos-docker), and
+[RocketMQ Docker Compose template](https://github.com/apache/rocketmq-docker/blob/master/templates/docker-compose/rmq5-docker-compose.yml).
 
 ## Local ports
 
@@ -134,7 +202,7 @@ Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/ref
 | Realtime service | 9104 |
 | AI service | 9105 |
 | Web development server | 5173 |
-| MySQL | 3306 |
+| MySQL (host / container) | 13306 / 3306 |
 | Redis | 6379 |
 | Nacos console / server | 8080 / 8848 / 9848 |
 | RocketMQ NameServer / Broker / Proxy | 9876 / 10911 / 8081 |

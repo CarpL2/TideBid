@@ -1,0 +1,230 @@
+name: tidebid
+
+services:
+  mysql:
+    image: mysql:8.4.10
+    environment:
+      TZ: UTC
+      MYSQL_ROOT_PASSWORD: "${TIDEBID_MYSQL_ROOT_PASSWORD:?Set TIDEBID_MYSQL_ROOT_PASSWORD in .env}"
+      MYSQL_DATABASE: nacos_config
+      MYSQL_USER: nacos
+      MYSQL_PASSWORD: "${TIDEBID_NACOS_DB_PASSWORD:?Set TIDEBID_NACOS_DB_PASSWORD in .env}"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+      - --innodb-buffer-pool-size=128M
+    ports:
+      - "127.0.0.1:${TIDEBID_MYSQL_PORT:-13306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init/nacos-mysql-schema.sql:/docker-entrypoint-initdb.d/10-nacos-mysql-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    stop_grace_period: 30s
+    mem_limit: 768m
+    networks:
+      - tidebid-network
+
+  redis:
+    image: redis:7.4.11
+    environment:
+      TZ: UTC
+      REDIS_PASSWORD: "${TIDEBID_REDIS_PASSWORD:?Set TIDEBID_REDIS_PASSWORD in .env}"
+    command:
+      - /bin/sh
+      - -c
+      - exec redis-server --appendonly yes --appendfsync everysec --requirepass "$$REDIS_PASSWORD"
+    ports:
+      - "127.0.0.1:${TIDEBID_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    stop_grace_period: 15s
+    mem_limit: 256m
+    networks:
+      - tidebid-network
+
+  rocketmq-volume-init:
+    image: apache/rocketmq:5.3.3
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        chown -R 3000:3000 \
+          /volumes/nameserver-logs \
+          /volumes/broker-store \
+          /volumes/broker-logs \
+          /volumes/proxy-logs
+    volumes:
+      - rocketmq-nameserver-logs:/volumes/nameserver-logs
+      - rocketmq-broker-store:/volumes/broker-store
+      - rocketmq-broker-logs:/volumes/broker-logs
+      - rocketmq-proxy-logs:/volumes/proxy-logs
+    network_mode: none
+    restart: "no"
+    mem_limit: 64m
+
+  nacos:
+    image: nacos/nacos-server:v3.0.3
+    environment:
+      TZ: UTC
+      MODE: standalone
+      PREFER_HOST_MODE: hostname
+      NACOS_DEPLOYMENT_TYPE: merged
+      SPRING_DATASOURCE_PLATFORM: mysql
+      MYSQL_SERVICE_HOST: mysql
+      MYSQL_SERVICE_PORT: "3306"
+      MYSQL_SERVICE_DB_NAME: nacos_config
+      MYSQL_SERVICE_USER: nacos
+      MYSQL_SERVICE_PASSWORD: "${TIDEBID_NACOS_DB_PASSWORD:?Set TIDEBID_NACOS_DB_PASSWORD in .env}"
+      MYSQL_SERVICE_DB_PARAM: characterEncoding=utf8&connectTimeout=5000&socketTimeout=10000&autoReconnect=true&useUnicode=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_ADMIN_ENABLE: "true"
+      NACOS_AUTH_CONSOLE_ENABLE: "true"
+      NACOS_CONSOLE_UI_ENABLED: "true"
+      NACOS_AUTH_TOKEN: "${TIDEBID_NACOS_AUTH_TOKEN:?Set TIDEBID_NACOS_AUTH_TOKEN in .env}"
+      NACOS_AUTH_IDENTITY_KEY: "${TIDEBID_NACOS_AUTH_IDENTITY_KEY:?Set TIDEBID_NACOS_AUTH_IDENTITY_KEY in .env}"
+      NACOS_AUTH_IDENTITY_VALUE: "${TIDEBID_NACOS_AUTH_IDENTITY_VALUE:?Set TIDEBID_NACOS_AUTH_IDENTITY_VALUE in .env}"
+      JVM_XMS: 256m
+      JVM_XMX: 512m
+      JVM_XMN: 128m
+      JVM_MS: 64m
+      JVM_MMS: 192m
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8848:8848"
+      - "127.0.0.1:9848:9848"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/v3/console/health/readiness | grep -Eq '\"data\"[[:space:]]*:[[:space:]]*\"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    stop_grace_period: 30s
+    mem_limit: 768m
+    networks:
+      - tidebid-network
+
+  rocketmq-nameserver:
+    image: apache/rocketmq:5.3.3
+    environment:
+      TZ: UTC
+      JAVA_OPT_EXT: -server -Xms128m -Xmx256m -Xmn64m
+    command: sh mqnamesrv
+    ports:
+      - "127.0.0.1:9876:9876"
+    volumes:
+      - rocketmq-nameserver-logs:/home/rocketmq/logs
+    depends_on:
+      rocketmq-volume-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec ': >/dev/tcp/127.0.0.1/9876'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    stop_grace_period: 20s
+    mem_limit: 384m
+    networks:
+      - tidebid-network
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.3
+    environment:
+      TZ: UTC
+      NAMESRV_ADDR: rocketmq-nameserver:9876
+      JAVA_OPT_EXT: -server -Xms256m -Xmx512m -Xmn128m -XX:MaxDirectMemorySize=128m
+    command: sh mqbroker -c /home/rocketmq/conf/broker.conf
+    ports:
+      - "127.0.0.1:10911:10911"
+    volumes:
+      - rocketmq-broker-store:/home/rocketmq/store
+      - rocketmq-broker-logs:/home/rocketmq/logs
+      - ./rocketmq/broker.conf:/home/rocketmq/conf/broker.conf:ro
+    depends_on:
+      rocketmq-nameserver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec ': >/dev/tcp/127.0.0.1/10911'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    stop_grace_period: 30s
+    mem_limit: 768m
+    networks:
+      - tidebid-network
+
+  rocketmq-proxy:
+    image: apache/rocketmq:5.3.3
+    environment:
+      TZ: UTC
+      NAMESRV_ADDR: rocketmq-nameserver:9876
+      JAVA_OPT_EXT: -server -Xms128m -Xmx384m -Xmn96m -XX:MaxDirectMemorySize=128m
+    command: sh mqproxy -pc /home/rocketmq/conf/rmq-proxy.json
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - rocketmq-proxy-logs:/home/rocketmq/logs
+      - ./rocketmq/rmq-proxy.json:/home/rocketmq/conf/rmq-proxy.json:ro
+    depends_on:
+      rocketmq-broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec ': >/dev/tcp/127.0.0.1/8081'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    restart: "on-failure:5"
+    stop_grace_period: 20s
+    mem_limit: 512m
+    networks:
+      - tidebid-network
+
+  rocketmq-dashboard:
+    image: apacherocketmq/rocketmq-dashboard:2.1.0
+    environment:
+      TZ: UTC
+      JAVA_OPTS: -Xms128m -Xmx256m -Dserver.port=8080 -Drocketmq.namesrv.addr=rocketmq-nameserver:9876 -Dcom.rocketmq.sendMessageWithVIPChannel=false
+    ports:
+      - "127.0.0.1:8088:8080"
+    depends_on:
+      rocketmq-broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grep -Eq ':1F90 .* 0A ' /proc/net/tcp /proc/net/tcp6"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    stop_grace_period: 20s
+    mem_limit: 384m
+    networks:
+      - tidebid-network
+
+networks:
+  tidebid-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  rocketmq-nameserver-logs:
+  rocketmq-broker-store:
+  rocketmq-broker-logs:
+  rocketmq-proxy-logs:

@@ -1,0 +1,7 @@
+{
+  "rocketMQClusterName": "TideBidLocalCluster",
+  "namesrvAddr": "rocketmq-nameserver:9876",
+  "proxyMode": "CLUSTER",
+  "grpcServerPort": 8081,
+  "remotingListenPort": 8080
+}
