@@ -190,10 +190,9 @@ The first database-enabled start creates `flyway_schema_history`, `user_account`
 unchanged. Once version 1 has been applied, change the schema by adding a new migration such as
 `V2__describe_change.sql`; do not edit the applied `V1` file.
 
-Nacos 3 no longer supplies a default administrator password. On a fresh volume the console asks
-to initialize the `nacos` administrator. The idempotent initialization and configuration import
-script will be implemented in the Nacos integration milestone; `TIDEBID_NACOS_PASSWORD` is the
-password reserved for that step.
+Nacos 3 no longer supplies a default administrator password. On a fresh volume, the configuration
+import command below initializes the `nacos` administrator from `TIDEBID_NACOS_PASSWORD`. On later
+runs it logs in normally and updates the same namespace and Data IDs.
 
 Stop and resume the same containers without deleting data:
 
@@ -206,12 +205,31 @@ docker compose --env-file .env -f infra/compose.yaml start
 named volumes. Do not add `-v` unless you deliberately intend to erase the local MySQL, Redis,
 and RocketMQ data. The one-command checked start/stop scripts are a later foundation milestone.
 
-## Nacos integration profile (infrastructure still pending)
+## Nacos configuration import and integration profile
 
-Once Nacos is running, create namespace ID `tidebid-dev` and group `TIDEBID_GROUP`, containing
-`tidebid-common.yml` plus one `tidebid-<service>.yml` per service (for example, `tidebid-account.yml`).
-Set `TIDEBID_NACOS_SERVER_ADDR`, `TIDEBID_NACOS_NAMESPACE`, `TIDEBID_NACOS_USERNAME`, and
-`TIDEBID_NACOS_PASSWORD` in the process environment before starting:
+After Nacos is healthy, import the repository-managed configuration templates:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/import-nacos-config.ps1
+```
+
+The command reads the ignored `.env`, waits for the Nacos readiness endpoint, creates namespace
+`tidebid-dev` when necessary, and publishes `tidebid-common.yml` plus six service-level Data IDs to
+group `TIDEBID_GROUP`. Every publish is read back and compared byte-for-byte after newline
+normalization. Running the command again updates the same entries instead of creating duplicates.
+
+Configuration ownership is deliberately split:
+
+| Source | Owns |
+| --- | --- |
+| Repository `application*.yml` | application name, port, profile wiring, and Nacos import addresses |
+| `infra/nacos/configs/*.yml` published to Nacos | shared operational settings and non-secret service settings |
+| Ignored `.env` / process environment | passwords, Nacos credentials, JWT key paths, OSS credentials, and model keys |
+
+Nacos files keep expressions such as `${TIDEBID_ACCOUNT_DB_PASSWORD}` as placeholders; the importer
+must never expand or upload their secret values. Java does not load `.env` automatically, so until
+the checked startup scripts are implemented, load it into the current PowerShell process as shown
+in the account database example above. Then start a service with the `nacos` profile:
 
 ```powershell
 java -jar services/gateway-service/target/gateway-service.jar --spring.profiles.active=nacos
@@ -221,8 +239,8 @@ The imports use `spring.config.import` without `optional:`; configuration read/p
 must not be silently ignored. This SDK can merely warn when a Data ID is empty, so actual
 configuration presence and loading must also be checked during infrastructure integration.
 Automatic refresh is disabled in the imports; restart the process after changing configuration.
-The configuration import script and live registration checks will be supplied with the infrastructure milestone.
-Java does not automatically load the repository's `.env`; the startup scripts for that are still pending.
+Live registration of all six services is the next foundation milestone; the importer itself does
+not start application services.
 
 Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/starter.html),
 [Spring Boot executable JAR packaging](https://docs.spring.io/spring-boot/3.5/maven-plugin/packaging.html),

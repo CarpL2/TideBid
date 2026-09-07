@@ -1,0 +1,8 @@
+logging:
+  level:
+    io.github.carpl2.tidebid.ai: INFO
+
+info:
+  config:
+    service-source: nacos:tidebid-ai.yml
+    revision: foundation-01

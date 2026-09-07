@@ -1,0 +1,8 @@
+logging:
+  level:
+    io.github.carpl2.tidebid.auction: INFO
+
+info:
+  config:
+    service-source: nacos:tidebid-auction.yml
+    revision: foundation-01

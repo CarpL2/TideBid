@@ -1,0 +1,31 @@
+spring:
+  threads:
+    virtual:
+      enabled: false
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+management:
+  endpoints:
+    web:
+      discovery:
+        enabled: false
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
+  info:
+    env:
+      enabled: true
+
+logging:
+  pattern:
+    level: "%5p [traceId=%X{traceId:-}]"
+
+info:
+  config:
+    common-source: nacos:tidebid-common.yml
