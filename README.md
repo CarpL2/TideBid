@@ -98,6 +98,12 @@ and applies versioned files under `db/migration`; MyBatis-Plus uses the same app
 for runtime persistence. `standalone` explicitly disables database and Flyway auto-configuration so
 the no-infrastructure skeleton tests remain useful.
 
+Account persistence entities stay under `account.infrastructure.persistence` and are never API
+contracts. Tables with one `BIGINT` primary key use MyBatis-Plus application-generated IDs; the
+`user_role` composite key uses explicit SQL instead of unsafe `...ById` methods. Insert timestamps
+and initial versions are filled centrally, while `user_account` and `wallet_account` updates use a
+version predicate so stale writes affect zero rows.
+
 Only `health` and `info` are exposed through Actuator; the discovery page, `env`, and `beans`
 are not exposed. Actuator keeps its standard response format. Unknown application paths return a
 404 JSON error with `code`, `message`, `data`, and `traceId`.
