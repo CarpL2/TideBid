@@ -235,12 +235,18 @@ in the account database example above. Then start a service with the `nacos` pro
 java -jar services/gateway-service/target/gateway-service.jar --spring.profiles.active=nacos
 ```
 
+Because all Java services currently bind only to the Windows host loopback interface,
+`TIDEBID_NACOS_DISCOVERY_IP` defaults to `127.0.0.1`. This keeps the registered address consistent
+with the actual listener instead of allowing a multi-network-adapter machine to select a Docker or
+WSL virtual adapter. Override it when the application topology moves away from host-local processes.
+
 The imports use `spring.config.import` without `optional:`; configuration read/parse failures
 must not be silently ignored. This SDK can merely warn when a Data ID is empty, so actual
 configuration presence and loading must also be checked during infrastructure integration.
 Automatic refresh is disabled in the imports; restart the process after changing configuration.
-Live registration of all six services is the next foundation milestone; the importer itself does
-not start application services.
+The host-local development topology has been verified with all six services registered as healthy
+instances on ports 9000 and 9101-9105. The importer itself still does not start application
+services; checked one-command lifecycle scripts belong to a later foundation milestone.
 
 Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/starter.html),
 [Spring Boot executable JAR packaging](https://docs.spring.io/spring-boot/3.5/maven-plugin/packaging.html),

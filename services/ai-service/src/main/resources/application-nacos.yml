@@ -10,6 +10,7 @@ spring:
       password: ${TIDEBID_NACOS_PASSWORD}
       discovery:
         enabled: true
+        ip: ${TIDEBID_NACOS_DISCOVERY_IP:127.0.0.1}
         server-addr: ${TIDEBID_NACOS_SERVER_ADDR:127.0.0.1:8848}
         namespace: ${TIDEBID_NACOS_NAMESPACE:tidebid-dev}
         group: ${TIDEBID_NACOS_GROUP:TIDEBID_GROUP}
