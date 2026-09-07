@@ -86,11 +86,17 @@ The default profile is `standalone`. It disables Nacos configuration and registr
 Docker or cloud keys, and binds each service to loopback (`127.0.0.1`). A healthy skeleton does
 not imply database, broker, authentication, or end-to-end readiness.
 
-Each service has three configuration files:
+Every service keeps the shared configuration files below:
 
 - `application.yml`: application name, port, Actuator, serialization, and logging defaults.
 - `application-standalone.yml`: explicit switches for operation without Nacos.
 - `application-nacos.yml`: remote configuration and service registration for infrastructure integration.
+
+The account service additionally has `application-local-db.yml`. This profile keeps Nacos disabled but
+connects to the Docker MySQL on port 13306 using `tidebid_account_app`. On startup, Flyway validates
+and applies versioned files under `db/migration`; MyBatis-Plus uses the same application data source
+for runtime persistence. `standalone` explicitly disables database and Flyway auto-configuration so
+the no-infrastructure skeleton tests remain useful.
 
 Only `health` and `info` are exposed through Actuator; the discovery page, `env`, and `beans`
 are not exposed. Actuator keeps its standard response format. Unknown application paths return a
@@ -158,6 +164,25 @@ The first pull is large because Nacos and RocketMQ are Java images. Wait until e
 service is healthy before using the consoles. Nacos is available at `http://127.0.0.1:8080`, and RocketMQ
 Dashboard at `http://127.0.0.1:8088`. Host Java applications use the RocketMQ Proxy endpoint
 `127.0.0.1:8081`, not the Broker's internal Docker hostname.
+
+To run the account service with its local database from PowerShell, first load the ignored `.env`
+into the current process and select the `local` profile:
+
+```powershell
+Get-Content .env | ForEach-Object {
+    $line = $_.Trim()
+    if ($line -and -not $line.StartsWith('#') -and $line.Contains('=')) {
+        $name, $value = $line.Split('=', 2)
+        Set-Item -Path "Env:$name" -Value $value
+    }
+}
+java -jar services/account-service/target/account-service.jar --spring.profiles.active=local-db
+```
+
+The first database-enabled start creates `flyway_schema_history`, `user_account`, `user_role`,
+`wallet_account`, and `wallet_ledger`. Later starts validate the checksum and leave version 1
+unchanged. Once version 1 has been applied, change the schema by adding a new migration such as
+`V2__describe_change.sql`; do not edit the applied `V1` file.
 
 Nacos 3 no longer supplies a default administrator password. On a fresh volume the console asks
 to initialize the `nacos` administrator. The idempotent initialization and configuration import

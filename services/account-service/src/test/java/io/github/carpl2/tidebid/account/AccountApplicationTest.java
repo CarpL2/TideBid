@@ -9,6 +9,7 @@ import io.github.carpl2.tidebid.web.TraceIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -30,6 +31,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+
+import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -61,6 +64,8 @@ class AccountApplicationTest {
         assertThat(info.getBody().path("app").path("name").asText()).isEqualTo("tidebid-account");
         assertThat(context.getBeansOfType(TraceIdFilter.class)).hasSize(1);
         assertThat(context.getBeansOfType(GlobalExceptionHandler.class)).hasSize(1);
+        assertThat(context.getBeansOfType(DataSource.class)).isEmpty();
+        assertThat(context.getBeansOfType(Flyway.class)).isEmpty();
         assertThat(environment.getProperty("spring.cloud.nacos.discovery.enabled", Boolean.class)).isFalse();
         assertThat(environment.getProperty("spring.cloud.nacos.config.enabled", Boolean.class)).isFalse();
     }

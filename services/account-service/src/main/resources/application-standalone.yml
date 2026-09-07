@@ -1,5 +1,9 @@
 # Skeleton-only mode: no external registration or remote configuration.
 spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
   cloud:
     nacos:
       discovery:

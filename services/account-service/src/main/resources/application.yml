@@ -39,3 +39,11 @@ info:
 logging:
   pattern:
     level: "%5p [traceId=%X{traceId:-}]"
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: assign_id
