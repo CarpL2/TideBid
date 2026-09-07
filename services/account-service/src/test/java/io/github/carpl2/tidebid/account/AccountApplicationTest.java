@@ -1,6 +1,8 @@
 package io.github.carpl2.tidebid.account;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.github.carpl2.tidebid.account.api.AccountAuthController;
+import io.github.carpl2.tidebid.account.application.AccountRegistrationService;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.mapper.UserAccountMapper;
 import io.github.carpl2.tidebid.core.ApiResponse;
 import io.github.carpl2.tidebid.core.BusinessException;
@@ -68,6 +70,8 @@ class AccountApplicationTest {
         assertThat(context.getBeansOfType(DataSource.class)).isEmpty();
         assertThat(context.getBeansOfType(Flyway.class)).isEmpty();
         assertThat(context.getBeansOfType(UserAccountMapper.class)).isEmpty();
+        assertThat(context.getBeansOfType(AccountAuthController.class)).isEmpty();
+        assertThat(context.getBeansOfType(AccountRegistrationService.class)).isEmpty();
         assertThat(environment.getProperty("spring.cloud.nacos.discovery.enabled", Boolean.class)).isFalse();
         assertThat(environment.getProperty("spring.cloud.nacos.config.enabled", Boolean.class)).isFalse();
     }

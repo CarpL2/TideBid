@@ -9,6 +9,10 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.core.MethodParameter;
+
+import java.lang.reflect.Method;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,5 +53,29 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message()).isEqualTo("An internal error occurred");
         assertThat(response.getBody().message()).doesNotContain("password");
         assertThat(output.getAll()).doesNotContain("database password leaked");
+    }
+
+    @Test
+    void mapsMissingRequestHeaderToBadRequest() throws NoSuchMethodException {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(TraceIdFilter.TRACE_ID_ATTRIBUTE, "trace-12345678");
+        Method method = HeaderProbe.class.getDeclaredMethod("handle", String.class);
+        MethodParameter parameter = new MethodParameter(method, 0);
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleMissingRequestHeader(
+                new MissingRequestHeaderException("X-Request-Id", parameter),
+                request
+        );
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("COMMON_INVALID_ARGUMENT");
+        assertThat(response.getBody().message()).isEqualTo("Required request header is missing: X-Request-Id");
+    }
+
+    private static final class HeaderProbe {
+        @SuppressWarnings("unused")
+        void handle(String requestId) {
+        }
     }
 }

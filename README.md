@@ -203,6 +203,27 @@ The first database-enabled start creates `flyway_schema_history`, `user_account`
 unchanged. Once version 1 has been applied, change the schema by adding a new migration such as
 `V2__describe_change.sql`; do not edit the applied `V1` file.
 
+With `account-service` running under `local-db`, the current registration endpoint can be exercised
+directly on port 9101 (Gateway routing is added later in the foundation stage):
+
+```powershell
+$headers = @{ 'X-Request-Id' = 'readme-register-01' }
+$body = @{
+    username = 'Demo_User'
+    nickname = 'Demo User'
+    password = 'ChangeMe-123'
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post `
+    -Uri 'http://127.0.0.1:9101/api/auth/register' `
+    -Headers $headers `
+    -ContentType 'application/json' `
+    -Body $body
+```
+
+A successful request returns HTTP 201 and the canonical lowercase username. The same transaction
+creates the `USER` role, a `10000.00` virtual wallet, and its initialization ledger. Reusing the
+same username (including a case-only variant) returns HTTP 409.
+
 Nacos 3 no longer supplies a default administrator password. On a fresh volume, the configuration
 import command below initializes the `nacos` administrator from `TIDEBID_NACOS_PASSWORD`. On later
 runs it logs in normally and updates the same namespace and Data IDs.

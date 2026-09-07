@@ -13,6 +13,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -65,6 +66,18 @@ public final class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         return failure(CommonErrorCode.INVALID_ARGUMENT, "Request body is malformed", request);
+    }
+
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingRequestHeader(
+            MissingRequestHeaderException exception,
+            HttpServletRequest request
+    ) {
+        return failure(
+                CommonErrorCode.INVALID_ARGUMENT,
+                "Required request header is missing: " + exception.getHeaderName(),
+                request
+        );
     }
 
     @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
