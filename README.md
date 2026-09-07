@@ -158,6 +158,19 @@ The printed value belongs only in the ignored `.env`. Use different random value
 `TIDEBID_NACOS_AUTH_IDENTITY_KEY` and `TIDEBID_NACOS_AUTH_IDENTITY_VALUE`, and use strong, distinct
 local passwords for the MySQL root account, four service database accounts, Redis, and Nacos.
 
+Generate the local RS256 key pair referenced by `.env`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-jwt-keys.ps1
+```
+
+The command requires Java 21 and creates a 3072-bit PKCS#8 private key plus an X.509 public key
+under `.runtime/keys/`. Both files are ignored by Git. Running it again validates that the files
+still form a pair and leaves them unchanged; `-Force` deliberately rotates the pair and invalidates
+tokens signed by the old private key. Do not use `-Force` as a routine startup step. Only the
+account service will read the private key, while the gateway and downstream verifiers use the
+public key.
+
 Validate and start the infrastructure from the repository root:
 
 ```powershell

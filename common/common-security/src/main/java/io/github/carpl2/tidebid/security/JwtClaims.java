@@ -25,6 +25,9 @@ public record JwtClaims(
             throw new IllegalArgumentException("userId must be positive");
         }
         roles = Set.copyOf(Objects.requireNonNull(roles, "roles must not be null"));
+        if (roles.isEmpty()) {
+            throw new IllegalArgumentException("roles must not be empty");
+        }
         issuedAt = Objects.requireNonNull(issuedAt, "issuedAt must not be null");
         expiresAt = Objects.requireNonNull(expiresAt, "expiresAt must not be null");
         tokenId = Objects.requireNonNull(tokenId, "tokenId must not be null");
