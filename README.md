@@ -224,6 +224,27 @@ A successful request returns HTTP 201 and the canonical lowercase username. The 
 creates the `USER` role, a `10000.00` virtual wallet, and its initialization ledger. Reusing the
 same username (including a case-only variant) returns HTTP 409.
 
+The registered account can then log in through the same service. Login applies the same lowercase
+username normalization and returns an RS256 Bearer access token with a two-hour lifetime:
+
+```powershell
+$loginHeaders = @{ 'X-Request-Id' = 'readme-login-001' }
+$loginBody = @{
+    username = 'DEMO_USER'
+    password = 'ChangeMe-123'
+} | ConvertTo-Json
+$loginResponse = Invoke-RestMethod -Method Post `
+    -Uri 'http://127.0.0.1:9101/api/auth/login' `
+    -Headers $loginHeaders `
+    -ContentType 'application/json' `
+    -Body $loginBody
+$loginResponse.data | Select-Object tokenType, expiresIn
+```
+
+An unknown username and an incorrect password deliberately return the same 401 response. A disabled
+account with the correct password returns 403. Treat `accessToken` as a secret: do not print it in
+logs, paste it into issue reports, or commit it to Git.
+
 Nacos 3 no longer supplies a default administrator password. On a fresh volume, the configuration
 import command below initializes the `nacos` administrator from `TIDEBID_NACOS_PASSWORD`. On later
 runs it logs in normally and updates the same namespace and Data IDs.

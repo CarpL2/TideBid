@@ -4,7 +4,9 @@ import io.github.carpl2.tidebid.core.ErrorCode;
 
 public enum AccountErrorCode implements ErrorCode {
 
-    USERNAME_ALREADY_EXISTS("ACCOUNT_USERNAME_ALREADY_EXISTS", "Username already exists", 409);
+    USERNAME_ALREADY_EXISTS("ACCOUNT_USERNAME_ALREADY_EXISTS", "Username already exists", 409),
+    INVALID_CREDENTIALS("ACCOUNT_INVALID_CREDENTIALS", "Invalid username or password", 401),
+    ACCOUNT_DISABLED("ACCOUNT_DISABLED", "Account is disabled", 403);
 
     private final String code;
     private final String defaultMessage;

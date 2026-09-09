@@ -1,10 +1,13 @@
 package io.github.carpl2.tidebid.account.api;
 
+import io.github.carpl2.tidebid.account.application.AccountAuthenticationService;
 import io.github.carpl2.tidebid.account.application.AccountRegistrationService;
+import io.github.carpl2.tidebid.account.application.AuthenticateAccountCommand;
 import io.github.carpl2.tidebid.account.application.RegisterAccountCommand;
 import io.github.carpl2.tidebid.account.application.RegisteredAccount;
 import io.github.carpl2.tidebid.core.ApiResponse;
 import io.github.carpl2.tidebid.core.TraceIds;
+import io.github.carpl2.tidebid.security.IssuedAccessToken;
 import io.github.carpl2.tidebid.security.SecurityHeaders;
 import io.github.carpl2.tidebid.web.TraceIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,9 +30,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class AccountAuthController {
 
     private final AccountRegistrationService registrationService;
+    private final AccountAuthenticationService authenticationService;
 
-    public AccountAuthController(AccountRegistrationService registrationService) {
+    public AccountAuthController(
+            AccountRegistrationService registrationService,
+            AccountAuthenticationService authenticationService
+    ) {
         this.registrationService = registrationService;
+        this.authenticationService = authenticationService;
     }
 
     @PostMapping("/register")
@@ -54,6 +62,25 @@ public class AccountAuthController {
                 traceId(servletRequest)
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @PostMapping("/login")
+    public ApiResponse<AccessTokenResponse> login(
+            @RequestHeader(SecurityHeaders.REQUEST_ID)
+            @Pattern(
+                    regexp = "[A-Za-z0-9_-]{8,48}",
+                    message = "must contain 8 to 48 letters, digits, underscores, or hyphens"
+            )
+            String requestId,
+            @Valid @RequestBody LoginRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        IssuedAccessToken issuedToken = authenticationService.authenticate(new AuthenticateAccountCommand(
+                requestId,
+                request.username(),
+                request.password()
+        ));
+        return ApiResponse.success(AccessTokenResponse.from(issuedToken), traceId(servletRequest));
     }
 
     private static String traceId(HttpServletRequest request) {

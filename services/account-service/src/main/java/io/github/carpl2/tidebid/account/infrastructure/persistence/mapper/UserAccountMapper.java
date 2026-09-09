@@ -11,4 +11,11 @@ public interface UserAccountMapper extends BaseMapper<UserAccountEntity> {
 
     @Select("SELECT EXISTS(SELECT 1 FROM user_account WHERE username = #{username})")
     boolean existsByUsername(@Param("username") String username);
+
+    @Select("""
+            SELECT id, username, password_hash, nickname, status, version, created_at, updated_at
+            FROM user_account
+            WHERE username = #{username}
+            """)
+    UserAccountEntity selectByUsername(@Param("username") String username);
 }

@@ -12,16 +12,12 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 @Service
 @Profile({"local-db", "nacos"})
 public class AccountRegistrationService {
 
-    private static final Pattern REQUEST_ID_PATTERN = Pattern.compile("[A-Za-z0-9_-]{8,48}");
-    private static final Pattern USERNAME_PATTERN = Pattern.compile("[A-Za-z0-9_]{4,32}");
     private static final BigDecimal INITIAL_AVAILABLE_BALANCE = new BigDecimal("10000.00");
     private static final BigDecimal INITIAL_FROZEN_BALANCE = new BigDecimal("0.00");
 
@@ -68,16 +64,14 @@ public class AccountRegistrationService {
     }
 
     private static void validateRequestId(String requestId) {
-        if (requestId == null || !REQUEST_ID_PATTERN.matcher(requestId).matches()) {
+        if (!AccountInputPolicy.isValidRequestId(requestId)) {
             throw invalid("X-Request-Id must contain 8 to 48 letters, digits, underscores, or hyphens");
         }
     }
 
     private static String normalizeUsername(String username) {
-        if (username == null || !USERNAME_PATTERN.matcher(username).matches()) {
-            throw invalid("Username must contain 4 to 32 letters, digits, or underscores");
-        }
-        return username.toLowerCase(Locale.ROOT);
+        return AccountInputPolicy.canonicalUsername(username)
+                .orElseThrow(() -> invalid("Username must contain 4 to 32 letters, digits, or underscores"));
     }
 
     private static String normalizeNickname(String nickname) {
