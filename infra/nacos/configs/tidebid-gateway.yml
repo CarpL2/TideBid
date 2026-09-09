@@ -1,3 +1,33 @@
+spring:
+  cloud:
+    gateway:
+      server:
+        webflux:
+          discovery:
+            locator:
+              enabled: false
+          routes:
+            - id: account-service
+              uri: lb://tidebid-account
+              predicates:
+                - Path=/api/auth/**,/api/users/**,/api/wallets/**,/api/admin/**
+            - id: auction-service
+              uri: lb://tidebid-auction
+              predicates:
+                - Path=/api/assets/**,/api/auctions/**,/api/bids/**,/api/registrations/**
+            - id: trade-service
+              uri: lb://tidebid-trade
+              predicates:
+                - Path=/api/orders/**,/api/payments/**
+            - id: realtime-service
+              uri: lb://tidebid-realtime
+              predicates:
+                - Path=/api/realtime/**,/ws/**
+            - id: ai-service
+              uri: lb://tidebid-ai
+              predicates:
+                - Path=/api/ai/**
+
 logging:
   level:
     io.github.carpl2.tidebid.gateway: INFO

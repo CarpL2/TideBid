@@ -107,7 +107,12 @@ version predicate so stale writes affect zero rows.
 Only `health` and `info` are exposed through Actuator; the discovery page, `env`, and `beans`
 are not exposed. Actuator keeps its standard response format. Unknown application paths return a
 404 JSON error with `code`, `message`, `data`, and `traceId`.
-The gateway currently has no business routes or JWT enforcement; visiting `/` returns 404.
+In the `nacos` profile, the gateway is the business API entry point. It uses explicit `lb://`
+routes for the five downstream Nacos services; automatic `/service-name/**` discovery routes stay
+disabled. Registration and login are anonymous, while other `/api/**` and `/ws/**` paths require a
+valid TideBid access token. The gateway removes client-supplied internal identity headers before
+rebuilding them from verified claims. Downstream services still verify the forwarded Token.
+Visiting `/` or another unknown non-business path returns 404.
 
 Gateway uses WebFlux/Netty and its own reactive error/trace handling. MVC services obtain their
 trace filter and exception advice from `common-web` auto-configuration.
@@ -203,8 +208,8 @@ The first database-enabled start creates `flyway_schema_history`, `user_account`
 unchanged. Once version 1 has been applied, change the schema by adding a new migration such as
 `V2__describe_change.sql`; do not edit the applied `V1` file.
 
-With `account-service` running under `local-db`, the current registration endpoint can be exercised
-directly on port 9101 (Gateway routing is added later in the foundation stage):
+With both `gateway-service` and `account-service` running under the `nacos` profile, exercise the
+registration endpoint through the public gateway on port 9000:
 
 ```powershell
 $headers = @{ 'X-Request-Id' = 'readme-register-01' }
@@ -214,7 +219,7 @@ $body = @{
     password = 'ChangeMe-123'
 } | ConvertTo-Json
 Invoke-RestMethod -Method Post `
-    -Uri 'http://127.0.0.1:9101/api/auth/register' `
+    -Uri 'http://127.0.0.1:9000/api/auth/register' `
     -Headers $headers `
     -ContentType 'application/json' `
     -Body $body
@@ -234,7 +239,7 @@ $loginBody = @{
     password = 'ChangeMe-123'
 } | ConvertTo-Json
 $loginResponse = Invoke-RestMethod -Method Post `
-    -Uri 'http://127.0.0.1:9101/api/auth/login' `
+    -Uri 'http://127.0.0.1:9000/api/auth/login' `
     -Headers $loginHeaders `
     -ContentType 'application/json' `
     -Body $loginBody
@@ -245,8 +250,8 @@ An unknown username and an incorrect password deliberately return the same 401 r
 account with the correct password returns 403. Treat `accessToken` as a secret: do not print it in
 logs, paste it into issue reports, or commit it to Git.
 
-Until Gateway routing is added, use the returned Token directly against port 9101 to read the
-authenticated account and virtual wallet. Neither endpoint accepts a user ID from the client:
+Use the returned Token through port 9000 to read the authenticated account and virtual wallet.
+Neither endpoint accepts a user ID from the client:
 
 ```powershell
 $authHeaders = @{
@@ -254,10 +259,10 @@ $authHeaders = @{
     'X-Trace-Id' = 'readme-self-0001'
 }
 $currentUser = Invoke-RestMethod -Method Get `
-    -Uri 'http://127.0.0.1:9101/api/users/me' `
+    -Uri 'http://127.0.0.1:9000/api/users/me' `
     -Headers $authHeaders
 $currentWallet = Invoke-RestMethod -Method Get `
-    -Uri 'http://127.0.0.1:9101/api/wallets/me' `
+    -Uri 'http://127.0.0.1:9000/api/wallets/me' `
     -Headers $authHeaders
 $currentUser.data
 $currentWallet.data
@@ -283,8 +288,7 @@ ordinary account, a disabled administrator, missing roles, or a different passwo
 fail instead of silently promoting an account or resetting credentials. Disabling the bootstrap does
 not delete an administrator already created.
 
-After logging in with that account, its authorization path can be checked directly until Gateway
-routing is implemented:
+After logging in with that account, check its authorization through the gateway:
 
 ```powershell
 $adminLoginHeaders = @{ 'X-Request-Id' = 'readme-admin-login' }
@@ -293,7 +297,7 @@ $adminLoginBody = @{
     password = $env:TIDEBID_DEV_ADMIN_PASSWORD
 } | ConvertTo-Json
 $adminLoginResponse = Invoke-RestMethod -Method Post `
-    -Uri 'http://127.0.0.1:9101/api/auth/login' `
+    -Uri 'http://127.0.0.1:9000/api/auth/login' `
     -Headers $adminLoginHeaders `
     -ContentType 'application/json' `
     -Body $adminLoginBody
@@ -302,7 +306,7 @@ $adminHeaders = @{
     'X-Trace-Id' = 'readme-admin-0001'
 }
 Invoke-RestMethod -Method Get `
-    -Uri 'http://127.0.0.1:9101/api/admin/access-check' `
+    -Uri 'http://127.0.0.1:9000/api/admin/access-check' `
     -Headers $adminHeaders
 ```
 

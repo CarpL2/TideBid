@@ -2,6 +2,13 @@ package io.github.carpl2.tidebid.gateway;
 
 import io.github.carpl2.tidebid.core.BusinessException;
 import io.github.carpl2.tidebid.core.CommonErrorCode;
+import io.github.carpl2.tidebid.gateway.security.GatewayAuthenticationWebFilter;
+import io.github.carpl2.tidebid.security.JwtAccessTokenIssuer;
+import io.github.carpl2.tidebid.security.JwtAccessTokenVerifier;
+import io.github.carpl2.tidebid.security.JwtTokenSettings;
+import io.github.carpl2.tidebid.security.Role;
+import io.github.carpl2.tidebid.security.RsaKeyPairMaterial;
+import io.github.carpl2.tidebid.security.SecurityHeaders;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -28,7 +35,13 @@ import org.springframework.web.server.MethodNotAllowedException;
 import org.springframework.web.server.WebFilter;
 import reactor.core.publisher.Mono;
 
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.time.Clock;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,6 +59,9 @@ class GatewayApplicationTest {
 
     @Autowired
     private WebTestClient client;
+
+    @Autowired
+    private JwtAccessTokenIssuer tokenIssuer;
 
     @Test
     void servesHealthAndIdentity() {
@@ -127,8 +143,79 @@ class GatewayApplicationTest {
                 .expectBody().jsonPath("$.code").isEqualTo("COMMON_METHOD_NOT_ALLOWED");
     }
 
+    @Test
+    void authenticationFailuresUseTheGatewayJsonEnvelope() {
+        client.get().uri("/api/users/me")
+                .header(SecurityHeaders.INTERNAL_USER_ID, "999")
+                .header(SecurityHeaders.INTERNAL_USER_ROLES, "ADMIN")
+                .exchange()
+                .expectStatus().isUnauthorized()
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+                .expectHeader().valueMatches(SecurityHeaders.TRACE_ID, "[a-f0-9]{32}")
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("COMMON_UNAUTHENTICATED")
+                .jsonPath("$.message").isEqualTo("Authentication is required")
+                .jsonPath("$.traceId").value(value -> assertThat(value).isInstanceOf(String.class));
+    }
+
+    @Test
+    void adminPreAuthorizationRejectsAValidNormalUserToken() {
+        String token = tokenIssuer.issue("gateway-user", 42L, Set.of(Role.USER)).value();
+
+        client.get().uri("/api/admin/access-check")
+                .header(SecurityHeaders.AUTHORIZATION, SecurityHeaders.BEARER_PREFIX + token)
+                .exchange()
+                .expectStatus().isForbidden()
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+                .expectBody().jsonPath("$.code").isEqualTo("COMMON_FORBIDDEN");
+    }
+
+    @Test
+    void onlyTheConfiguredAuthMethodsAreAnonymous() {
+        client.post().uri("/api/auth/login").exchange()
+                .expectStatus().isNotFound()
+                .expectBody().jsonPath("$.code").isEqualTo("COMMON_NOT_FOUND");
+        client.get().uri("/api/auth/login").exchange()
+                .expectStatus().isUnauthorized()
+                .expectBody().jsonPath("$.code").isEqualTo("COMMON_UNAUTHENTICATED");
+    }
+
     @TestConfiguration(proxyBeanMethods = false)
     static class ProbeConfiguration {
+        @Bean
+        RsaKeyPairMaterial gatewayTestKeyPair() throws Exception {
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+            generator.initialize(2048);
+            KeyPair pair = generator.generateKeyPair();
+            return new RsaKeyPairMaterial(
+                    (RSAPublicKey) pair.getPublic(),
+                    (RSAPrivateKey) pair.getPrivate()
+            );
+        }
+
+        @Bean
+        JwtAccessTokenVerifier gatewayTestTokenVerifier(RsaKeyPairMaterial keyPair) {
+            return new JwtAccessTokenVerifier(
+                    keyPair.publicKey(),
+                    JwtTokenSettings.tideBidDefaults(),
+                    Clock.systemUTC()
+            );
+        }
+
+        @Bean
+        JwtAccessTokenIssuer gatewayTestTokenIssuer(RsaKeyPairMaterial keyPair) {
+            return new JwtAccessTokenIssuer(
+                    keyPair,
+                    JwtTokenSettings.tideBidDefaults(),
+                    Clock.systemUTC()
+            );
+        }
+
+        @Bean
+        GatewayAuthenticationWebFilter gatewayAuthenticationWebFilter(JwtAccessTokenVerifier verifier) {
+            return new GatewayAuthenticationWebFilter(verifier);
+        }
+
         // Test-only filter verifies errors before any route/controller is selected.
         @Bean
         @Order(-100)
