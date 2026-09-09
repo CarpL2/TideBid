@@ -1,7 +1,9 @@
 package io.github.carpl2.tidebid.account.infrastructure.security;
 
 import io.github.carpl2.tidebid.security.JwtAccessTokenIssuer;
+import io.github.carpl2.tidebid.security.JwtAccessTokenVerifier;
 import io.github.carpl2.tidebid.security.JwtTokenSettings;
+import io.github.carpl2.tidebid.security.RsaKeyPairMaterial;
 import io.github.carpl2.tidebid.security.RsaPemKeyLoader;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -19,14 +21,29 @@ import java.time.Clock;
 public class AccountJwtConfiguration {
 
     @Bean
-    @ConditionalOnMissingBean(JwtAccessTokenIssuer.class)
-    JwtAccessTokenIssuer accountJwtAccessTokenIssuer(
+    @ConditionalOnMissingBean(RsaKeyPairMaterial.class)
+    RsaKeyPairMaterial accountRsaKeyPair(
             @Value("${TIDEBID_JWT_PRIVATE_KEY_PATH}") String privateKeyPath,
-            @Value("${TIDEBID_JWT_PUBLIC_KEY_PATH}") String publicKeyPath,
-            Clock clock
+            @Value("${TIDEBID_JWT_PUBLIC_KEY_PATH}") String publicKeyPath
     ) throws IOException, GeneralSecurityException {
+        return RsaPemKeyLoader.loadKeyPair(Path.of(privateKeyPath), Path.of(publicKeyPath));
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(JwtAccessTokenIssuer.class)
+    JwtAccessTokenIssuer accountJwtAccessTokenIssuer(RsaKeyPairMaterial keyPair, Clock clock) {
         return new JwtAccessTokenIssuer(
-                RsaPemKeyLoader.loadKeyPair(Path.of(privateKeyPath), Path.of(publicKeyPath)),
+                keyPair,
+                JwtTokenSettings.tideBidDefaults(),
+                clock
+        );
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(JwtAccessTokenVerifier.class)
+    JwtAccessTokenVerifier accountJwtAccessTokenVerifier(RsaKeyPairMaterial keyPair, Clock clock) {
+        return new JwtAccessTokenVerifier(
+                keyPair.publicKey(),
                 JwtTokenSettings.tideBidDefaults(),
                 clock
         );

@@ -245,6 +245,27 @@ An unknown username and an incorrect password deliberately return the same 401 r
 account with the correct password returns 403. Treat `accessToken` as a secret: do not print it in
 logs, paste it into issue reports, or commit it to Git.
 
+Until Gateway routing is added, use the returned Token directly against port 9101 to read the
+authenticated account and virtual wallet. Neither endpoint accepts a user ID from the client:
+
+```powershell
+$authHeaders = @{
+    Authorization = "$($loginResponse.data.tokenType) $($loginResponse.data.accessToken)"
+    'X-Trace-Id' = 'readme-self-0001'
+}
+$currentUser = Invoke-RestMethod -Method Get `
+    -Uri 'http://127.0.0.1:9101/api/users/me' `
+    -Headers $authHeaders
+$currentWallet = Invoke-RestMethod -Method Get `
+    -Uri 'http://127.0.0.1:9101/api/wallets/me' `
+    -Headers $authHeaders
+$currentUser.data
+$currentWallet.data
+```
+
+`account-service` verifies the Token again instead of trusting client-supplied internal identity
+headers. Missing, expired, malformed, or tampered Tokens return the same JSON 401 response.
+
 Nacos 3 no longer supplies a default administrator password. On a fresh volume, the configuration
 import command below initializes the `nacos` administrator from `TIDEBID_NACOS_PASSWORD`. On later
 runs it logs in normally and updates the same namespace and Data IDs.

@@ -7,6 +7,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.MDC;
+import org.springframework.core.Ordered;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -14,10 +15,15 @@ import java.io.IOException;
 /**
  * Resolves one safe trace identifier for the request, response, and service logs.
  */
-public final class TraceIdFilter extends OncePerRequestFilter {
+public final class TraceIdFilter extends OncePerRequestFilter implements Ordered {
 
     public static final String TRACE_ID_ATTRIBUTE = TraceIdFilter.class.getName() + ".traceId";
     public static final String MDC_KEY = "traceId";
+
+    @Override
+    public int getOrder() {
+        return Ordered.HIGHEST_PRECEDENCE;
+    }
 
     @Override
     protected void doFilterInternal(

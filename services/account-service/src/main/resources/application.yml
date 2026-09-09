@@ -6,6 +6,8 @@ server:
 spring:
   application:
     name: tidebid-account
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
   profiles:
     default: standalone
   threads:
