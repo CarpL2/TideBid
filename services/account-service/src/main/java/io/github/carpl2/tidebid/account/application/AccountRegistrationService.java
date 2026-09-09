@@ -11,7 +11,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
 @Service
@@ -75,21 +74,15 @@ public class AccountRegistrationService {
     }
 
     private static String normalizeNickname(String nickname) {
-        if (nickname == null) {
-            throw invalid("Nickname is required");
-        }
-        String normalized = nickname.strip();
-        if (normalized.isEmpty() || normalized.length() > 64) {
-            throw invalid("Nickname must contain 1 to 64 characters");
-        }
-        return normalized;
+        return AccountInputPolicy.normalizedNickname(nickname)
+                .orElseThrow(() -> invalid("Nickname must contain 1 to 64 characters"));
     }
 
     private static void validatePassword(String password) {
-        if (password == null || password.length() < 8 || password.length() > 64) {
+        if (!AccountInputPolicy.hasValidPasswordCharacterLength(password)) {
             throw invalid("Password must contain 8 to 64 characters");
         }
-        if (password.getBytes(StandardCharsets.UTF_8).length > 72) {
+        if (!AccountInputPolicy.fitsBcryptByteLimit(password)) {
             throw invalid("Password must not exceed 72 UTF-8 bytes");
         }
     }

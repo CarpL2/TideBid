@@ -2,7 +2,7 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. Four shared modules, six executable service skeletons, and a local middleware Compose definition are available. Each service exposes health and application information; registration, login, wallets, bidding, frontend, and one-command lifecycle scripts are not implemented yet.
+The project is currently in the foundation stage. Four shared modules, six executable service skeletons, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. Bidding, the frontend, and one-command lifecycle scripts are not implemented yet.
 
 ## Core flow
 
@@ -265,6 +265,49 @@ $currentWallet.data
 
 `account-service` verifies the Token again instead of trusting client-supplied internal identity
 headers. Missing, expired, malformed, or tampered Tokens return the same JSON 401 response.
+
+An optional development administrator can be created when `account-service` starts. The bootstrap is
+disabled by default. Add the following values to the ignored `.env`, choose your own strong password,
+load the file into the PowerShell process, and then start `account-service` with `local-db` or `nacos`:
+
+```dotenv
+TIDEBID_DEV_ADMIN_ENABLED=true
+TIDEBID_DEV_ADMIN_USERNAME=tidebid_admin
+TIDEBID_DEV_ADMIN_PASSWORD=replace-with-a-strong-local-password
+TIDEBID_DEV_ADMIN_NICKNAME=TideBid Administrator
+```
+
+The first enabled start creates one normal account aggregate with both `USER` and `ADMIN` roles.
+Later starts are read-only and require the same password to match the stored BCrypt hash. A colliding
+ordinary account, a disabled administrator, missing roles, or a different password makes startup
+fail instead of silently promoting an account or resetting credentials. Disabling the bootstrap does
+not delete an administrator already created.
+
+After logging in with that account, its authorization path can be checked directly until Gateway
+routing is implemented:
+
+```powershell
+$adminLoginHeaders = @{ 'X-Request-Id' = 'readme-admin-login' }
+$adminLoginBody = @{
+    username = $env:TIDEBID_DEV_ADMIN_USERNAME
+    password = $env:TIDEBID_DEV_ADMIN_PASSWORD
+} | ConvertTo-Json
+$adminLoginResponse = Invoke-RestMethod -Method Post `
+    -Uri 'http://127.0.0.1:9101/api/auth/login' `
+    -Headers $adminLoginHeaders `
+    -ContentType 'application/json' `
+    -Body $adminLoginBody
+$adminHeaders = @{
+    Authorization = "$($adminLoginResponse.data.tokenType) $($adminLoginResponse.data.accessToken)"
+    'X-Trace-Id' = 'readme-admin-0001'
+}
+Invoke-RestMethod -Method Get `
+    -Uri 'http://127.0.0.1:9101/api/admin/access-check' `
+    -Headers $adminHeaders
+```
+
+The access check validates `ADMIN` in the signed Token and reads the current role again from MySQL;
+it does not implement an auction administration feature.
 
 Nacos 3 no longer supplies a default administrator password. On a fresh volume, the configuration
 import command below initializes the `nacos` administrator from `TIDEBID_NACOS_PASSWORD`. On later

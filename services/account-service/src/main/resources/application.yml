@@ -49,3 +49,10 @@ mybatis-plus:
     banner: false
     db-config:
       id-type: assign_id
+
+tidebid:
+  development-admin:
+    enabled: ${TIDEBID_DEV_ADMIN_ENABLED:false}
+    username: ${TIDEBID_DEV_ADMIN_USERNAME:}
+    password: ${TIDEBID_DEV_ADMIN_PASSWORD:}
+    nickname: ${TIDEBID_DEV_ADMIN_NICKNAME:TideBid Administrator}

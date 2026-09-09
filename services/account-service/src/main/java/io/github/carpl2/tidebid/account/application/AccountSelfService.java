@@ -7,6 +7,7 @@ import io.github.carpl2.tidebid.account.domain.AccountErrorCode;
 import io.github.carpl2.tidebid.core.BusinessException;
 import io.github.carpl2.tidebid.core.CommonErrorCode;
 import io.github.carpl2.tidebid.security.AuthenticatedUser;
+import io.github.carpl2.tidebid.security.Role;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -41,6 +42,14 @@ public class AccountSelfService {
                 wallet.availableBalance(),
                 wallet.frozenBalance()
         );
+    }
+
+    public CurrentAccount requireRole(AuthenticatedUser identity, Role requiredRole) {
+        CurrentAccount account = currentAccount(identity);
+        if (!account.roles().contains(requiredRole)) {
+            throw new BusinessException(CommonErrorCode.FORBIDDEN);
+        }
+        return account;
     }
 
     private AccountSnapshot requireActiveAccount(AuthenticatedUser identity) {

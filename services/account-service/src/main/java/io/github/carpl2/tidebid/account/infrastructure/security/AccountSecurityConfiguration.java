@@ -53,6 +53,7 @@ public class AccountSecurityConfiguration {
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler))
                 .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/users/**", "/api/wallets/**").authenticated()
                         .anyRequest().permitAll())
                 .addFilterBefore(
