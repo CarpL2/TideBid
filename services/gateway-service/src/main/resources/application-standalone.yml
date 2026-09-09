@@ -1,5 +1,10 @@
 # Skeleton-only mode: no external registration or remote configuration.
 spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
   cloud:
     nacos:
       discovery:

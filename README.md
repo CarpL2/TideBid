@@ -114,6 +114,14 @@ valid TideBid access token. The gateway removes client-supplied internal identit
 rebuilding them from verified claims. Downstream services still verify the forwarded Token.
 Visiting `/` or another unknown non-business path returns 404.
 
+Gateway CORS allows only `http://localhost:5173` and `http://127.0.0.1:5173`, does not enable
+credentialed cross-origin requests, and exposes only the trace response header. Registration and
+login use separate Redis fixed-window counters keyed by the TCP peer address. The default 60-second
+window permits 5 registration requests and 10 login requests; rejected requests return JSON 429
+with `Retry-After`, and ordinary business reads do not consume either counter. The increment and
+TTL initialization run atomically in Redis Lua. If Redis is unavailable, these two security-sensitive
+entry points return JSON 503 instead of silently bypassing the limit.
+
 Gateway uses WebFlux/Netty and its own reactive error/trace handling. MVC services obtain their
 trace filter and exception advice from `common-web` auto-configuration.
 The application tests start real HTTP servers on random ports in `standalone` mode.
@@ -372,6 +380,8 @@ instances on ports 9000 and 9101-9105. The importer itself still does not start 
 services; checked one-command lifecycle scripts belong to a later foundation milestone.
 
 Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/starter.html),
+[Gateway CORS configuration](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/cors-configuration.html),
+[Spring Data Redis scripting](https://docs.spring.io/spring-data/redis/reference/3.5/redis/scripting.html),
 [Spring Boot executable JAR packaging](https://docs.spring.io/spring-boot/3.5/maven-plugin/packaging.html),
 [Nacos 3 Docker deployment](https://github.com/nacos-group/nacos-docker), and
 [RocketMQ Docker Compose template](https://github.com/apache/rocketmq-docker/blob/master/templates/docker-compose/rmq5-docker-compose.yml).

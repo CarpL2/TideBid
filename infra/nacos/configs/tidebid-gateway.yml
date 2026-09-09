@@ -1,8 +1,38 @@
 spring:
+  data:
+    redis:
+      host: ${TIDEBID_REDIS_HOST:127.0.0.1}
+      port: ${TIDEBID_REDIS_PORT:6379}
+      password: ${TIDEBID_REDIS_PASSWORD}
+      connect-timeout: 2s
+      timeout: 2s
   cloud:
     gateway:
       server:
         webflux:
+          globalcors:
+            add-to-simple-url-handler-mapping: true
+            cors-configurations:
+              '[/**]':
+                allowed-origins:
+                  - http://localhost:5173
+                  - http://127.0.0.1:5173
+                allowed-methods:
+                  - GET
+                  - POST
+                  - PUT
+                  - PATCH
+                  - DELETE
+                  - OPTIONS
+                allowed-headers:
+                  - Authorization
+                  - Content-Type
+                  - X-Request-Id
+                  - X-Trace-Id
+                exposed-headers:
+                  - X-Trace-Id
+                allow-credentials: false
+                max-age: 3600
           discovery:
             locator:
               enabled: false
@@ -28,6 +58,13 @@ spring:
               predicates:
                 - Path=/api/ai/**
 
+tidebid:
+  gateway:
+    rate-limit:
+      window: 60s
+      registration-max-requests: 5
+      login-max-requests: 10
+
 logging:
   level:
     io.github.carpl2.tidebid.gateway: INFO
@@ -35,4 +72,4 @@ logging:
 info:
   config:
     service-source: nacos:tidebid-gateway.yml
-    revision: foundation-01
+    revision: foundation-01-gateway-controls
