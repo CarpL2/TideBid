@@ -226,18 +226,20 @@ tokens signed by the old private key. Do not use `-Force` as a routine startup s
 account service will read the private key, while the gateway and downstream verifiers use the
 public key.
 
-Validate and start the infrastructure from the repository root:
+Start and validate the infrastructure from the repository root:
 
 ```powershell
-docker compose --env-file .env -f infra/compose.yaml config --quiet
-docker compose --env-file .env -f infra/compose.yaml up -d
-docker compose --env-file .env -f infra/compose.yaml ps
+.\scripts\infra-up.ps1
 ```
 
-The first pull is large because Nacos and RocketMQ are Java images. Wait until every long-running
-service is healthy before using the consoles. Nacos is available at `http://127.0.0.1:8080`, and RocketMQ
-Dashboard at `http://127.0.0.1:8088`. Host Java applications use the RocketMQ Proxy endpoint
-`127.0.0.1:8081`, not the Broker's internal Docker hostname.
+The script checks Docker Desktop, validates required non-placeholder `.env` values and the Nacos
+Base64 token, runs Compose, and observes container state until all seven long-running services are
+healthy. `mysql-bootstrap` and `rocketmq-volume-init` must instead finish as `Exited (0)`. It never
+deletes containers or named volumes. Use `-TimeoutSeconds 600` on a slow first image pull.
+
+The first pull is large because Nacos and RocketMQ are Java images. Nacos is available at
+`http://127.0.0.1:8080`, and RocketMQ Dashboard at `http://127.0.0.1:8088`. Host Java applications
+use the RocketMQ Proxy endpoint `127.0.0.1:8081`, not the Broker's internal Docker hostname.
 
 To run the account service with its local database from PowerShell, first load the ignored `.env`
 into the current process and select the `local` profile:
@@ -367,16 +369,17 @@ Nacos 3 no longer supplies a default administrator password. On a fresh volume, 
 import command below initializes the `nacos` administrator from `TIDEBID_NACOS_PASSWORD`. On later
 runs it logs in normally and updates the same namespace and Data IDs.
 
-Stop and resume the same containers without deleting data:
+Stop the same containers without deleting data:
 
 ```powershell
-docker compose --env-file .env -f infra/compose.yaml stop
-docker compose --env-file .env -f infra/compose.yaml start
+.\scripts\infra-down.ps1
+.\scripts\infra-up.ps1
 ```
 
-`docker compose --env-file .env -f infra/compose.yaml down` removes the containers and project network but keeps
-named volumes. Do not add `-v` unless you deliberately intend to erase the local MySQL, Redis,
-and RocketMQ data. The one-command checked start/stop scripts are a later foundation milestone.
+The stop script uses `docker compose stop`, verifies that no project container remains running,
+honors the per-service Compose shutdown windows, and deliberately exposes no volume-deletion option.
+A manual `docker compose down` removes the containers and project network but keeps named volumes.
+Do not add `-v` unless you deliberately intend to erase the local MySQL, Redis, and RocketMQ data.
 
 ## Nacos configuration import and integration profile
 
