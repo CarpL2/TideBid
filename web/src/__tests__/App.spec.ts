@@ -1,13 +1,19 @@
 import { createPinia } from 'pinia'
-import { describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { createMemoryHistory } from 'vue-router'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 
 import App from '../App.vue'
-import router from '../router'
+import { createAppRouter } from '../router'
 
 describe('App', () => {
-  it('renders the foundation route through the installed application plugins', async () => {
-    await router.push('/')
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  it('renders the login route through the installed application plugins', async () => {
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/login')
     await router.isReady()
 
     const wrapper = mount(App, {
@@ -15,8 +21,9 @@ describe('App', () => {
         plugins: [createPinia(), router],
       },
     })
+    await flushPromises()
 
-    expect(wrapper.get('[data-testid="app-title"]').text()).toBe('TideBid')
-    expect(wrapper.text()).toContain('前端基础设施已就绪')
+    expect(wrapper.get('h1').text()).toBe('登录 TideBid')
+    expect(wrapper.get('[data-testid="login-submit"]').text()).toContain('登录并进入工作台')
   })
 })

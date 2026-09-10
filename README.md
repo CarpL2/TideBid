@@ -2,7 +2,7 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. Four shared modules, six executable services, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. The Vue frontend toolchain is scaffolded; authentication pages and one-command lifecycle scripts are not implemented yet. Bidding remains out of scope for this stage.
+The project is currently in the foundation stage. Four shared modules, six executable services, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. The Vue frontend now completes the same account flow through the gateway; one-command lifecycle scripts are not implemented yet. Bidding remains out of scope for this stage.
 
 ## Core flow
 
@@ -58,8 +58,9 @@ This repository intentionally requires Node 24. If `node --version` still report
 NVM for Windows is installed, switch before running frontend commands:
 
 ```powershell
-nvm install 24.19.0
-nvm use 24.19.0
+nvm list available
+nvm install 24.21.0
+nvm use 24.21.0
 node --version
 ```
 
@@ -84,9 +85,15 @@ pnpm test
 pnpm build
 ```
 
-Start the current frontend shell with `pnpm dev` and open `http://127.0.0.1:5173`. The current
-page only confirms that Router, Pinia, Axios, Element Plus and the quality toolchain are wired;
-registration, login and the authenticated dashboard are the next frontend milestone.
+With Gateway and Account Service running, start the frontend with `pnpm dev` and open
+`http://127.0.0.1:5173`. Register and login requests use the Vite `/api` proxy to Gateway port
+9000. The authenticated dashboard reads the current profile and virtual wallet; later auction,
+order and administration navigation remains visibly disabled in phase 01.
+
+The browser stores the demonstration Access Token in `sessionStorage`, so refreshing the same tab
+restores the session and closing the tab clears it. This is a local portfolio-project tradeoff, not
+a production security recommendation: an XSS payload running in the page could still read the
+Token. A 401 from an authenticated request clears the session and returns the user to login.
 
 ## Run a service skeleton
 

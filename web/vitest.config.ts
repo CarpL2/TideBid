@@ -8,6 +8,7 @@ export default mergeConfig(
     test: {
       environment: 'jsdom',
       exclude: [...configDefaults.exclude, 'e2e/**'],
+      maxWorkers: 1,
       root: fileURLToPath(new URL('./', import.meta.url)),
     },
   }),
