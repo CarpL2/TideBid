@@ -143,7 +143,11 @@ function Test-ProcessMatchesMarker {
         [Parameter(Mandatory = $true)][string]$Marker
     )
 
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    try {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    } catch {
+        throw "Could not inspect recorded process PID $ProcessId. Refusing to infer its state: $($_.Exception.Message)"
+    }
     if ($null -eq $process -or [string]::IsNullOrWhiteSpace([string]$process.CommandLine)) {
         return $false
     }
