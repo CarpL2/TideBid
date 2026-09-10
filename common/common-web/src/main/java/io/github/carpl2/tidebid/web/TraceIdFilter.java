@@ -6,6 +6,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -19,6 +21,7 @@ public final class TraceIdFilter extends OncePerRequestFilter implements Ordered
 
     public static final String TRACE_ID_ATTRIBUTE = TraceIdFilter.class.getName() + ".traceId";
     public static final String MDC_KEY = "traceId";
+    private static final Logger log = LoggerFactory.getLogger(TraceIdFilter.class);
 
     @Override
     public int getOrder() {
@@ -41,6 +44,13 @@ public final class TraceIdFilter extends OncePerRequestFilter implements Ordered
         try {
             filterChain.doFilter(request, response);
         } finally {
+            log.info(
+                    "Request completed traceId={} method={} path={} status={}",
+                    traceId,
+                    request.getMethod(),
+                    request.getRequestURI(),
+                    response.getStatus()
+            );
             if (previousTraceId == null) {
                 MDC.remove(MDC_KEY);
             } else {

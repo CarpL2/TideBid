@@ -35,6 +35,7 @@ import org.springframework.web.server.MethodNotAllowedException;
 import org.springframework.web.server.WebFilter;
 import reactor.core.publisher.Mono;
 
+import java.net.ConnectException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
@@ -45,7 +46,14 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {
+                "spring.cloud.gateway.server.webflux.routes[0].id=missing-service-test",
+                "spring.cloud.gateway.server.webflux.routes[0].uri=lb://tidebid-missing-test",
+                "spring.cloud.gateway.server.webflux.routes[0].predicates[0]=Path=/_test/missing-service"
+        }
+)
 @ActiveProfiles("standalone")
 @Import(GatewayApplicationTest.ProbeConfiguration.class)
 @ExtendWith(OutputCaptureExtension.class)
@@ -133,6 +141,63 @@ class GatewayApplicationTest {
                 .jsonPath("$.traceId").isEqualTo("gateway-trace-5678");
         assertThat(output.getAll()).doesNotContain("internal-test-detail");
         assertThat(output.getAll()).contains("traceId=gateway-trace-5678");
+    }
+
+    @Test
+    void mapsMissingServiceRouteToServiceUnavailable() {
+        client.get().uri("/_test/missing-service")
+                .header(SecurityHeaders.TRACE_ID, "gateway-downstream-1234")
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+                .expectHeader().valueEquals(SecurityHeaders.TRACE_ID, "gateway-downstream-1234")
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("COMMON_SERVICE_UNAVAILABLE")
+                .jsonPath("$.message").isEqualTo("Service is temporarily unavailable")
+                .jsonPath("$.traceId").isEqualTo("gateway-downstream-1234");
+    }
+
+    @Test
+    void mapsWrappedConnectionFailureWithoutExposingTransportDetails(CapturedOutput output) {
+        client.get().uri("/_test/refused-downstream")
+                .header(SecurityHeaders.TRACE_ID, "gateway-connect-1234")
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+                .expectHeader().valueEquals(SecurityHeaders.TRACE_ID, "gateway-connect-1234")
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("COMMON_SERVICE_UNAVAILABLE")
+                .jsonPath("$.message").isEqualTo("Service is temporarily unavailable")
+                .jsonPath("$.traceId").isEqualTo("gateway-connect-1234");
+
+        assertThat(output.getAll())
+                .doesNotContain("internal-transport-wrapper")
+                .doesNotContain("internal-connection-detail");
+    }
+
+    @Test
+    void logsCompletedRequestWithoutHeadersOrQueryString(CapturedOutput output) {
+        client.get().uri("/does-not-exist?token=must-not-be-logged")
+                .header(SecurityHeaders.TRACE_ID, "gateway-access-log-1234")
+                .header(SecurityHeaders.AUTHORIZATION, "Bearer must-not-be-logged")
+                .exchange()
+                .expectStatus().isNotFound();
+
+        assertThat(output.getAll())
+                .contains("Gateway request completed traceId=gateway-access-log-1234"
+                        + " method=GET path=/does-not-exist status=404")
+                .doesNotContain("must-not-be-logged");
+    }
+
+    @Test
+    void exposesExactlyOneTrustedTraceHeaderWhenDownstreamAlsoAddsOne() {
+        client.get().uri("/_test/duplicate-trace")
+                .header(SecurityHeaders.TRACE_ID, "gateway-single-trace-1234")
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectHeader().valueEquals(SecurityHeaders.TRACE_ID, "gateway-single-trace-1234")
+                .expectBody()
+                .jsonPath("$.traceId").isEqualTo("gateway-single-trace-1234");
     }
 
     @Test
@@ -228,6 +293,18 @@ class GatewayApplicationTest {
                 case "/_test/unavailable" -> Mono.error(
                         new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "internal-test-detail"));
                 case "/_test/failure" -> Mono.error(new IllegalStateException("internal-test-detail"));
+                case "/_test/refused-downstream" -> Mono.error(
+                        new IllegalStateException(
+                                "internal-transport-wrapper",
+                                new ConnectException("internal-connection-detail")
+                        ));
+                case "/_test/duplicate-trace" -> {
+                    exchange.getResponse().getHeaders().add(
+                            SecurityHeaders.TRACE_ID,
+                            "untrusted-downstream-trace"
+                    );
+                    yield chain.filter(exchange);
+                }
                 case "/_test/method" -> Mono.error(
                         new MethodNotAllowedException(HttpMethod.POST, List.of(HttpMethod.GET)));
                 default -> chain.filter(exchange);

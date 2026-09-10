@@ -122,6 +122,13 @@ with `Retry-After`, and ordinary business reads do not consume either counter. T
 TTL initialization run atomically in Redis Lua. If Redis is unavailable, these two security-sensitive
 entry points return JSON 503 instead of silently bypassing the limit.
 
+Gateway failures use the same public JSON envelope as downstream MVC services. An unknown route is
+404, a missing service instance or downstream network failure is 503, and an unexpected non-network
+failure is a sanitized 500. Every public response exposes exactly one trusted `X-Trace-Id`, even when
+the downstream service also returns that header. Gateway and MVC completion logs contain only the
+trace ID, method, path, and status; query strings, authorization headers, bodies, and transport details
+are not logged by this access record.
+
 Gateway uses WebFlux/Netty and its own reactive error/trace handling. MVC services obtain their
 trace filter and exception advice from `common-web` auto-configuration.
 The application tests start real HTTP servers on random ports in `standalone` mode.
@@ -380,6 +387,7 @@ instances on ports 9000 and 9101-9105. The importer itself still does not start 
 services; checked one-command lifecycle scripts belong to a later foundation milestone.
 
 Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/starter.html),
+[Gateway load-balancer behavior](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/global-filters.html),
 [Gateway CORS configuration](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/cors-configuration.html),
 [Spring Data Redis scripting](https://docs.spring.io/spring-data/redis/reference/3.5/redis/scripting.html),
 [Spring Boot executable JAR packaging](https://docs.spring.io/spring-boot/3.5/maven-plugin/packaging.html),

@@ -17,13 +17,25 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.util.Arrays;
+import java.util.Set;
+import java.util.concurrent.TimeoutException;
 
 /** Uses the same public error envelope as MVC services, including non-controller failures. */
 @Component
 @Order(-2)
 public class GatewayErrorWebExceptionHandler implements ErrorWebExceptionHandler {
 
+    private static final int MAX_CAUSE_DEPTH = 32;
+    private static final Set<String> REACTIVE_NETWORK_EXCEPTION_TYPES = Set.of(
+            "io.netty.handler.timeout.ReadTimeoutException",
+            "io.netty.handler.timeout.WriteTimeoutException",
+            "reactor.netty.http.client.PrematureCloseException"
+    );
     private static final Logger log = LoggerFactory.getLogger(GatewayErrorWebExceptionHandler.class);
     private final ObjectMapper objectMapper;
 
@@ -43,16 +55,18 @@ public class GatewayErrorWebExceptionHandler implements ErrorWebExceptionHandler
             status = business.errorCode().httpStatus();
             body = ApiResponse.failure(business.errorCode(), business.getMessage(), traceId);
         } else {
-            status = exception instanceof ResponseStatusException responseStatus
-                    ? responseStatus.getStatusCode().value() : 500;
-            if (exception instanceof ResponseStatusException responseStatus) {
+            ResponseStatusException responseStatus = findResponseStatus(exception);
+            status = responseStatus != null
+                    ? responseStatus.getStatusCode().value()
+                    : downstreamUnavailable(exception) ? 503 : 500;
+            if (responseStatus != null) {
                 exchange.getResponse().getHeaders().putAll(responseStatus.getHeaders());
             }
             body = failure(status, traceId);
         }
         if (status >= 500) {
-            log.error("Unhandled gateway failure traceId={} exceptionType={}",
-                    traceId, exception.getClass().getName());
+            log.error("Gateway request failed traceId={} status={} exceptionType={}",
+                    traceId, status, exception.getClass().getName());
         }
 
         try {
@@ -73,5 +87,32 @@ public class GatewayErrorWebExceptionHandler implements ErrorWebExceptionHandler
                 .findFirst()
                 .map(error -> ApiResponse.<Void>failure(error, traceId))
                 .orElseGet(() -> new ApiResponse<>("HTTP_" + status, "Request failed", null, traceId));
+    }
+
+    private static ResponseStatusException findResponseStatus(Throwable exception) {
+        Throwable current = exception;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            if (current instanceof ResponseStatusException responseStatus) {
+                return responseStatus;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private static boolean downstreamUnavailable(Throwable exception) {
+        Throwable current = exception;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            if (current instanceof ConnectException
+                    || current instanceof NoRouteToHostException
+                    || current instanceof SocketTimeoutException
+                    || current instanceof UnknownHostException
+                    || current instanceof TimeoutException
+                    || REACTIVE_NETWORK_EXCEPTION_TYPES.contains(current.getClass().getName())) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 }
