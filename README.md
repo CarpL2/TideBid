@@ -2,7 +2,7 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. Four shared modules, six executable service skeletons, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. Bidding, the frontend, and one-command lifecycle scripts are not implemented yet.
+The project is currently in the foundation stage. Four shared modules, six executable services, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. The Vue frontend toolchain is scaffolded; authentication pages and one-command lifecycle scripts are not implemented yet. Bidding remains out of scope for this stage.
 
 ## Core flow
 
@@ -54,11 +54,39 @@ docker version
 docker compose version
 ```
 
+This repository intentionally requires Node 24. If `node --version` still reports Node 18 and
+NVM for Windows is installed, switch before running frontend commands:
+
+```powershell
+nvm install 24.19.0
+nvm use 24.19.0
+node --version
+```
+
+The version must be at least 24.12 and lower than 25. Switching the active NVM version affects
+other terminals and Node projects on the machine, so choose it explicitly rather than relying on
+an IDE's cached runtime.
+
 Build and test the modules currently in the repository:
 
 ```powershell
 mvn verify
 ```
+
+Install and verify the frontend from `web`:
+
+```powershell
+Set-Location web
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm type-check
+pnpm test
+pnpm build
+```
+
+Start the current frontend shell with `pnpm dev` and open `http://127.0.0.1:5173`. The current
+page only confirms that Router, Pinia, Axios, Element Plus and the quality toolchain are wired;
+registration, login and the authenticated dashboard are the next frontend milestone.
 
 ## Run a service skeleton
 
