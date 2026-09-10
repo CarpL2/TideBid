@@ -2,7 +2,7 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. Four shared modules, six executable services, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. The Vue frontend now completes the same account flow through the gateway; one-command lifecycle scripts are not implemented yet. Bidding remains out of scope for this stage.
+The project is currently in the foundation stage. Four shared modules, six executable services, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. The Vue frontend completes the same account flow through the gateway, and checked lifecycle scripts start and stop the local stack. The end-to-end smoke script is the remaining lifecycle milestone. Bidding remains out of scope for this stage.
 
 ## Core flow
 
@@ -94,6 +94,41 @@ The browser stores the demonstration Access Token in `sessionStorage`, so refres
 restores the session and closing the tab clears it. This is a local portfolio-project tradeoff, not
 a production security recommendation: an XSS payload running in the page could still read the
 Token. A 401 from an authenticated request clears the session and returns the user to login.
+
+## Run the complete foundation stack
+
+After creating `.env`, start the middleware and all host applications from the repository root:
+
+```powershell
+.\scripts\infra-up.ps1
+.\scripts\start-apps.ps1
+```
+
+`start-apps.ps1` validates Java 21, Maven 3.9+, Node 24, pnpm 11, required application values
+and all seven host ports. It packages the Java modules without rerunning tests, validates the JWT
+key pair, imports the seven managed Nacos Data IDs, and starts Account, Auction, Trade, Realtime,
+AI, Gateway, then Vue. Each process must pass its HTTP readiness check before the next dependency
+starts. If the JARs are already current, use the faster development path:
+
+```powershell
+.\scripts\start-apps.ps1 -SkipBuild
+```
+
+PIDs are stored in ignored `.runtime/apps/processes.json`; stdout and stderr are separated under
+`.runtime/apps/logs/<timestamp>/`. Repeating the start command recognizes the same healthy recorded
+processes and does not create duplicates. An occupied port that does not belong to the manifest
+fails before build or startup.
+
+Stop only the application processes recorded by this checkout, then optionally stop middleware:
+
+```powershell
+.\scripts\stop-apps.ps1
+.\scripts\infra-down.ps1
+```
+
+`stop-apps.ps1` validates both the PID and its command marker before terminating that process tree,
+removes the PID manifest, and preserves logs. It does not scan for or kill unrelated Java or Node
+processes. `infra-down.ps1` preserves all containers and named volumes.
 
 ## Run a service skeleton
 
@@ -403,9 +438,10 @@ Configuration ownership is deliberately split:
 | Ignored `.env` / process environment | passwords, Nacos credentials, JWT key paths, OSS credentials, and model keys |
 
 Nacos files keep expressions such as `${TIDEBID_ACCOUNT_DB_PASSWORD}` as placeholders; the importer
-must never expand or upload their secret values. Java does not load `.env` automatically, so until
-the checked startup scripts are implemented, load it into the current PowerShell process as shown
-in the account database example above. Then start a service with the `nacos` profile:
+must never expand or upload their secret values. Java does not load `.env` automatically; the
+checked `start-apps.ps1` script loads it for its child processes without printing secrets. To run
+one service manually instead, load the file into the current shell as shown in the account database
+example above, then start it with the `nacos` profile:
 
 ```powershell
 java -jar services/gateway-service/target/gateway-service.jar --spring.profiles.active=nacos
@@ -422,7 +458,7 @@ configuration presence and loading must also be checked during infrastructure in
 Automatic refresh is disabled in the imports; restart the process after changing configuration.
 The host-local development topology has been verified with all six services registered as healthy
 instances on ports 9000 and 9101-9105. The importer itself still does not start application
-services; checked one-command lifecycle scripts belong to a later foundation milestone.
+services; `start-apps.ps1` composes the importer, key preparation, process startup and health checks.
 
 Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/starter.html),
 [Gateway load-balancer behavior](https://docs.spring.io/spring-cloud-gateway/reference/4.3/spring-cloud-gateway-server-webflux/global-filters.html),
@@ -451,15 +487,15 @@ Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/ref
 
 ## Foundation startup order
 
-The following is the intended startup order. Exact scripts and runnable commands will be added with the corresponding implementation:
+The checked lifecycle scripts now implement this order:
 
 1. Copy `.env.example` to `.env` and replace local passwords.
-2. Start MySQL, Redis, Nacos, and RocketMQ with Docker Compose.
-3. Import shared and service-level configuration into the `tidebid-dev` Nacos namespace.
-4. Generate local RS256 development keys.
-5. Start the six Java services.
-6. Start the Vue development server.
-7. Run the smoke test for registration, login, profile, and wallet queries.
+2. Run `infra-up.ps1` to start and verify MySQL, Redis, Nacos, and RocketMQ.
+3. Run `start-apps.ps1`; it builds JARs, prepares RS256 keys and imports Nacos configuration.
+4. The script starts Account first, the four skeleton services next, Gateway after its routes have
+   healthy targets, and Vue last.
+5. Run the smoke test for registration, login, profile, and wallet queries once that script is
+   implemented in the next milestone.
 
 ## Security notes
 
