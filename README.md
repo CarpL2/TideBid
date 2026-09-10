@@ -2,7 +2,7 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. Four shared modules, six executable services, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. The Vue frontend completes the same account flow through the gateway, and checked lifecycle scripts start and stop the local stack. The end-to-end smoke script is the remaining lifecycle milestone. Bidding remains out of scope for this stage.
+The project is currently in the foundation stage. Four shared modules, six executable services, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. The Vue frontend completes the same account flow through the gateway, and checked lifecycle scripts start, verify, and stop the local stack. Bidding remains out of scope for this stage.
 
 ## Core flow
 
@@ -119,6 +119,23 @@ PIDs are stored in ignored `.runtime/apps/processes.json`; stdout and stderr are
 processes and does not create duplicates. An occupied port that does not belong to the manifest
 fails before build or startup.
 
+Verify the running account flow through Gateway with a fresh test account:
+
+```powershell
+.\scripts\smoke.ps1
+```
+
+The smoke test first checks Gateway health, then uses a unique random username to register, log in,
+read the current profile, and read the current wallet. It verifies lowercase username normalization,
+identity consistency, the exact `USER` role, and balances of `10000.00` available and `0.00` frozen.
+Each step prints its trace ID, but the generated password and access token are never printed. Any
+HTTP or assertion failure throws with the failing step and trace ID, so `powershell -File` and CI
+receive a nonzero exit code. A different local Gateway can be selected explicitly:
+
+```powershell
+.\scripts\smoke.ps1 -GatewayBaseUri 'http://127.0.0.1:9000'
+```
+
 Stop only the application processes recorded by this checkout, then optionally stop middleware:
 
 ```powershell
@@ -129,6 +146,29 @@ Stop only the application processes recorded by this checkout, then optionally s
 `stop-apps.ps1` validates both the PID and its command marker before terminating that process tree,
 removes the PID manifest, and preserves logs. It does not scan for or kill unrelated Java or Node
 processes. `infra-down.ps1` preserves all containers and named volumes.
+
+For a normal development restart, keep the middleware running, stop the recorded applications, and
+restart from existing build outputs when source files have not changed:
+
+```powershell
+.\scripts\stop-apps.ps1
+.\scripts\start-apps.ps1 -SkipBuild
+.\scripts\smoke.ps1
+```
+
+If startup or smoke verification fails, use the reported component, step, port, and trace ID first.
+Application logs are under `.runtime/apps/logs/<timestamp>/`; middleware status and logs are available
+through these commands:
+
+```powershell
+docker compose --env-file .env -f infra/compose.yaml ps
+docker compose --env-file .env -f infra/compose.yaml logs <service>
+```
+
+A port-conflict failure is intentional: stop the known owner or choose the correct environment
+instead of allowing the script to terminate an unrecorded process.
+For dependency changes, omit `-SkipBuild`; for Nacos configuration changes, rerun `start-apps.ps1`
+after stopping the applications because managed configuration refresh is intentionally disabled.
 
 ## Run a service skeleton
 
@@ -494,8 +534,7 @@ The checked lifecycle scripts now implement this order:
 3. Run `start-apps.ps1`; it builds JARs, prepares RS256 keys and imports Nacos configuration.
 4. The script starts Account first, the four skeleton services next, Gateway after its routes have
    healthy targets, and Vue last.
-5. Run the smoke test for registration, login, profile, and wallet queries once that script is
-   implemented in the next milestone.
+5. Run `smoke.ps1` to verify registration, login, profile, wallet identity, and initial balances.
 
 ## Security notes
 
