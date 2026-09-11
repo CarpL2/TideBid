@@ -23,7 +23,17 @@ import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {
+                "tidebid.auction.storage.enabled=false",
+                "tidebid.auction.storage.endpoint=",
+                "tidebid.auction.storage.region=",
+                "tidebid.auction.storage.bucket=",
+                "tidebid.auction.storage.access-key-id=",
+                "tidebid.auction.storage.access-key-secret="
+        }
+)
 @ActiveProfiles("standalone")
 class AuctionApplicationTest {
 
