@@ -5,7 +5,7 @@ import io.github.carpl2.tidebid.account.application.CurrentAccount;
 import java.util.List;
 
 public record AdminAccessResponse(
-        long userId,
+        String userId,
         String username,
         List<String> roles
 ) {
@@ -14,6 +14,6 @@ public record AdminAccessResponse(
                 .map(Enum::name)
                 .sorted()
                 .toList();
-        return new AdminAccessResponse(account.userId(), account.username(), roles);
+        return new AdminAccessResponse(Long.toString(account.userId()), account.username(), roles);
     }
 }

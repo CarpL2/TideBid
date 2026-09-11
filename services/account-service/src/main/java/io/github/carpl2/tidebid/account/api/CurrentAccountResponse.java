@@ -5,7 +5,7 @@ import io.github.carpl2.tidebid.account.application.CurrentAccount;
 import java.util.List;
 
 public record CurrentAccountResponse(
-        long userId,
+        String userId,
         String username,
         String nickname,
         List<String> roles
@@ -16,7 +16,7 @@ public record CurrentAccountResponse(
                 .sorted()
                 .toList();
         return new CurrentAccountResponse(
-                account.userId(),
+                Long.toString(account.userId()),
                 account.username(),
                 account.nickname(),
                 roles

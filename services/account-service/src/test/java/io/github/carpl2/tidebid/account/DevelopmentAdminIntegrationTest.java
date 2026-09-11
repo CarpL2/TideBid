@@ -111,7 +111,9 @@ class DevelopmentAdminIntegrationTest {
             assertThat(allowed.getStatusCode().value()).isEqualTo(200);
             assertThat(allowed.getHeaders().getFirst(SecurityHeaders.TRACE_ID)).isEqualTo("admin-access-trace");
             assertThat(allowed.getBody()).isNotNull();
-            assertThat(allowed.getBody().path("data").path("userId").asLong()).isEqualTo(admin.getId());
+            assertThat(allowed.getBody().path("data").path("userId").isTextual()).isTrue();
+            assertThat(allowed.getBody().path("data").path("userId").asText())
+                    .isEqualTo(Long.toString(admin.getId()));
             assertThat(allowed.getBody().path("data").path("username").asText()).isEqualTo(ADMIN_USERNAME);
             JsonNode roles = allowed.getBody().path("data").path("roles");
             assertThat(roles.isArray()).isTrue();

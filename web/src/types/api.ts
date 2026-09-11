@@ -17,7 +17,7 @@ export interface RegisterAccountInput {
 }
 
 export interface RegisteredAccount {
-  userId: number
+  userId: string
   username: string
   nickname: string
   roles: string[]
@@ -35,14 +35,14 @@ export interface AccessToken {
 }
 
 export interface CurrentAccount {
-  userId: number
+  userId: string
   username: string
   nickname: string
   roles: string[]
 }
 
 export interface CurrentWallet {
-  userId: number
+  userId: string
   availableBalance: number | string
   frozenBalance: number | string
 }

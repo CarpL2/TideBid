@@ -5,13 +5,13 @@ import io.github.carpl2.tidebid.account.application.WalletBalance;
 import java.math.BigDecimal;
 
 public record CurrentWalletResponse(
-        long userId,
+        String userId,
         BigDecimal availableBalance,
         BigDecimal frozenBalance
 ) {
     static CurrentWalletResponse from(WalletBalance wallet) {
         return new CurrentWalletResponse(
-                wallet.userId(),
+                Long.toString(wallet.userId()),
                 wallet.availableBalance(),
                 wallet.frozenBalance()
         );

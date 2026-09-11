@@ -55,8 +55,13 @@ class JwtAccessTokenTest {
         Clock clock = fixedClock(NOW);
         JwtAccessTokenIssuer issuer = new JwtAccessTokenIssuer(keyPair, settings, clock, () -> tokenId);
         JwtAccessTokenVerifier verifier = new JwtAccessTokenVerifier(keyPair.publicKey(), settings, clock);
+        long userIdBeyondJavaScriptSafeInteger = 9_007_199_254_740_993L;
 
-        IssuedAccessToken token = issuer.issue("alice_01", 42L, Set.of(Role.USER, Role.ADMIN));
+        IssuedAccessToken token = issuer.issue(
+                "alice_01",
+                userIdBeyondJavaScriptSafeInteger,
+                Set.of(Role.USER, Role.ADMIN)
+        );
         JwtClaims verified = verifier.verify(token.value());
         SignedJWT parsed = SignedJWT.parse(token.value());
 
@@ -70,12 +75,13 @@ class JwtAccessTokenTest {
         assertThat(parsed.getHeader().getKeyID()).isEqualTo(RsaKeyFingerprint.keyId(keyPair.publicKey()));
         assertThat(parsed.getJWTClaimsSet().getIssuer()).isEqualTo("tidebid-account");
         assertThat(parsed.getJWTClaimsSet().getAudience()).containsExactly("tidebid-api");
-        assertThat(parsed.getJWTClaimsSet().getLongClaim("userId")).isEqualTo(42L);
+        assertThat(parsed.getJWTClaimsSet().getStringClaim("userId"))
+                .isEqualTo(Long.toString(userIdBeyondJavaScriptSafeInteger));
         assertThat(parsed.getJWTClaimsSet().getStringListClaim("roles"))
                 .containsExactly("ADMIN", "USER");
 
         assertThat(verified.subject()).isEqualTo("alice_01");
-        assertThat(verified.userId()).isEqualTo(42L);
+        assertThat(verified.userId()).isEqualTo(userIdBeyondJavaScriptSafeInteger);
         assertThat(verified.roles()).containsExactlyInAnyOrder(Role.USER, Role.ADMIN);
         assertThat(verified.issuedAt()).isEqualTo(NOW);
         assertThat(verified.expiresAt()).isEqualTo(NOW.plus(Duration.ofHours(2)));

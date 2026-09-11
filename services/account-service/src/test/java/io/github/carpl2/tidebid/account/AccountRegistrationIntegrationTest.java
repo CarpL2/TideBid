@@ -100,6 +100,9 @@ class AccountRegistrationIntegrationTest {
                     .doesNotContain("password_hash");
 
             UserAccountEntity user = findUser(username);
+            assertThat(created.getBody().path("data").path("userId").isTextual()).isTrue();
+            assertThat(created.getBody().path("data").path("userId").asText())
+                    .isEqualTo(Long.toString(user.getId()));
             assertThat(user.getStatus()).isEqualTo("ACTIVE");
             assertThat(user.getNickname()).isEqualTo("注册测试用户");
             assertThat(user.getPasswordHash()).isNotEqualTo(rawPassword);

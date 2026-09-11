@@ -28,11 +28,11 @@ describe('auth store', () => {
       traceId: 'trace-login',
     })
     accountApi.getCurrentAccount.mockResolvedValue({
-      data: { userId: 7, username: 'carp_bidder', nickname: '鲤鱼', roles: ['USER'] },
+      data: { userId: '7', username: 'carp_bidder', nickname: '鲤鱼', roles: ['USER'] },
       traceId: 'trace-profile',
     })
     accountApi.getCurrentWallet.mockResolvedValue({
-      data: { userId: 7, availableBalance: '10000.00', frozenBalance: '0.00' },
+      data: { userId: '7', availableBalance: '10000.00', frozenBalance: '0.00' },
       traceId: 'trace-wallet',
     })
     const store = useAuthStore()
@@ -49,11 +49,11 @@ describe('auth store', () => {
 
   it('rejects account and wallet data that belong to different users', async () => {
     accountApi.getCurrentAccount.mockResolvedValue({
-      data: { userId: 7, username: 'carp_bidder', nickname: '鲤鱼', roles: ['USER'] },
+      data: { userId: '7', username: 'carp_bidder', nickname: '鲤鱼', roles: ['USER'] },
       traceId: 'trace-profile',
     })
     accountApi.getCurrentWallet.mockResolvedValue({
-      data: { userId: 8, availableBalance: '10000.00', frozenBalance: '0.00' },
+      data: { userId: '8', availableBalance: '10000.00', frozenBalance: '0.00' },
       traceId: 'trace-wallet',
     })
     const store = useAuthStore()

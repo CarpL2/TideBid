@@ -200,12 +200,13 @@ try {
         -Headers @{ 'X-Request-Id' = "smoke-register-$($suffix.Substring(0, 16))" } `
         -Body @{ username = $submittedUsername; password = $password; nickname = $nickname } `
         -ApiEnvelope
+    Assert-Value -Condition ($register.data.userId -is [string]) -Message 'registration userId must be a JSON string to preserve 64-bit precision'
     Assert-Value -Condition ([long]($register.data.userId) -gt 0) -Message 'registration returned an invalid userId'
     Assert-Value -Condition ([string]($register.data.username) -ceq $canonicalUsername) -Message 'registration did not normalize the username to lowercase'
     Assert-Value -Condition ([string]($register.data.nickname) -ceq $nickname) -Message 'registration nickname does not match the submitted nickname'
     $registeredRoles = @($register.data.roles | ForEach-Object { [string]$_ } | Sort-Object)
     Assert-Value -Condition ($registeredRoles.Count -eq 1 -and $registeredRoles[0] -ceq 'USER') -Message 'registration did not return exactly the USER role'
-    $userId = [long]($register.data.userId)
+    $userId = [string]($register.data.userId)
 
     $login = Invoke-SmokeRequest `
         -Step 'login' `
@@ -227,7 +228,8 @@ try {
         -ExpectedStatus 200 `
         -Headers @{ Authorization = $authorization } `
         -ApiEnvelope
-    Assert-Value -Condition ([long]($profile.data.userId) -eq $userId) -Message 'profile userId does not match the registered user'
+    Assert-Value -Condition ($profile.data.userId -is [string]) -Message 'profile userId must be a JSON string to preserve 64-bit precision'
+    Assert-Value -Condition ([string]($profile.data.userId) -ceq $userId) -Message 'profile userId does not match the registered user'
     Assert-Value -Condition ([string]($profile.data.username) -ceq $canonicalUsername) -Message 'profile username does not match the registered user'
     Assert-Value -Condition ([string]($profile.data.nickname) -ceq $nickname) -Message 'profile nickname does not match the registered user'
     $profileRoles = @($profile.data.roles | ForEach-Object { [string]$_ } | Sort-Object)
@@ -240,7 +242,8 @@ try {
         -ExpectedStatus 200 `
         -Headers @{ Authorization = $authorization } `
         -ApiEnvelope
-    Assert-Value -Condition ([long]($wallet.data.userId) -eq $userId) -Message 'wallet userId does not match the registered user'
+    Assert-Value -Condition ($wallet.data.userId -is [string]) -Message 'wallet userId must be a JSON string to preserve 64-bit precision'
+    Assert-Value -Condition ([string]($wallet.data.userId) -ceq $userId) -Message 'wallet userId does not match the registered user'
     $availableBalance = ConvertTo-InvariantDecimal -Value $wallet.data.availableBalance -FieldName 'availableBalance'
     $frozenBalance = ConvertTo-InvariantDecimal -Value $wallet.data.frozenBalance -FieldName 'frozenBalance'
     Assert-Value -Condition ($availableBalance -eq [decimal]10000.00) -Message "availableBalance must be 10000.00 (actual=$availableBalance)"

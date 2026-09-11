@@ -352,7 +352,9 @@ Invoke-RestMethod -Method Post `
     -Body $body
 ```
 
-A successful request returns HTTP 201 and the canonical lowercase username. The same transaction
+A successful request returns HTTP 201 and the canonical lowercase username. Public `userId` fields
+and the JWT `userId` claim are decimal strings so browser clients do not lose 64-bit integer
+precision. The same transaction
 creates the `USER` role, a `10000.00` virtual wallet, and its initialization ledger. Reusing the
 same username (including a case-only variant) returns HTTP 409.
 

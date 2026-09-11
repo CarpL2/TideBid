@@ -92,7 +92,9 @@ class AccountSelfIntegrationTest {
             ResponseEntity<JsonNode> walletResponse = get("/api/wallets/me", headers);
 
             assertSuccessEnvelope(userResponse, "self-trace-1234");
-            assertThat(userResponse.getBody().path("data").path("userId").asLong()).isEqualTo(account.userId());
+            assertThat(userResponse.getBody().path("data").path("userId").isTextual()).isTrue();
+            assertThat(userResponse.getBody().path("data").path("userId").asText())
+                    .isEqualTo(Long.toString(account.userId()));
             assertThat(userResponse.getBody().path("data").path("username").asText()).isEqualTo(username);
             assertThat(userResponse.getBody().path("data").path("nickname").asText()).isEqualTo("Current Alice");
             JsonNode roles = userResponse.getBody().path("data").path("roles");
@@ -102,7 +104,9 @@ class AccountSelfIntegrationTest {
             assertThat(userResponse.getBody().toString()).doesNotContain("password");
 
             assertSuccessEnvelope(walletResponse, "self-trace-1234");
-            assertThat(walletResponse.getBody().path("data").path("userId").asLong()).isEqualTo(account.userId());
+            assertThat(walletResponse.getBody().path("data").path("userId").isTextual()).isTrue();
+            assertThat(walletResponse.getBody().path("data").path("userId").asText())
+                    .isEqualTo(Long.toString(account.userId()));
             assertThat(walletResponse.getBody().path("data").path("availableBalance").decimalValue())
                     .isEqualByComparingTo("10000.00");
             assertThat(walletResponse.getBody().path("data").path("frozenBalance").decimalValue())

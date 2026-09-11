@@ -76,7 +76,7 @@ public final class JwtAccessTokenIssuer {
                 .issuedAt(domainClaims.issuedAt())
                 .expiresAt(domainClaims.expiresAt())
                 .id(domainClaims.tokenId())
-                .claim("userId", domainClaims.userId())
+                .claim("userId", Long.toString(domainClaims.userId()))
                 .claim("roles", roleNames)
                 .build();
         JwsHeader header = JwsHeader.with(SignatureAlgorithm.RS256)

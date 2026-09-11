@@ -97,6 +97,12 @@ public final class JwtAccessTokenVerifier {
             userId = ((Number) value).longValue();
         } else if (value instanceof BigInteger integer && integer.bitLength() < Long.SIZE) {
             userId = integer.longValue();
+        } else if (value instanceof String text && text.matches("[1-9][0-9]*")) {
+            try {
+                userId = Long.parseLong(text);
+            } catch (NumberFormatException exception) {
+                throw new IllegalArgumentException("userId claim must fit in a signed 64-bit integer", exception);
+            }
         } else {
             throw new IllegalArgumentException("userId claim must be an integer");
         }

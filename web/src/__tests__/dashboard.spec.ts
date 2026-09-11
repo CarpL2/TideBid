@@ -21,8 +21,8 @@ describe('account dashboard', () => {
     await router.isReady()
     const authStore = useAuthStore(pinia)
     authStore.$patch({
-      profile: { userId: 7, username: 'carp_bidder', nickname: '鲤鱼', roles: ['USER'] },
-      wallet: { userId: 7, availableBalance: '10000.00', frozenBalance: '0.00' },
+      profile: { userId: '2098215937757904897', username: 'carp_bidder', nickname: '鲤鱼', roles: ['USER'] },
+      wallet: { userId: '2098215937757904897', availableBalance: '10000.00', frozenBalance: '0.00' },
       lastTraceId: 'trace-wallet',
     })
     vi.spyOn(authStore, 'loadDashboard').mockResolvedValue()
@@ -34,6 +34,7 @@ describe('account dashboard', () => {
 
     expect(wrapper.text()).toContain('鲤鱼')
     expect(wrapper.text()).toContain('@carp_bidder')
+    expect(wrapper.text()).toContain('2098215937757904897')
     expect(wrapper.text()).toContain('10,000.00')
     expect(wrapper.text()).toContain('trace-wallet')
     expect(wrapper.findAll('nav button').every((button) => button.attributes('disabled') !== undefined))
