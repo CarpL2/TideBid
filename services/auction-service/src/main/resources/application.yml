@@ -34,8 +34,45 @@ management:
 info:
   app:
     name: ${spring.application.name}
-    stage: foundation
+    stage: auction-core
 
 logging:
   pattern:
     level: "%5p [traceId=%X{traceId:-}]"
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: assign_id
+
+tidebid:
+  auction:
+    storage:
+      enabled: ${TIDEBID_OSS_ENABLED:false}
+      endpoint: ${TIDEBID_OSS_ENDPOINT:}
+      region: ${TIDEBID_OSS_REGION:}
+      bucket: ${TIDEBID_OSS_BUCKET:}
+      access-key-id: ${ALIBABA_CLOUD_ACCESS_KEY_ID:}
+      access-key-secret: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:}
+      upload-url-ttl: 10m
+      read-url-ttl: 5m
+      pending-retention: 24h
+    image:
+      allowed-content-types:
+        - image/jpeg
+        - image/png
+        - image/webp
+      max-size: 10MB
+      max-images-per-item: 9
+    timing:
+      minimum-lead-time: 1m
+      maximum-duration: 7d
+      opening-scan-interval: 1s
+    registration-recovery:
+      initial-retry-delay: 5s
+      maximum-retry-delay: 5m
+      lease-duration: 30s
+      batch-size: 50

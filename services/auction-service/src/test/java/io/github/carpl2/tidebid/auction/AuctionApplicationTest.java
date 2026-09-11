@@ -1,6 +1,10 @@
 package io.github.carpl2.tidebid.auction;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRegistrationRecoveryProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
 import io.github.carpl2.tidebid.web.GlobalExceptionHandler;
 import io.github.carpl2.tidebid.web.TraceIdFilter;
 import org.junit.jupiter.api.Test;
@@ -13,6 +17,9 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.core.env.Environment;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.util.unit.DataSize;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,6 +35,18 @@ class AuctionApplicationTest {
 
     @Autowired
     private TestRestTemplate client;
+
+    @Autowired
+    private AuctionStorageProperties storageProperties;
+
+    @Autowired
+    private AuctionImageProperties imageProperties;
+
+    @Autowired
+    private AuctionTimingProperties timingProperties;
+
+    @Autowired
+    private AuctionRegistrationRecoveryProperties recoveryProperties;
 
     @Test
     void servesHealthAndIdentity() {
@@ -57,5 +76,30 @@ class AuctionApplicationTest {
         assertThat(response.getBody().path("traceId").asText())
                 .isEqualTo(response.getHeaders().getFirst("X-Trace-Id"))
                 .matches("[a-f0-9]{32}");
+    }
+
+    @Test
+    void bindsSafeAuctionCoreDefaultsWithoutCloudCredentials() {
+        assertThat(storageProperties.enabled()).isFalse();
+        assertThat(storageProperties.endpoint()).isEmpty();
+        assertThat(storageProperties.accessKeyId()).isEmpty();
+        assertThat(storageProperties.accessKeySecret()).isEmpty();
+        assertThat(storageProperties.uploadUrlTtl()).isEqualTo(Duration.ofMinutes(10));
+        assertThat(storageProperties.readUrlTtl()).isEqualTo(Duration.ofMinutes(5));
+        assertThat(storageProperties.pendingRetention()).isEqualTo(Duration.ofHours(24));
+
+        assertThat(imageProperties.allowedContentTypes())
+                .containsExactlyInAnyOrder("image/jpeg", "image/png", "image/webp");
+        assertThat(imageProperties.maxSize()).isEqualTo(DataSize.ofMegabytes(10));
+        assertThat(imageProperties.maxImagesPerItem()).isEqualTo(9);
+
+        assertThat(timingProperties.minimumLeadTime()).isEqualTo(Duration.ofMinutes(1));
+        assertThat(timingProperties.maximumDuration()).isEqualTo(Duration.ofDays(7));
+        assertThat(timingProperties.openingScanInterval()).isEqualTo(Duration.ofSeconds(1));
+
+        assertThat(recoveryProperties.initialRetryDelay()).isEqualTo(Duration.ofSeconds(5));
+        assertThat(recoveryProperties.maximumRetryDelay()).isEqualTo(Duration.ofMinutes(5));
+        assertThat(recoveryProperties.leaseDuration()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(recoveryProperties.batchSize()).isEqualTo(50);
     }
 }
