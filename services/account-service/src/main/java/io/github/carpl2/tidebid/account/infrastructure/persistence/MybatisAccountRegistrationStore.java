@@ -2,6 +2,7 @@ package io.github.carpl2.tidebid.account.infrastructure.persistence;
 
 import io.github.carpl2.tidebid.account.application.port.AccountRegistrationStore;
 import io.github.carpl2.tidebid.account.application.port.DuplicateUsernameException;
+import io.github.carpl2.tidebid.account.domain.WalletLedgerType;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.UserAccountEntity;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.UserRoleEntity;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.WalletAccountEntity;
@@ -69,7 +70,7 @@ public class MybatisAccountRegistrationStore implements AccountRegistrationStore
         WalletLedgerEntity ledger = new WalletLedgerEntity();
         ledger.setWalletId(wallet.getId());
         ledger.setBusinessNo("REGISTER_INIT:" + user.getId());
-        ledger.setLedgerType("INITIAL_CREDIT");
+        ledger.setLedgerType(WalletLedgerType.INITIAL_CREDIT.name());
         ledger.setAvailableDelta(registrationData.initialAvailableBalance());
         ledger.setFrozenDelta(registrationData.initialFrozenBalance());
         ledger.setAvailableBalanceAfter(registrationData.initialAvailableBalance());

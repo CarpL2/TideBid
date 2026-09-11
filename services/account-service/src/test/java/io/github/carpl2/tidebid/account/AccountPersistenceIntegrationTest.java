@@ -1,5 +1,9 @@
 package io.github.carpl2.tidebid.account;
 
+import io.github.carpl2.tidebid.account.application.port.WalletHoldRepository;
+import io.github.carpl2.tidebid.account.domain.WalletHold;
+import io.github.carpl2.tidebid.account.domain.WalletHoldBusinessType;
+import io.github.carpl2.tidebid.account.domain.WalletHoldStatus;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.UserAccountEntity;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.UserRoleEntity;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.WalletAccountEntity;
@@ -7,6 +11,7 @@ import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.Wallet
 import io.github.carpl2.tidebid.account.infrastructure.persistence.mapper.UserAccountMapper;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.mapper.UserRoleMapper;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.mapper.WalletAccountMapper;
+import io.github.carpl2.tidebid.account.infrastructure.persistence.mapper.WalletHoldMapper;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.mapper.WalletLedgerMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -43,6 +48,12 @@ class AccountPersistenceIntegrationTest {
     private WalletLedgerMapper walletLedgerMapper;
 
     @Autowired
+    private WalletHoldMapper walletHoldMapper;
+
+    @Autowired
+    private WalletHoldRepository walletHoldRepository;
+
+    @Autowired
     private TransactionTemplate transactionTemplate;
 
     @Test
@@ -54,6 +65,7 @@ class AccountPersistenceIntegrationTest {
         AtomicReference<Long> userId = new AtomicReference<>();
         AtomicReference<Long> walletId = new AtomicReference<>();
         AtomicReference<Long> ledgerId = new AtomicReference<>();
+        AtomicReference<Long> holdId = new AtomicReference<>();
 
         transactionTemplate.executeWithoutResult(status -> {
             UserAccountEntity user = new UserAccountEntity();
@@ -83,6 +95,18 @@ class AccountPersistenceIntegrationTest {
             assertThat(wallet.getId()).isPositive();
             assertThat(wallet.getVersion()).isZero();
             walletId.set(wallet.getId());
+
+            WalletHold hold = walletHoldRepository.insertHeld(
+                    "IT_HOLD_" + suffix,
+                    user.getId(),
+                    WalletHoldBusinessType.AUCTION_DEPOSIT,
+                    new BigDecimal("500.00")
+            );
+            assertThat(hold.id()).isPositive();
+            assertThat(hold.status()).isEqualTo(WalletHoldStatus.HELD);
+            assertThat(hold.createdAt()).isAfterOrEqualTo(earliestExpectedTime);
+            assertThat(walletHoldRepository.findByHoldNo(hold.holdNo())).contains(hold);
+            holdId.set(hold.id());
 
             WalletLedgerEntity ledger = new WalletLedgerEntity();
             ledger.setWalletId(wallet.getId());
@@ -127,6 +151,7 @@ class AccountPersistenceIntegrationTest {
         assertThat(userAccountMapper.selectById(userId.get())).isNull();
         assertThat(userRoleMapper.selectByUserId(userId.get())).isEmpty();
         assertThat(walletAccountMapper.selectById(walletId.get())).isNull();
+        assertThat(walletHoldMapper.selectById(holdId.get())).isNull();
         assertThat(walletLedgerMapper.selectById(ledgerId.get())).isNull();
     }
 

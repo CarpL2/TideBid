@@ -26,6 +26,7 @@ class AccountDatabaseIntegrationTest {
             "user_account",
             "user_role",
             "wallet_account",
+            "wallet_hold",
             "wallet_ledger"
     );
 
@@ -65,5 +66,11 @@ class AccountDatabaseIntegrationTest {
                 Integer.class
         );
         assertThat(successfulVersionOne).isEqualTo(1);
+
+        Integer successfulVersionTwo = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '2' AND success = TRUE",
+                Integer.class
+        );
+        assertThat(successfulVersionTwo).isEqualTo(1);
     }
 }
