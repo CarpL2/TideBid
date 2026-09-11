@@ -50,6 +50,8 @@ mybatis-plus:
 
 tidebid:
   auction:
+    account-client:
+      internal-token: ${TIDEBID_INTERNAL_SERVICE_TOKEN:}
     storage:
       enabled: ${TIDEBID_OSS_ENABLED:false}
       endpoint: ${TIDEBID_OSS_ENDPOINT:}
