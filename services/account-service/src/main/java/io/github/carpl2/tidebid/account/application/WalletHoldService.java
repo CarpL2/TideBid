@@ -22,8 +22,6 @@ import java.math.BigDecimal;
 @Profile({"local-db", "nacos"})
 public class WalletHoldService {
 
-    private static final WalletHoldBusinessType BUSINESS_TYPE = WalletHoldBusinessType.AUCTION_DEPOSIT;
-
     private final WalletHoldRepository walletHoldRepository;
     private final WalletHoldTransaction walletHoldTransaction;
 
@@ -62,6 +60,17 @@ public class WalletHoldService {
         }
     }
 
+    public WalletHold findByHoldNo(String holdNo) {
+        String normalizedHoldNo;
+        try {
+            normalizedHoldNo = WalletHold.requireHoldNo(holdNo);
+        } catch (IllegalArgumentException exception) {
+            throw invalid(exception.getMessage());
+        }
+        return walletHoldRepository.findByHoldNo(normalizedHoldNo)
+                .orElseThrow(() -> new BusinessException(AccountErrorCode.WALLET_HOLD_NOT_FOUND));
+    }
+
     private static HoldData validate(HoldWalletFundsCommand command) {
         if (command == null) {
             throw invalid("Wallet hold request is required");
@@ -77,7 +86,11 @@ public class WalletHoldService {
         if (command.userId() <= 0) {
             throw invalid("userId must be positive");
         }
-        return new HoldData(holdNo, command.userId(), BUSINESS_TYPE, amount);
+        WalletHoldBusinessType businessType = command.businessType();
+        if (businessType == null) {
+            throw invalid("businessType must not be null");
+        }
+        return new HoldData(holdNo, command.userId(), businessType, amount);
     }
 
     private static WalletHold requireSamePayload(WalletHold hold, HoldData expected) {

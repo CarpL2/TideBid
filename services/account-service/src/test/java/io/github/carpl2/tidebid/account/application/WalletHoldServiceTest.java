@@ -38,6 +38,7 @@ class WalletHoldServiceTest {
         WalletHold result = service.hold(new HoldWalletFundsCommand(
                 " REGISTRATION:101 ",
                 7L,
+                WalletHoldBusinessType.AUCTION_DEPOSIT,
                 new BigDecimal("200.0")
         ));
 
@@ -57,6 +58,7 @@ class WalletHoldServiceTest {
                 () -> service.hold(new HoldWalletFundsCommand(
                         "REGISTRATION:102",
                         7L,
+                        WalletHoldBusinessType.AUCTION_DEPOSIT,
                         new BigDecimal("201.00")
                 )),
                 "ACCOUNT_WALLET_HOLD_IDEMPOTENCY_CONFLICT"
@@ -93,6 +95,7 @@ class WalletHoldServiceTest {
         WalletHold result = service.hold(new HoldWalletFundsCommand(
                 "REGISTRATION:103",
                 8L,
+                WalletHoldBusinessType.AUCTION_DEPOSIT,
                 new BigDecimal("300.00")
         ));
 
@@ -113,6 +116,7 @@ class WalletHoldServiceTest {
                 () -> service.hold(new HoldWalletFundsCommand(
                         "REGISTRATION:104",
                         9L,
+                        WalletHoldBusinessType.AUCTION_DEPOSIT,
                         new BigDecimal("500.00")
                 )),
                 "ACCOUNT_WALLET_INSUFFICIENT_BALANCE"
@@ -134,7 +138,12 @@ class WalletHoldServiceTest {
         );
 
         assertError(
-                () -> service.hold(new HoldWalletFundsCommand("bad hold no", 1L, BigDecimal.ONE)),
+                () -> service.hold(new HoldWalletFundsCommand(
+                        "bad hold no",
+                        1L,
+                        WalletHoldBusinessType.AUCTION_DEPOSIT,
+                        BigDecimal.ONE
+                )),
                 "COMMON_INVALID_ARGUMENT"
         );
         assertThat(accessed).hasValue(null);

@@ -5,6 +5,7 @@ import io.github.carpl2.tidebid.account.application.HoldWalletFundsCommand;
 import io.github.carpl2.tidebid.account.application.WalletHoldService;
 import io.github.carpl2.tidebid.account.application.port.AccountRegistrationStore;
 import io.github.carpl2.tidebid.account.domain.WalletHold;
+import io.github.carpl2.tidebid.account.domain.WalletHoldBusinessType;
 import io.github.carpl2.tidebid.account.domain.WalletHoldStatus;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.UserAccountEntity;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.entity.UserRoleEntity;
@@ -275,7 +276,12 @@ class WalletHoldIntegrationTest {
     }
 
     private static HoldWalletFundsCommand command(String holdNo, long userId, String amount) {
-        return new HoldWalletFundsCommand(holdNo, userId, new BigDecimal(amount));
+        return new HoldWalletFundsCommand(
+                holdNo,
+                userId,
+                WalletHoldBusinessType.AUCTION_DEPOSIT,
+                new BigDecimal(amount)
+        );
     }
 
     private void assertWallet(long userId, String available, String frozen, long version) {

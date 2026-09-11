@@ -35,6 +35,7 @@ public class AccountSecurityConfiguration {
     SecurityFilterChain accountSecurityFilterChain(
             HttpSecurity http,
             JwtAccessTokenVerifier tokenVerifier,
+            InternalServiceTokenProperties internalServiceTokenProperties,
             ObjectMapper objectMapper
     ) throws Exception {
         AuthenticationEntryPoint authenticationEntryPoint = (request, response, exception) ->
@@ -53,12 +54,17 @@ public class AccountSecurityConfiguration {
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler))
                 .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers("/internal/**").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/users/**", "/api/wallets/**").authenticated()
                         .anyRequest().permitAll())
                 .addFilterBefore(
                         new AccountBearerTokenFilter(tokenVerifier, authenticationEntryPoint),
                         UsernamePasswordAuthenticationFilter.class
+                )
+                .addFilterBefore(
+                        new InternalServiceTokenFilter(internalServiceTokenProperties, objectMapper),
+                        AccountBearerTokenFilter.class
                 );
         return http.build();
     }

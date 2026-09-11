@@ -51,6 +51,8 @@ mybatis-plus:
       id-type: assign_id
 
 tidebid:
+  internal-service:
+    token: ${TIDEBID_INTERNAL_SERVICE_TOKEN}
   development-admin:
     enabled: ${TIDEBID_DEV_ADMIN_ENABLED:false}
     username: ${TIDEBID_DEV_ADMIN_USERNAME:}
