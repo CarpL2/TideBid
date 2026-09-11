@@ -6,7 +6,19 @@ public enum AccountErrorCode implements ErrorCode {
 
     USERNAME_ALREADY_EXISTS("ACCOUNT_USERNAME_ALREADY_EXISTS", "Username already exists", 409),
     INVALID_CREDENTIALS("ACCOUNT_INVALID_CREDENTIALS", "Invalid username or password", 401),
-    ACCOUNT_DISABLED("ACCOUNT_DISABLED", "Account is disabled", 403);
+    ACCOUNT_DISABLED("ACCOUNT_DISABLED", "Account is disabled", 403),
+    ACCOUNT_NOT_FOUND("ACCOUNT_NOT_FOUND", "Account does not exist", 404),
+    WALLET_NOT_FOUND("ACCOUNT_WALLET_NOT_FOUND", "Wallet does not exist", 404),
+    WALLET_INSUFFICIENT_BALANCE(
+            "ACCOUNT_WALLET_INSUFFICIENT_BALANCE",
+            "Available wallet balance is insufficient",
+            409
+    ),
+    WALLET_HOLD_IDEMPOTENCY_CONFLICT(
+            "ACCOUNT_WALLET_HOLD_IDEMPOTENCY_CONFLICT",
+            "Wallet hold number was already used with a different payload",
+            409
+    );
 
     private final String code;
     private final String defaultMessage;
