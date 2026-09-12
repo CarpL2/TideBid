@@ -1,11 +1,13 @@
 package io.github.carpl2.tidebid.auction;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationService;
+import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
+import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
-import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
-import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
+import io.github.carpl2.tidebid.auction.application.port.ObjectStoragePort;
 import io.github.carpl2.tidebid.auction.domain.AuctionImageStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionItem;
 import io.github.carpl2.tidebid.auction.domain.AuctionItemCondition;
@@ -64,9 +66,10 @@ class AuctionPersistenceIntegrationTest {
 
     @Test
     void uploadIntentServicePersistsAPendingImageInMySql() {
+        FakeObjectStorageAdapter storage = new FakeObjectStorageAdapter();
         AuctionUploadIntentService service = new AuctionUploadIntentService(
                 itemRepository,
-                new FakeObjectStorageAdapter(),
+                storage,
                 IdWorker::getId,
                 new AuctionObjectKeyFactory(),
                 imageProperties,
@@ -87,6 +90,17 @@ class AuctionPersistenceIntegrationTest {
             assertThat(stored.itemId()).isNull();
             assertThat(stored.sortOrder()).isNull();
             assertThat(stored.uploadExpiresAt()).isEqualTo(intent.upload().expiresAt());
+
+            storage.store(new ObjectStoragePort.StoredObjectMetadata(
+                    stored.objectKey(),
+                    stored.contentType(),
+                    stored.contentLength(),
+                    stored.contentSha256()
+            ));
+            AuctionImageVerificationService.VerifiedUpload verified =
+                    new AuctionImageVerificationService(itemRepository, storage, clock)
+                            .verifyPendingUpload(stored.ownerId(), stored.objectKey());
+            assertThat(verified.imageId()).isEqualTo(stored.id());
         } finally {
             imageMapper.deleteById(intent.imageId());
         }
