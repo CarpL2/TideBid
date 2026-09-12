@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import io.github.carpl2.tidebid.auction.application.AuctionImagePreviewService;
 import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationService;
 import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
+import io.github.carpl2.tidebid.auction.application.AuctionPendingImageCleanupService;
 import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
@@ -29,6 +30,7 @@ import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.Auctio
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionSessionMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.BidRecordMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageCleanupProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
 import io.github.carpl2.tidebid.auction.support.FakeObjectStorageAdapter;
 import org.junit.jupiter.api.Test;
@@ -40,6 +42,7 @@ import org.springframework.test.context.ActiveProfiles;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -269,6 +272,79 @@ class AuctionPersistenceIntegrationTest {
         }
     }
 
+    @Test
+    void cleanupExpiresOnlyOldPendingGeneratedObjects() {
+        long expiredImageId = IdWorker.getId();
+        long freshImageId = IdWorker.getId();
+        long boundImageId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Instant oldCreatedAt = now.minus(Duration.ofHours(25));
+        Instant freshCreatedAt = now.minus(Duration.ofMinutes(1));
+        AuctionItem item = draftItem(itemId, sellerId, oldCreatedAt);
+        AuctionItemImage expiredPending = cleanupImage(
+                expiredImageId,
+                null,
+                sellerId,
+                "123e4567-e89b-12d3-a456-426614174001.webp",
+                null,
+                AuctionImageStatus.PENDING,
+                oldCreatedAt
+        );
+        AuctionItemImage freshPending = cleanupImage(
+                freshImageId,
+                null,
+                sellerId,
+                "123e4567-e89b-12d3-a456-426614174002.webp",
+                null,
+                AuctionImageStatus.PENDING,
+                freshCreatedAt
+        );
+        AuctionItemImage bound = cleanupImage(
+                boundImageId,
+                itemId,
+                sellerId,
+                "123e4567-e89b-12d3-a456-426614174003.webp",
+                0,
+                AuctionImageStatus.BOUND,
+                oldCreatedAt
+        );
+        FakeObjectStorageAdapter storage = new FakeObjectStorageAdapter();
+        AuctionPendingImageCleanupService cleanupService = new AuctionPendingImageCleanupService(
+                itemRepository,
+                storage,
+                storageProperties,
+                new AuctionImageCleanupProperties(Duration.ofMinutes(1), 50),
+                clock
+        );
+
+        try {
+            itemRepository.insertItem(item);
+            itemRepository.insertImage(expiredPending);
+            itemRepository.insertImage(freshPending);
+            itemRepository.insertImage(bound);
+
+            AuctionPendingImageCleanupService.CleanupResult result = cleanupService.cleanupBatch();
+
+            assertThat(result).isEqualTo(
+                    new AuctionPendingImageCleanupService.CleanupResult(1, 1, 1, 0, 0)
+            );
+            assertThat(storage.deleteRequests()).containsExactly(expiredPending.objectKey());
+            assertThat(itemRepository.findImageByObjectKey(expiredPending.objectKey()).orElseThrow().storageStatus())
+                    .isEqualTo(AuctionImageStatus.EXPIRED);
+            assertThat(itemRepository.findImageByObjectKey(freshPending.objectKey()).orElseThrow().storageStatus())
+                    .isEqualTo(AuctionImageStatus.PENDING);
+            assertThat(itemRepository.findImageByObjectKey(bound.objectKey()).orElseThrow().storageStatus())
+                    .isEqualTo(AuctionImageStatus.BOUND);
+        } finally {
+            imageMapper.deleteById(boundImageId);
+            imageMapper.deleteById(freshImageId);
+            imageMapper.deleteById(expiredImageId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
     private static AuctionItem draftItem(long itemId, long sellerId, Instant now) {
         return new AuctionItem(
                 itemId,
@@ -307,6 +383,32 @@ class AuctionPersistenceIntegrationTest {
                 now.plusSeconds(60),
                 now.minusSeconds(60),
                 now.minusSeconds(60)
+        );
+    }
+
+    private static AuctionItemImage cleanupImage(
+            long imageId,
+            Long itemId,
+            long ownerId,
+            String filename,
+            Integer sortOrder,
+            AuctionImageStatus status,
+            Instant createdAt
+    ) {
+        return new AuctionItemImage(
+                imageId,
+                itemId,
+                ownerId,
+                "dev/users/" + ownerId + "/202609/" + filename,
+                filename,
+                "image/webp",
+                4096,
+                null,
+                sortOrder,
+                status,
+                createdAt.plus(Duration.ofMinutes(10)),
+                createdAt,
+                createdAt
         );
     }
 }

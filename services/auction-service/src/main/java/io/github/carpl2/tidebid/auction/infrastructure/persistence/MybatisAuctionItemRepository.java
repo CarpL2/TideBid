@@ -16,6 +16,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -93,6 +94,36 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
     }
 
     @Override
+    public List<AuctionItemImage> findPendingImageCleanupCandidates(
+            Instant uploadExpiredAt,
+            Instant createdBefore,
+            int limit
+    ) {
+        requireInstant(uploadExpiredAt, "uploadExpiredAt");
+        requireInstant(createdBefore, "createdBefore");
+        if (limit < 1 || limit > 1000) {
+            throw new IllegalArgumentException("limit must be between 1 and 1000");
+        }
+        return imageMapper.selectPendingCleanupCandidates(uploadExpiredAt, createdBefore, limit).stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
+    }
+
+    @Override
+    public boolean expirePendingImage(
+            long imageId,
+            Instant uploadExpiredAt,
+            Instant createdBefore,
+            Instant expiredAt
+    ) {
+        requirePositive(imageId, "imageId");
+        requireInstant(uploadExpiredAt, "uploadExpiredAt");
+        requireInstant(createdBefore, "createdBefore");
+        requireInstant(expiredAt, "expiredAt");
+        return imageMapper.expirePending(imageId, uploadExpiredAt, createdBefore, expiredAt) == 1;
+    }
+
+    @Override
     public AuctionReview insertReview(AuctionReview review) {
         AuctionReviewEntity entity = AuctionPersistenceMapping.toEntity(review);
         requireSingleRow(reviewMapper.insert(entity), "auction review insert");
@@ -131,6 +162,12 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
             throw new IllegalArgumentException(name + " has an invalid length");
         }
         return normalized;
+    }
+
+    private static void requireInstant(Instant value, String name) {
+        if (value == null) {
+            throw new IllegalArgumentException(name + " must not be null");
+        }
     }
 
     private static IllegalStateException missingAfterInsert(String aggregate) {

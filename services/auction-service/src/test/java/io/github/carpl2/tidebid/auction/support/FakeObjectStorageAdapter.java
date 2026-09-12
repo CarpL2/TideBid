@@ -14,6 +14,7 @@ public final class FakeObjectStorageAdapter implements ObjectStoragePort {
     private final Map<String, StoredObjectMetadata> objects = new ConcurrentHashMap<>();
     private final List<String> headRequests = new CopyOnWriteArrayList<>();
     private final List<ReadSigningRequest> readRequests = new CopyOnWriteArrayList<>();
+    private final List<String> deleteRequests = new CopyOnWriteArrayList<>();
 
     @Override
     public SignedUpload signUpload(UploadSigningRequest request) {
@@ -36,7 +37,9 @@ public final class FakeObjectStorageAdapter implements ObjectStoragePort {
 
     @Override
     public void deleteControlledObject(String objectKey) {
-        objects.remove(ObjectStoragePort.requireControlledObjectKey(objectKey));
+        String controlledObjectKey = ObjectStoragePort.requireControlledObjectKey(objectKey);
+        deleteRequests.add(controlledObjectKey);
+        objects.remove(controlledObjectKey);
     }
 
     @Override
@@ -55,6 +58,10 @@ public final class FakeObjectStorageAdapter implements ObjectStoragePort {
 
     public List<ReadSigningRequest> readRequests() {
         return List.copyOf(readRequests);
+    }
+
+    public List<String> deleteRequests() {
+        return List.copyOf(deleteRequests);
     }
 
     private static URI fakeUrl(String operation, String objectKey) {

@@ -70,6 +70,9 @@ tidebid:
         - image/webp
       max-size: 10MB
       max-images-per-item: 9
+    image-cleanup:
+      scan-interval: 1m
+      batch-size: 50
     timing:
       minimum-lead-time: 1m
       maximum-duration: 7d

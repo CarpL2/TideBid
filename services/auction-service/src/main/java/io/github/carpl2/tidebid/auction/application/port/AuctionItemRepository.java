@@ -5,6 +5,7 @@ import io.github.carpl2.tidebid.auction.domain.AuctionItemImage;
 import io.github.carpl2.tidebid.auction.domain.AuctionReview;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 public interface AuctionItemRepository {
@@ -23,6 +24,19 @@ public interface AuctionItemRepository {
             long itemId,
             int sortOrder,
             Instant boundAt
+    );
+
+    List<AuctionItemImage> findPendingImageCleanupCandidates(
+            Instant uploadExpiredAt,
+            Instant createdBefore,
+            int limit
+    );
+
+    boolean expirePendingImage(
+            long imageId,
+            Instant uploadExpiredAt,
+            Instant createdBefore,
+            Instant expiredAt
     );
 
     AuctionReview insertReview(AuctionReview review);
