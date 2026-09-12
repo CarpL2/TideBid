@@ -11,6 +11,7 @@ import io.github.carpl2.tidebid.auction.application.AuctionDraftFieldsValidator;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftUpdateService;
 import io.github.carpl2.tidebid.auction.application.AuctionSubmissionService;
 import io.github.carpl2.tidebid.auction.application.AuctionReviewService;
+import io.github.carpl2.tidebid.auction.application.AuctionSessionOpeningService;
 import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
 import io.github.carpl2.tidebid.auction.application.port.AuctionDraftTransaction;
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
@@ -44,6 +45,7 @@ import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProper
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageCleanupProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.scheduling.AuctionSessionOpeningJob;
 import io.github.carpl2.tidebid.auction.support.FakeObjectStorageAdapter;
 import io.github.carpl2.tidebid.core.BusinessException;
 import org.junit.jupiter.api.Test;
@@ -70,7 +72,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
-        properties = "tidebid.auction.account-client.internal-token=test-internal-token-with-at-least-32-characters"
+        properties = {
+                "tidebid.auction.account-client.internal-token=test-internal-token-with-at-least-32-characters",
+                "tidebid.auction.timing.opening-scan-interval=1m"
+        }
 )
 @ActiveProfiles("local-db")
 @EnabledIfEnvironmentVariable(named = "TIDEBID_AUCTION_DB_PASSWORD", matches = ".+")
@@ -94,6 +99,8 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionReviewTransaction reviewTransaction;
     @Autowired private AuctionAssetQueryService assetQueryService;
     @Autowired private AuctionReviewService reviewService;
+    @Autowired private AuctionSessionOpeningService sessionOpeningService;
+    @Autowired private AuctionSessionOpeningJob sessionOpeningJob;
     @Autowired private IdGenerator idGenerator;
     @Autowired private Clock clock;
 
@@ -872,6 +879,57 @@ class AuctionPersistenceIntegrationTest {
         } finally {
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void openingScanReadsDueSessionsInStableBatchesAndLeavesFutureSessionScheduled() {
+        long sellerId = IdWorker.getId();
+        long olderItemId = IdWorker.getId();
+        long newerItemId = IdWorker.getId();
+        long futureItemId = IdWorker.getId();
+        long olderAuctionId = IdWorker.getId();
+        long newerAuctionId = IdWorker.getId();
+        long futureAuctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession older = scheduledSession(
+                olderAuctionId, olderItemId, sellerId, now.minusSeconds(120), 1L, now
+        );
+        AuctionSession newer = scheduledSession(
+                newerAuctionId, newerItemId, sellerId, now.minusSeconds(60), 4L, now
+        );
+        AuctionSession future = scheduledSession(
+                futureAuctionId, futureItemId, sellerId, now.plusSeconds(60), 2L, now
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(olderItemId, sellerId, now));
+            itemRepository.insertItem(approvedItem(newerItemId, sellerId, now));
+            itemRepository.insertItem(approvedItem(futureItemId, sellerId, now));
+            sessionRepository.insertSession(older);
+            sessionRepository.insertSession(newer);
+            sessionRepository.insertSession(future);
+
+            assertThat(sessionRepository.findDueScheduledSessions(now, 1))
+                    .extracting(AuctionSession::id)
+                    .containsExactly(olderAuctionId);
+            assertThat(sessionOpeningJob).isNotNull();
+
+            assertThat(sessionOpeningService.openDueSessions())
+                    .isEqualTo(new AuctionSessionOpeningService.OpeningResult(2, 2, 0));
+            assertThat(sessionRepository.findSessionById(olderAuctionId).orElseThrow().status())
+                    .isEqualTo(AuctionSessionStatus.OPEN);
+            assertThat(sessionRepository.findSessionById(newerAuctionId).orElseThrow().status())
+                    .isEqualTo(AuctionSessionStatus.OPEN);
+            assertThat(sessionRepository.findSessionById(futureAuctionId).orElseThrow().status())
+                    .isEqualTo(AuctionSessionStatus.SCHEDULED);
+        } finally {
+            sessionMapper.deleteById(olderAuctionId);
+            sessionMapper.deleteById(newerAuctionId);
+            sessionMapper.deleteById(futureAuctionId);
+            itemMapper.deleteById(olderItemId);
+            itemMapper.deleteById(newerItemId);
+            itemMapper.deleteById(futureItemId);
         }
     }
 

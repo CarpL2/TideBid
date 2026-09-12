@@ -76,7 +76,9 @@ tidebid:
     timing:
       minimum-lead-time: 1m
       maximum-duration: 7d
+      opening-scan-enabled: true
       opening-scan-interval: 1s
+      opening-scan-batch-size: 50
     registration-recovery:
       initial-retry-delay: 5s
       maximum-retry-delay: 5m

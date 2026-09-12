@@ -53,7 +53,8 @@ class AuctionDraftUpdateServiceTest {
                 sessionRepository,
                 transaction,
                 new AuctionDraftFieldsValidator(
-                        new AuctionTimingProperties(Duration.ofMinutes(1), Duration.ofDays(7), Duration.ofSeconds(1)),
+                        new AuctionTimingProperties(
+                                Duration.ofMinutes(1), Duration.ofDays(7), true, Duration.ofSeconds(1), 50),
                         clock
                 ),
                 clock

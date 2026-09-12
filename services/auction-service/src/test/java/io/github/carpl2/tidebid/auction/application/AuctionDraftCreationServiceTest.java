@@ -164,7 +164,8 @@ class AuctionDraftCreationServiceTest {
                         9
                 ),
                 new AuctionDraftFieldsValidator(
-                        new AuctionTimingProperties(Duration.ofMinutes(1), Duration.ofDays(7), Duration.ofSeconds(1)),
+                        new AuctionTimingProperties(
+                                Duration.ofMinutes(1), Duration.ofDays(7), true, Duration.ofSeconds(1), 50),
                         Clock.fixed(NOW, ZoneOffset.UTC)
                 ),
                 Clock.fixed(NOW, ZoneOffset.UTC)

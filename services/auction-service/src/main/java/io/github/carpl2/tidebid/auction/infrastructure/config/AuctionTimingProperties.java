@@ -9,7 +9,9 @@ import java.util.Objects;
 public record AuctionTimingProperties(
         Duration minimumLeadTime,
         Duration maximumDuration,
-        Duration openingScanInterval
+        boolean openingScanEnabled,
+        Duration openingScanInterval,
+        int openingScanBatchSize
 ) {
 
     public AuctionTimingProperties {
@@ -19,6 +21,9 @@ public record AuctionTimingProperties(
                 maximumDuration, Duration.ofMinutes(1), Duration.ofDays(30), "maximumDuration");
         openingScanInterval = requireBetween(
                 openingScanInterval, Duration.ofMillis(100), Duration.ofMinutes(1), "openingScanInterval");
+        if (openingScanBatchSize < 1 || openingScanBatchSize > 1000) {
+            throw new IllegalArgumentException("openingScanBatchSize must be between 1 and 1000");
+        }
         if (maximumDuration.compareTo(minimumLeadTime) <= 0) {
             throw new IllegalArgumentException("maximumDuration must be greater than minimumLeadTime");
         }

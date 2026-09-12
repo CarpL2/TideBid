@@ -108,7 +108,9 @@ class AuctionApplicationTest {
 
         assertThat(timingProperties.minimumLeadTime()).isEqualTo(Duration.ofMinutes(1));
         assertThat(timingProperties.maximumDuration()).isEqualTo(Duration.ofDays(7));
+        assertThat(timingProperties.openingScanEnabled()).isTrue();
         assertThat(timingProperties.openingScanInterval()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(timingProperties.openingScanBatchSize()).isEqualTo(50);
 
         assertThat(recoveryProperties.initialRetryDelay()).isEqualTo(Duration.ofSeconds(5));
         assertThat(recoveryProperties.maximumRetryDelay()).isEqualTo(Duration.ofMinutes(5));

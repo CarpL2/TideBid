@@ -56,9 +56,13 @@ class AuctionConfigurationPropertiesTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("100MB");
         assertThatThrownBy(() -> new AuctionTimingProperties(
-                Duration.ofMinutes(10), Duration.ofMinutes(5), Duration.ofSeconds(1)))
+                Duration.ofMinutes(10), Duration.ofMinutes(5), true, Duration.ofSeconds(1), 50))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("greater than");
+        assertThatThrownBy(() -> new AuctionTimingProperties(
+                Duration.ofMinutes(1), Duration.ofDays(7), true, Duration.ofSeconds(1), 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("openingScanBatchSize");
         assertThatThrownBy(() -> new AuctionRegistrationRecoveryProperties(
                 Duration.ofMinutes(10), Duration.ofMinutes(5), Duration.ofSeconds(30), 50))
                 .isInstanceOf(IllegalArgumentException.class)

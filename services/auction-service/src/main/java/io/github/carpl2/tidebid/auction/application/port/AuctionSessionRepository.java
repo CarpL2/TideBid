@@ -17,6 +17,8 @@ public interface AuctionSessionRepository {
 
     List<AuctionSession> findSessionsByItemIds(List<Long> itemIds);
 
+    List<AuctionSession> findDueScheduledSessions(Instant dueAt, int limit);
+
     boolean updateDraftSession(AuctionSession session);
 
     boolean scheduleDraftSession(

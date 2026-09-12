@@ -3,6 +3,7 @@ package io.github.carpl2.tidebid.auction.infrastructure.persistence;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
+import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionSessionEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.BidRecordEntity;
@@ -59,6 +60,25 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
         return sessionMapper.selectList(new LambdaQueryWrapper<AuctionSessionEntity>()
                         .in(AuctionSessionEntity::getItemId, normalizedIds)
                         .orderByAsc(AuctionSessionEntity::getItemId))
+                .stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<AuctionSession> findDueScheduledSessions(Instant dueAt, int limit) {
+        if (dueAt == null) {
+            throw new IllegalArgumentException("dueAt must not be null");
+        }
+        if (limit < 1 || limit > 1000) {
+            throw new IllegalArgumentException("limit must be between 1 and 1000");
+        }
+        return sessionMapper.selectList(new LambdaQueryWrapper<AuctionSessionEntity>()
+                        .eq(AuctionSessionEntity::getStatus, AuctionSessionStatus.SCHEDULED.name())
+                        .le(AuctionSessionEntity::getStartAt, dueAt)
+                        .orderByAsc(AuctionSessionEntity::getStartAt)
+                        .orderByAsc(AuctionSessionEntity::getId)
+                        .last("LIMIT " + limit))
                 .stream()
                 .map(AuctionPersistenceMapping::toDomain)
                 .toList();
