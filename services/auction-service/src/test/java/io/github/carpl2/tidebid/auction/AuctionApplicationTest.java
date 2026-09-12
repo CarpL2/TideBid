@@ -5,6 +5,7 @@ import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProper
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRegistrationRecoveryProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.storage.UnconfiguredObjectStorageAdapter;
 import io.github.carpl2.tidebid.web.GlobalExceptionHandler;
 import io.github.carpl2.tidebid.web.TraceIdFilter;
 import org.junit.jupiter.api.Test;
@@ -97,6 +98,7 @@ class AuctionApplicationTest {
         assertThat(storageProperties.uploadUrlTtl()).isEqualTo(Duration.ofMinutes(10));
         assertThat(storageProperties.readUrlTtl()).isEqualTo(Duration.ofMinutes(5));
         assertThat(storageProperties.pendingRetention()).isEqualTo(Duration.ofHours(24));
+        assertThat(context.getBeansOfType(UnconfiguredObjectStorageAdapter.class)).hasSize(1);
 
         assertThat(imageProperties.allowedContentTypes())
                 .containsExactlyInAnyOrder("image/jpeg", "image/png", "image/webp");
