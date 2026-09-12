@@ -51,6 +51,16 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
     }
 
     @Override
+    public SellerItemPage findItemsBySeller(long sellerId, int offset, int limit) {
+        requirePositive(sellerId, "sellerId");
+        requirePageWindow(offset, limit);
+        List<AuctionItem> items = itemMapper.selectSellerPage(sellerId, offset, limit).stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
+        return new SellerItemPage(items, itemMapper.countBySeller(sellerId));
+    }
+
+    @Override
     public boolean updateEditableItem(AuctionItem item) {
         if (item == null) {
             throw new IllegalArgumentException("item must not be null");
@@ -73,6 +83,23 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
         return Optional.ofNullable(imageMapper.selectOne(new LambdaQueryWrapper<AuctionItemImageEntity>()
                         .eq(AuctionItemImageEntity::getObjectKey, normalized)))
                 .map(AuctionPersistenceMapping::toDomain);
+    }
+
+    @Override
+    public List<AuctionItemImage> findBoundImagesByItemIds(List<Long> itemIds) {
+        List<Long> normalizedIds = requireIds(itemIds, "itemIds");
+        if (normalizedIds.isEmpty()) {
+            return List.of();
+        }
+        return imageMapper.selectList(new LambdaQueryWrapper<AuctionItemImageEntity>()
+                        .in(AuctionItemImageEntity::getItemId, normalizedIds)
+                        .eq(AuctionItemImageEntity::getStorageStatus, "BOUND")
+                        .orderByAsc(AuctionItemImageEntity::getItemId)
+                        .orderByAsc(AuctionItemImageEntity::getSortOrder)
+                        .orderByAsc(AuctionItemImageEntity::getId))
+                .stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
     }
 
     @Override
@@ -152,6 +179,19 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
                 .map(AuctionPersistenceMapping::toDomain);
     }
 
+    @Override
+    public Optional<AuctionReview> findLatestReview(long itemId) {
+        requirePositive(itemId, "itemId");
+        return reviewMapper.selectList(new LambdaQueryWrapper<AuctionReviewEntity>()
+                        .eq(AuctionReviewEntity::getItemId, itemId)
+                        .orderByDesc(AuctionReviewEntity::getSubmissionVersion)
+                        .orderByDesc(AuctionReviewEntity::getId)
+                        .last("LIMIT 1"))
+                .stream()
+                .findFirst()
+                .map(AuctionPersistenceMapping::toDomain);
+    }
+
     static void requireSingleRow(int affectedRows, String action) {
         if (affectedRows != 1) {
             throw new IllegalStateException("Expected one affected row for " + action);
@@ -170,6 +210,23 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
             throw new IllegalArgumentException(name + " has an invalid length");
         }
         return normalized;
+    }
+
+    static List<Long> requireIds(List<Long> values, String name) {
+        if (values == null) {
+            throw new IllegalArgumentException(name + " must not be null");
+        }
+        List<Long> normalized = values.stream().distinct().toList();
+        if (normalized.stream().anyMatch(value -> value == null || value <= 0)) {
+            throw new IllegalArgumentException(name + " must contain only positive IDs");
+        }
+        return normalized;
+    }
+
+    private static void requirePageWindow(int offset, int limit) {
+        if (offset < 0 || limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("invalid page window");
+        }
     }
 
     private static void requireInstant(Instant value, String name) {

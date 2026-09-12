@@ -2,6 +2,7 @@ package io.github.carpl2.tidebid.auction;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import io.github.carpl2.tidebid.auction.application.AuctionImagePreviewService;
+import io.github.carpl2.tidebid.auction.application.AuctionAssetQueryService;
 import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationService;
 import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
 import io.github.carpl2.tidebid.auction.application.AuctionPendingImageCleanupService;
@@ -76,6 +77,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionTimingProperties timingProperties;
     @Autowired private AuctionDraftTransaction draftTransaction;
     @Autowired private AuctionDraftUpdateService draftUpdateService;
+    @Autowired private AuctionAssetQueryService assetQueryService;
     @Autowired private IdGenerator idGenerator;
     @Autowired private Clock clock;
 
@@ -544,6 +546,61 @@ class AuctionPersistenceIntegrationTest {
         }
     }
 
+    @Test
+    void sellerAssetQueryUsesStablePaginationAndKeepsSellerDataIsolated() {
+        long sellerId = IdWorker.getId();
+        long anotherSellerId = IdWorker.getId();
+        long firstItemId = IdWorker.getId();
+        long secondItemId = IdWorker.getId();
+        long anotherSellerItemId = IdWorker.getId();
+        long firstAuctionId = IdWorker.getId();
+        long secondAuctionId = IdWorker.getId();
+        long anotherSellerAuctionId = IdWorker.getId();
+        long firstImageId = IdWorker.getId();
+        long secondImageId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        long lowerItemId = Math.min(firstItemId, secondItemId);
+        long higherItemId = Math.max(firstItemId, secondItemId);
+
+        try {
+            itemRepository.insertItem(draftItem(lowerItemId, sellerId, now));
+            itemRepository.insertItem(draftItem(higherItemId, sellerId, now));
+            itemRepository.insertItem(draftItem(anotherSellerItemId, anotherSellerId, now));
+            sessionRepository.insertSession(draftSession(firstAuctionId, lowerItemId, sellerId, now, 0L));
+            sessionRepository.insertSession(draftSession(secondAuctionId, higherItemId, sellerId, now, 0L));
+            sessionRepository.insertSession(draftSession(
+                    anotherSellerAuctionId, anotherSellerItemId, anotherSellerId, now, 0L
+            ));
+            itemRepository.insertImage(boundImage(firstImageId, lowerItemId, sellerId, 0, now));
+            itemRepository.insertImage(boundImage(secondImageId, higherItemId, sellerId, 0, now));
+
+            AuctionAssetQueryService.PageResult<AuctionAssetQueryService.AssetSummary> firstPage =
+                    assetQueryService.findMine(sellerId, 1, 1);
+            AuctionAssetQueryService.PageResult<AuctionAssetQueryService.AssetSummary> secondPage =
+                    assetQueryService.findMine(sellerId, 2, 1);
+
+            assertThat(firstPage.total()).isEqualTo(2);
+            assertThat(firstPage.totalPages()).isEqualTo(2);
+            assertThat(firstPage.items()).extracting(AuctionAssetQueryService.AssetSummary::itemId)
+                    .containsExactly(higherItemId);
+            assertThat(secondPage.items()).extracting(AuctionAssetQueryService.AssetSummary::itemId)
+                    .containsExactly(lowerItemId);
+            assertThat(firstPage.items().getFirst().coverImage()).isNotNull();
+            assertThat(firstPage.items().getFirst().coverImage().previewUrl()).isNull();
+            assertThat(assetQueryService.findDetail(sellerId, false, lowerItemId).sellerId())
+                    .isEqualTo(sellerId);
+        } finally {
+            imageMapper.deleteById(secondImageId);
+            imageMapper.deleteById(firstImageId);
+            sessionMapper.deleteById(anotherSellerAuctionId);
+            sessionMapper.deleteById(secondAuctionId);
+            sessionMapper.deleteById(firstAuctionId);
+            itemMapper.deleteById(anotherSellerItemId);
+            itemMapper.deleteById(higherItemId);
+            itemMapper.deleteById(lowerItemId);
+        }
+    }
+
     private static AuctionItem draftItem(long itemId, long sellerId, Instant now) {
         return new AuctionItem(
                 itemId,
@@ -595,6 +652,30 @@ class AuctionPersistenceIntegrationTest {
                 null,
                 null,
                 AuctionImageStatus.PENDING,
+                now.plusSeconds(60),
+                now.minusSeconds(60),
+                now.minusSeconds(60)
+        );
+    }
+
+    private static AuctionItemImage boundImage(
+            long imageId,
+            long itemId,
+            long ownerId,
+            int sortOrder,
+            Instant now
+    ) {
+        return new AuctionItemImage(
+                imageId,
+                itemId,
+                ownerId,
+                "dev/users/" + ownerId + "/202609/query-" + imageId + ".webp",
+                "query.webp",
+                "image/webp",
+                4096,
+                null,
+                sortOrder,
+                AuctionImageStatus.BOUND,
                 now.plusSeconds(60),
                 now.minusSeconds(60),
                 now.minusSeconds(60)

@@ -14,11 +14,15 @@ public interface AuctionItemRepository {
 
     Optional<AuctionItem> findItemById(long itemId);
 
+    SellerItemPage findItemsBySeller(long sellerId, int offset, int limit);
+
     boolean updateEditableItem(AuctionItem item);
 
     AuctionItemImage insertImage(AuctionItemImage image);
 
     Optional<AuctionItemImage> findImageByObjectKey(String objectKey);
+
+    List<AuctionItemImage> findBoundImagesByItemIds(List<Long> itemIds);
 
     ImageBindingResult bindPendingImage(
             long imageId,
@@ -44,6 +48,17 @@ public interface AuctionItemRepository {
     AuctionReview insertReview(AuctionReview review);
 
     Optional<AuctionReview> findReview(long itemId, int submissionVersion);
+
+    Optional<AuctionReview> findLatestReview(long itemId);
+
+    record SellerItemPage(List<AuctionItem> items, long total) {
+        public SellerItemPage {
+            items = List.copyOf(items);
+            if (total < items.size()) {
+                throw new IllegalArgumentException("total must not be below the returned item count");
+            }
+        }
+    }
 
     enum ImageBindingResult {
         BOUND,

@@ -11,6 +11,7 @@ import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.BidRec
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -46,6 +47,20 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
         return Optional.ofNullable(sessionMapper.selectOne(new LambdaQueryWrapper<AuctionSessionEntity>()
                         .eq(AuctionSessionEntity::getItemId, itemId)))
                 .map(AuctionPersistenceMapping::toDomain);
+    }
+
+    @Override
+    public List<AuctionSession> findSessionsByItemIds(List<Long> itemIds) {
+        List<Long> normalizedIds = MybatisAuctionItemRepository.requireIds(itemIds, "itemIds");
+        if (normalizedIds.isEmpty()) {
+            return List.of();
+        }
+        return sessionMapper.selectList(new LambdaQueryWrapper<AuctionSessionEntity>()
+                        .in(AuctionSessionEntity::getItemId, normalizedIds)
+                        .orderByAsc(AuctionSessionEntity::getItemId))
+                .stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
     }
 
     @Override
