@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.auction;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import io.github.carpl2.tidebid.auction.application.AuctionImagePreviewService;
 import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationService;
 import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
 import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
@@ -101,6 +102,17 @@ class AuctionPersistenceIntegrationTest {
                     new AuctionImageVerificationService(itemRepository, storage, clock)
                             .verifyPendingUpload(stored.ownerId(), stored.objectKey());
             assertThat(verified.imageId()).isEqualTo(stored.id());
+
+            AuctionImagePreviewService.ImagePreview preview =
+                    new AuctionImagePreviewService(itemRepository, storage, storageProperties, clock)
+                            .createOwnerPreview(stored.ownerId(), stored.objectKey());
+            assertThat(preview.objectKey()).isEqualTo(stored.objectKey());
+            assertThat(preview.expiresAt()).isEqualTo(
+                    clock.instant().truncatedTo(ChronoUnit.MICROS).plus(storageProperties.readUrlTtl())
+            );
+            assertThat(storage.readRequests()).containsExactly(
+                    new ObjectStoragePort.ReadSigningRequest(stored.objectKey(), preview.expiresAt())
+            );
         } finally {
             imageMapper.deleteById(intent.imageId());
         }
