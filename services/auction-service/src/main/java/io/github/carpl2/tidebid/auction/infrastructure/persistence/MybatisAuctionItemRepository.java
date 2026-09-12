@@ -12,8 +12,10 @@ import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.Auctio
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionItemMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionReviewMapper;
 import org.springframework.context.annotation.Profile;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.Optional;
 
 @Repository
@@ -62,6 +64,32 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
         return Optional.ofNullable(imageMapper.selectOne(new LambdaQueryWrapper<AuctionItemImageEntity>()
                         .eq(AuctionItemImageEntity::getObjectKey, normalized)))
                 .map(AuctionPersistenceMapping::toDomain);
+    }
+
+    @Override
+    public ImageBindingResult bindPendingImage(
+            long imageId,
+            long ownerId,
+            long itemId,
+            int sortOrder,
+            Instant boundAt
+    ) {
+        requirePositive(imageId, "imageId");
+        requirePositive(ownerId, "ownerId");
+        requirePositive(itemId, "itemId");
+        if (sortOrder < 0 || sortOrder > 8) {
+            throw new IllegalArgumentException("sortOrder must be between 0 and 8");
+        }
+        if (boundAt == null) {
+            throw new IllegalArgumentException("boundAt must not be null");
+        }
+        try {
+            return imageMapper.bindPending(imageId, ownerId, itemId, sortOrder, boundAt) == 1
+                    ? ImageBindingResult.BOUND
+                    : ImageBindingResult.NOT_PENDING;
+        } catch (DuplicateKeyException exception) {
+            return ImageBindingResult.POSITION_OCCUPIED;
+        }
     }
 
     @Override

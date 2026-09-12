@@ -215,4 +215,86 @@ class AuctionPersistenceIntegrationTest {
             }
         }
     }
+
+    @Test
+    void pendingImageCanBeBoundOnlyOnceAndItemPositionStaysUnique() {
+        long firstItemId = IdWorker.getId();
+        long secondItemId = IdWorker.getId();
+        long firstImageId = IdWorker.getId();
+        long secondImageId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem firstItem = draftItem(firstItemId, sellerId, now);
+        AuctionItem secondItem = draftItem(secondItemId, sellerId, now);
+        AuctionItemImage firstImage = pendingImage(firstImageId, sellerId, "first.webp", now);
+        AuctionItemImage secondImage = pendingImage(secondImageId, sellerId, "second.webp", now);
+
+        try {
+            itemRepository.insertItem(firstItem);
+            itemRepository.insertItem(secondItem);
+            itemRepository.insertImage(firstImage);
+            itemRepository.insertImage(secondImage);
+
+            assertThat(itemRepository.bindPendingImage(
+                    firstImageId, sellerId, firstItemId, 0, now
+            )).isEqualTo(AuctionItemRepository.ImageBindingResult.BOUND);
+            assertThat(itemRepository.bindPendingImage(
+                    firstImageId, sellerId, secondItemId, 0, now
+            )).isEqualTo(AuctionItemRepository.ImageBindingResult.NOT_PENDING);
+            assertThat(itemRepository.bindPendingImage(
+                    secondImageId, sellerId, firstItemId, 0, now
+            )).isEqualTo(AuctionItemRepository.ImageBindingResult.POSITION_OCCUPIED);
+
+            AuctionItemImage stored = itemRepository.findImageByObjectKey(firstImage.objectKey()).orElseThrow();
+            assertThat(stored.storageStatus()).isEqualTo(AuctionImageStatus.BOUND);
+            assertThat(stored.itemId()).isEqualTo(firstItemId);
+            assertThat(stored.sortOrder()).isZero();
+        } finally {
+            imageMapper.deleteById(secondImageId);
+            imageMapper.deleteById(firstImageId);
+            itemMapper.deleteById(secondItemId);
+            itemMapper.deleteById(firstItemId);
+        }
+    }
+
+    private static AuctionItem draftItem(long itemId, long sellerId, Instant now) {
+        return new AuctionItem(
+                itemId,
+                sellerId,
+                "Mechanical keyboard",
+                "A keyboard used to verify atomic image binding",
+                "ELECTRONICS",
+                AuctionItemCondition.GOOD,
+                AuctionItemReviewStatus.DRAFT,
+                0,
+                0,
+                null,
+                null,
+                now.minusSeconds(60),
+                now.minusSeconds(60)
+        );
+    }
+
+    private static AuctionItemImage pendingImage(
+            long imageId,
+            long ownerId,
+            String filename,
+            Instant now
+    ) {
+        return new AuctionItemImage(
+                imageId,
+                null,
+                ownerId,
+                "dev/users/" + ownerId + "/202609/" + filename,
+                filename,
+                "image/webp",
+                4096,
+                null,
+                null,
+                AuctionImageStatus.PENDING,
+                now.plusSeconds(60),
+                now.minusSeconds(60),
+                now.minusSeconds(60)
+        );
+    }
 }
