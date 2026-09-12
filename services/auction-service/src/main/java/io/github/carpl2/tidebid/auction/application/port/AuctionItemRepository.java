@@ -16,6 +16,8 @@ public interface AuctionItemRepository {
 
     SellerItemPage findItemsBySeller(long sellerId, int offset, int limit);
 
+    PendingReviewPage findPendingReviewItems(int offset, int limit);
+
     boolean updateEditableItem(AuctionItem item);
 
     boolean submitForReview(long itemId, long sellerId, long expectedVersion, Instant submittedAt);
@@ -55,6 +57,15 @@ public interface AuctionItemRepository {
 
     record SellerItemPage(List<AuctionItem> items, long total) {
         public SellerItemPage {
+            items = List.copyOf(items);
+            if (total < items.size()) {
+                throw new IllegalArgumentException("total must not be below the returned item count");
+            }
+        }
+    }
+
+    record PendingReviewPage(List<AuctionItem> items, long total) {
+        public PendingReviewPage {
             items = List.copyOf(items);
             if (total < items.size()) {
                 throw new IllegalArgumentException("total must not be below the returned item count");

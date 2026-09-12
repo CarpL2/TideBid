@@ -196,6 +196,62 @@ class AuctionAssetQueryServiceTest {
                 () -> service.findMine(SELLER_ID, Integer.MAX_VALUE, 100));
     }
 
+    @Test
+    void returnsPendingReviewPageUsingBatchReadsAndOnlySignsCoverImages() {
+        AuctionItem first = item(101L, SELLER_ID, AuctionItemReviewStatus.PENDING_REVIEW);
+        AuctionItem second = item(102L, SELLER_ID, AuctionItemReviewStatus.PENDING_REVIEW);
+        when(itemRepository.findPendingReviewItems(0, 2))
+                .thenReturn(new AuctionItemRepository.PendingReviewPage(List.of(first, second), 3L));
+        when(sessionRepository.findSessionsByItemIds(List.of(101L, 102L)))
+                .thenReturn(List.of(session(201L, 101L), session(202L, 102L)));
+        when(itemRepository.findBoundImagesByItemIds(List.of(101L, 102L)))
+                .thenReturn(List.of(
+                        image(301L, 101L, 0), image(302L, 101L, 1), image(303L, 102L, 0)
+                ));
+        when(objectStorage.signRead(any())).thenAnswer(invocation -> {
+            ObjectStoragePort.ReadSigningRequest request = invocation.getArgument(0);
+            return new ObjectStoragePort.SignedRead(
+                    URI.create("https://object-storage.invalid/read/" + request.objectKey()), request.expiresAt()
+            );
+        });
+
+        AuctionAssetQueryService.PageResult<AuctionAssetQueryService.AdminReviewSummary> result =
+                service(true).findPendingReviews(true, 1, 2);
+
+        assertThat(result.total()).isEqualTo(3L);
+        assertThat(result.totalPages()).isEqualTo(2L);
+        assertThat(result.items()).extracting(AuctionAssetQueryService.AdminReviewSummary::itemId)
+                .containsExactly(101L, 102L);
+        assertThat(result.items()).extracting(AuctionAssetQueryService.AdminReviewSummary::submissionVersion)
+                .containsOnly(1);
+        assertThat(result.items()).extracting(summary -> summary.coverImage().imageId())
+                .containsExactly(301L, 303L);
+        verify(objectStorage, org.mockito.Mockito.times(2)).signRead(any());
+    }
+
+    @Test
+    void rejectsNonAdministratorBeforeReadingPendingQueue() {
+        assertError(AuctionErrorCode.ASSET_ACCESS_DENIED,
+                () -> service(true).findPendingReviews(false, 1, 20));
+
+        verifyNoInteractions(itemRepository, sessionRepository, objectStorage);
+    }
+
+    @Test
+    void emptyPendingReviewPageAvoidsRelatedReads() {
+        when(itemRepository.findPendingReviewItems(20, 20))
+                .thenReturn(new AuctionItemRepository.PendingReviewPage(List.of(), 1L));
+
+        AuctionAssetQueryService.PageResult<AuctionAssetQueryService.AdminReviewSummary> result =
+                service(true).findPendingReviews(true, 2, 20);
+
+        assertThat(result.items()).isEmpty();
+        assertThat(result.total()).isOne();
+        verify(sessionRepository, never()).findSessionsByItemIds(any());
+        verify(itemRepository, never()).findBoundImagesByItemIds(any());
+        verifyNoInteractions(objectStorage);
+    }
+
     private AuctionAssetQueryService service(boolean storageEnabled) {
         return new AuctionAssetQueryService(
                 itemRepository,

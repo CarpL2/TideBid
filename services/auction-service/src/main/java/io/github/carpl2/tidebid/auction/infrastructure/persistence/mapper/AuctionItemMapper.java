@@ -30,6 +30,23 @@ public interface AuctionItemMapper extends BaseMapper<AuctionItemEntity> {
     @Select("SELECT COUNT(*) FROM auction_item WHERE seller_id = #{sellerId}")
     long countBySeller(@Param("sellerId") long sellerId);
 
+    @Select("""
+            SELECT id, seller_id, title, description, category, item_condition,
+                   review_status, submission_version, version, submitted_at, approved_at,
+                   created_at, updated_at
+            FROM auction_item
+            WHERE review_status = 'PENDING_REVIEW'
+            ORDER BY submitted_at ASC, id ASC
+            LIMIT #{limit} OFFSET #{offset}
+            """)
+    List<AuctionItemEntity> selectPendingReviewPage(
+            @Param("offset") int offset,
+            @Param("limit") int limit
+    );
+
+    @Select("SELECT COUNT(*) FROM auction_item WHERE review_status = 'PENDING_REVIEW'")
+    long countPendingReview();
+
     @Update("""
             UPDATE auction_item
             SET title = #{item.title},

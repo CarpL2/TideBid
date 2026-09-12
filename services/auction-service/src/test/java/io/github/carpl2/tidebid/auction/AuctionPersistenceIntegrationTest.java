@@ -607,6 +607,56 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void administratorPendingReviewQueryUsesSubmissionOrderAndExcludesDrafts() {
+        long sellerId = IdWorker.getId();
+        long firstGeneratedItemId = IdWorker.getId();
+        long secondGeneratedItemId = IdWorker.getId();
+        long draftItemId = IdWorker.getId();
+        long firstAuctionId = IdWorker.getId();
+        long secondAuctionId = IdWorker.getId();
+        long draftAuctionId = IdWorker.getId();
+        long firstImageId = IdWorker.getId();
+        long secondImageId = IdWorker.getId();
+        long lowerItemId = Math.min(firstGeneratedItemId, secondGeneratedItemId);
+        long higherItemId = Math.max(firstGeneratedItemId, secondGeneratedItemId);
+        Instant submittedAt = Instant.parse("2001-01-01T00:00:00Z");
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+
+        try {
+            itemRepository.insertItem(pendingReviewItem(lowerItemId, sellerId, submittedAt));
+            itemRepository.insertItem(pendingReviewItem(higherItemId, sellerId, submittedAt));
+            itemRepository.insertItem(draftItem(draftItemId, sellerId, now));
+            sessionRepository.insertSession(draftSession(firstAuctionId, lowerItemId, sellerId, now, 0L));
+            sessionRepository.insertSession(draftSession(secondAuctionId, higherItemId, sellerId, now, 0L));
+            sessionRepository.insertSession(draftSession(draftAuctionId, draftItemId, sellerId, now, 0L));
+            itemRepository.insertImage(boundImage(firstImageId, lowerItemId, sellerId, 0, now));
+            itemRepository.insertImage(boundImage(secondImageId, higherItemId, sellerId, 0, now));
+
+            AuctionAssetQueryService.PageResult<AuctionAssetQueryService.AdminReviewSummary> page =
+                    assetQueryService.findPendingReviews(true, 1, 2);
+
+            assertThat(page.total()).isGreaterThanOrEqualTo(2L);
+            assertThat(page.items()).extracting(AuctionAssetQueryService.AdminReviewSummary::itemId)
+                    .containsExactly(lowerItemId, higherItemId);
+            assertThat(page.items()).extracting(AuctionAssetQueryService.AdminReviewSummary::reviewStatus)
+                    .containsOnly(AuctionItemReviewStatus.PENDING_REVIEW);
+            assertThat(page.items()).extracting(summary -> summary.coverImage().imageId())
+                    .containsExactly(firstImageId, secondImageId);
+            assertThat(page.items()).extracting(summary -> summary.coverImage().previewUrl())
+                    .containsOnlyNulls();
+        } finally {
+            imageMapper.deleteById(secondImageId);
+            imageMapper.deleteById(firstImageId);
+            sessionMapper.deleteById(draftAuctionId);
+            sessionMapper.deleteById(secondAuctionId);
+            sessionMapper.deleteById(firstAuctionId);
+            itemMapper.deleteById(draftItemId);
+            itemMapper.deleteById(higherItemId);
+            itemMapper.deleteById(lowerItemId);
+        }
+    }
+
+    @Test
     void submissionPersistsPendingReviewAndLocksTheSubmittedDraft() {
         long itemId = IdWorker.getId();
         long auctionId = IdWorker.getId();
@@ -676,6 +726,24 @@ class AuctionPersistenceIntegrationTest {
                 null,
                 now.minusSeconds(60),
                 now.minusSeconds(60)
+        );
+    }
+
+    private static AuctionItem pendingReviewItem(long itemId, long sellerId, Instant submittedAt) {
+        return new AuctionItem(
+                itemId,
+                sellerId,
+                "Submitted mechanical keyboard",
+                "A submitted auction item waiting for an administrator decision",
+                "ELECTRONICS",
+                AuctionItemCondition.GOOD,
+                AuctionItemReviewStatus.PENDING_REVIEW,
+                1,
+                1,
+                submittedAt,
+                null,
+                submittedAt.minusSeconds(60),
+                submittedAt
         );
     }
 

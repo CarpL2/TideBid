@@ -61,6 +61,15 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
     }
 
     @Override
+    public PendingReviewPage findPendingReviewItems(int offset, int limit) {
+        requirePageWindow(offset, limit);
+        List<AuctionItem> items = itemMapper.selectPendingReviewPage(offset, limit).stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
+        return new PendingReviewPage(items, itemMapper.countPendingReview());
+    }
+
+    @Override
     public boolean updateEditableItem(AuctionItem item) {
         if (item == null) {
             throw new IllegalArgumentException("item must not be null");

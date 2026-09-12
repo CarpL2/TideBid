@@ -112,6 +112,38 @@ public class AuctionAssetQueryService {
         return detail(item, session, images, review);
     }
 
+    public PageResult<AdminReviewSummary> findPendingReviews(boolean administrator, int page, int size) {
+        if (!administrator) {
+            throw new BusinessException(AuctionErrorCode.ASSET_ACCESS_DENIED);
+        }
+        int offset = pageOffset(page, size);
+        AuctionItemRepository.PendingReviewPage storedPage =
+                itemRepository.findPendingReviewItems(offset, size);
+        if (storedPage.items().isEmpty()) {
+            return new PageResult<>(page, size, storedPage.total(), List.of());
+        }
+
+        List<Long> itemIds = storedPage.items().stream().map(AuctionItem::id).toList();
+        Map<Long, AuctionSession> sessions = sessionRepository.findSessionsByItemIds(itemIds).stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        AuctionSession::itemId,
+                        Function.identity(),
+                        (first, second) -> {
+                            throw new IllegalStateException("Auction item has multiple sessions");
+                        }
+                ));
+        Map<Long, List<AuctionItemImage>> images = imagesByItem(
+                itemRepository.findBoundImagesByItemIds(itemIds)
+        );
+        Instant previewExpiresAt = previewExpiresAt();
+        List<AdminReviewSummary> items = storedPage.items().stream()
+                .map(item -> adminReviewSummary(
+                        item, requireSession(sessions, item.id()), images.get(item.id()), previewExpiresAt
+                ))
+                .toList();
+        return new PageResult<>(page, size, storedPage.total(), items);
+    }
+
     private AssetSummary summary(
             AuctionItem item,
             AuctionSession session,
@@ -139,6 +171,26 @@ public class AuctionAssetQueryService {
                 session.startPrice(), session.bidIncrement(), session.depositAmount(), session.currentPrice(),
                 session.bidCount(), session.startAt(), session.endAt(), item.version(), session.version(),
                 item.submittedAt(), item.approvedAt(), item.createdAt(), item.updatedAt(), images, review
+        );
+    }
+
+    private AdminReviewSummary adminReviewSummary(
+            AuctionItem item,
+            AuctionSession session,
+            List<AuctionItemImage> images,
+            Instant previewExpiresAt
+    ) {
+        if (item.reviewStatus() != AuctionItemReviewStatus.PENDING_REVIEW
+                || session.status() != AuctionSessionStatus.DRAFT
+                || session.sellerId() != item.sellerId()) {
+            throw new IllegalStateException("Pending review item has an inconsistent auction session");
+        }
+        AuctionItemImage cover = images == null || images.isEmpty() ? null : images.getFirst();
+        return new AdminReviewSummary(
+                item.id(), session.id(), item.sellerId(), item.title(), item.category(), item.itemCondition(),
+                item.reviewStatus(), item.submissionVersion(), session.startPrice(), session.bidIncrement(),
+                session.depositAmount(), session.startAt(), session.endAt(), item.version(), session.version(),
+                item.submittedAt(), cover == null ? null : imageView(item, cover, previewExpiresAt)
         );
     }
 
@@ -289,6 +341,27 @@ public class AuctionAssetQueryService {
             AuctionReviewDecision decision,
             String comment,
             Instant reviewedAt
+    ) {
+    }
+
+    public record AdminReviewSummary(
+            long itemId,
+            long auctionId,
+            long sellerId,
+            String title,
+            String category,
+            AuctionItemCondition itemCondition,
+            AuctionItemReviewStatus reviewStatus,
+            int submissionVersion,
+            BigDecimal startPrice,
+            BigDecimal bidIncrement,
+            BigDecimal depositAmount,
+            Instant startAt,
+            Instant endAt,
+            long itemVersion,
+            long sessionVersion,
+            Instant submittedAt,
+            ImageView coverImage
     ) {
     }
 }
