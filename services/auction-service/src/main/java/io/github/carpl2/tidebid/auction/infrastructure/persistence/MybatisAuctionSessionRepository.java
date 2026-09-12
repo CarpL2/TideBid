@@ -92,6 +92,15 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
     }
 
     @Override
+    public boolean openScheduledSession(long auctionId, long expectedVersion, Instant openedAt) {
+        MybatisAuctionItemRepository.requirePositive(auctionId, "auctionId");
+        if (expectedVersion < 0 || openedAt == null) {
+            throw new IllegalArgumentException("expectedVersion and openedAt are invalid");
+        }
+        return sessionMapper.openScheduled(auctionId, expectedVersion, openedAt) == 1;
+    }
+
+    @Override
     public BidRecord insertBid(BidRecord bid) {
         BidRecordEntity entity = AuctionPersistenceMapping.toEntity(bid);
         MybatisAuctionItemRepository.requireSingleRow(bidMapper.insert(entity), "bid record insert");

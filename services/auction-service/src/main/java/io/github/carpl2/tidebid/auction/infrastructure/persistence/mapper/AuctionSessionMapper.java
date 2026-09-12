@@ -47,4 +47,20 @@ public interface AuctionSessionMapper extends BaseMapper<AuctionSessionEntity> {
             @Param("expectedVersion") long expectedVersion,
             @Param("scheduledAt") Instant scheduledAt
     );
+
+    @Update("""
+            UPDATE auction_session
+            SET status = 'OPEN',
+                updated_at = #{openedAt},
+                version = version + 1
+            WHERE id = #{auctionId}
+              AND status = 'SCHEDULED'
+              AND version = #{expectedVersion}
+              AND start_at <= #{openedAt}
+            """)
+    int openScheduled(
+            @Param("auctionId") long auctionId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("openedAt") Instant openedAt
+    );
 }

@@ -27,6 +27,8 @@ public interface AuctionSessionRepository {
             Instant scheduledAt
     );
 
+    boolean openScheduledSession(long auctionId, long expectedVersion, Instant openedAt);
+
     BidRecord insertBid(BidRecord bid);
 
     Optional<BidRecord> findBid(long bidderId, String requestId);

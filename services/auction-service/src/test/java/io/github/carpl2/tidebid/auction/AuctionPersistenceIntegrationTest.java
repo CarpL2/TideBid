@@ -807,6 +807,75 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void scheduledSessionCasRequiresDueTimeCurrentVersionAndScheduledState() {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Instant startAt = now.plusSeconds(60);
+        AuctionItem item = approvedItem(itemId, sellerId, now);
+        AuctionSession session = scheduledSession(auctionId, itemId, sellerId, startAt, 3L, now);
+
+        try {
+            itemRepository.insertItem(item);
+            sessionRepository.insertSession(session);
+
+            assertThat(sessionRepository.openScheduledSession(auctionId, session.version(), now)).isFalse();
+            assertThat(sessionRepository.openScheduledSession(auctionId, session.version() - 1, startAt)).isFalse();
+            assertThat(sessionRepository.openScheduledSession(auctionId, session.version(), startAt)).isTrue();
+
+            AuctionSession opened = sessionRepository.findSessionById(auctionId).orElseThrow();
+            assertThat(opened.status()).isEqualTo(AuctionSessionStatus.OPEN);
+            assertThat(opened.version()).isEqualTo(session.version() + 1);
+            assertThat(opened.updatedAt()).isEqualTo(startAt);
+
+            assertThat(sessionRepository.openScheduledSession(auctionId, opened.version(), startAt)).isFalse();
+        } finally {
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void concurrentScheduledSessionCasAllowsExactlyOneWinner() throws Exception {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem item = approvedItem(itemId, sellerId, now);
+        AuctionSession session = scheduledSession(
+                auctionId, itemId, sellerId, now.minusSeconds(1), 1L, now
+        );
+
+        try {
+            itemRepository.insertItem(item);
+            sessionRepository.insertSession(session);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                Future<Boolean> first = executor.submit(() -> openSessionConcurrently(
+                        ready, start, auctionId, session.version(), now
+                ));
+                Future<Boolean> second = executor.submit(() -> openSessionConcurrently(
+                        ready, start, auctionId, session.version(), now
+                ));
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                assertThat(List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                        .containsExactlyInAnyOrder(true, false);
+            }
+
+            AuctionSession opened = sessionRepository.findSessionById(auctionId).orElseThrow();
+            assertThat(opened.status()).isEqualTo(AuctionSessionStatus.OPEN);
+            assertThat(opened.version()).isEqualTo(session.version() + 1);
+            assertThat(opened.updatedAt()).isEqualTo(now);
+        } finally {
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void rejectionPersistsReasonAndAllowsEditThenNewSubmissionVersion() {
         long itemId = IdWorker.getId();
         long auctionId = IdWorker.getId();
@@ -948,6 +1017,20 @@ class AuctionPersistenceIntegrationTest {
         }
     }
 
+    private boolean openSessionConcurrently(
+            CountDownLatch ready,
+            CountDownLatch start,
+            long auctionId,
+            long expectedVersion,
+            Instant openedAt
+    ) throws InterruptedException {
+        ready.countDown();
+        if (!start.await(5, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("Concurrent session opening timed out");
+        }
+        return sessionRepository.openScheduledSession(auctionId, expectedVersion, openedAt);
+    }
+
     private static AuctionItem draftItem(long itemId, long sellerId, Instant now) {
         return new AuctionItem(
                 itemId,
@@ -981,6 +1064,41 @@ class AuctionPersistenceIntegrationTest {
                 null,
                 submittedAt.minusSeconds(60),
                 submittedAt
+        );
+    }
+
+    private static AuctionItem approvedItem(long itemId, long sellerId, Instant now) {
+        return new AuctionItem(
+                itemId,
+                sellerId,
+                "Approved mechanical keyboard",
+                "An approved auction item used to verify session lifecycle transitions",
+                "ELECTRONICS",
+                AuctionItemCondition.GOOD,
+                AuctionItemReviewStatus.APPROVED,
+                1,
+                2,
+                now.minusSeconds(120),
+                now.minusSeconds(60),
+                now.minusSeconds(180),
+                now.minusSeconds(60)
+        );
+    }
+
+    private static AuctionSession scheduledSession(
+            long auctionId,
+            long itemId,
+            long sellerId,
+            Instant startAt,
+            long version,
+            Instant now
+    ) {
+        return new AuctionSession(
+                auctionId, itemId, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0,
+                startAt, startAt.plus(Duration.ofHours(2)),
+                AuctionSessionStatus.SCHEDULED, version, now.minusSeconds(180), now.minusSeconds(60)
         );
     }
 
