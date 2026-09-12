@@ -10,6 +10,7 @@ public record AdminReviewRequest(
         @Size(max = 500) String comment
 ) {
     public enum Decision {
-        APPROVE
+        APPROVE,
+        REJECT
     }
 }

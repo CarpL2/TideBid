@@ -53,10 +53,17 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -729,8 +736,10 @@ class AuctionPersistenceIntegrationTest {
             itemRepository.insertItem(item);
             sessionRepository.insertSession(session);
 
-            AuctionReviewTransaction.ApprovedAuction approved = reviewService.approve(
-                    new AuctionReviewService.ApproveCommand(reviewerId, itemId, 1, "  Approved for auction  ")
+            AuctionReviewTransaction.ReviewedAuction approved = reviewService.review(
+                    new AuctionReviewService.ReviewCommand(
+                            reviewerId, itemId, 1, AuctionReviewDecision.APPROVED, "  Approved for auction  "
+                    )
             );
 
             assertThat(approved.item().reviewStatus()).isEqualTo(AuctionItemReviewStatus.APPROVED);
@@ -743,8 +752,10 @@ class AuctionPersistenceIntegrationTest {
             assertThat(approved.review().comment()).isEqualTo("Approved for auction");
             assertThat(itemRepository.findReview(itemId, 1)).contains(approved.review());
 
-            assertThatThrownBy(() -> reviewService.approve(
-                    new AuctionReviewService.ApproveCommand(IdWorker.getId(), itemId, 1, null)
+            assertThatThrownBy(() -> reviewService.review(
+                    new AuctionReviewService.ReviewCommand(
+                            IdWorker.getId(), itemId, 1, AuctionReviewDecision.APPROVED, null
+                    )
             )).isInstanceOfSatisfying(BusinessException.class, exception ->
                     assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.ASSET_STATE_CONFLICT));
             assertThat(itemRepository.findReview(itemId, 1)).contains(approved.review());
@@ -792,6 +803,148 @@ class AuctionPersistenceIntegrationTest {
             reviewMapper.deleteById(reviewId);
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void rejectionPersistsReasonAndAllowsEditThenNewSubmissionVersion() {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        long reviewerId = IdWorker.getId();
+        long imageId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem item = draftItem(itemId, sellerId, now);
+        AuctionSession session = draftSession(auctionId, itemId, sellerId, now, 0L);
+        AuctionItemImage image = boundImage(imageId, itemId, sellerId, 0, now);
+        FakeObjectStorageAdapter storage = new FakeObjectStorageAdapter();
+        storage.store(metadata(image));
+        AuctionSubmissionService submissionService = new AuctionSubmissionService(
+                itemRepository,
+                sessionRepository,
+                new AuctionImageVerificationService(itemRepository, storage, clock),
+                new AuctionDraftFieldsValidator(timingProperties, clock),
+                submissionTransaction,
+                clock
+        );
+
+        try {
+            itemRepository.insertItem(item);
+            sessionRepository.insertSession(session);
+            itemRepository.insertImage(image);
+            AuctionSubmissionTransaction.SubmittedAuction firstSubmission = submissionService.submit(
+                    new AuctionSubmissionService.SubmitCommand(sellerId, itemId, 0L, 0L)
+            );
+
+            AuctionReviewTransaction.ReviewedAuction rejected = reviewService.review(
+                    new AuctionReviewService.ReviewCommand(
+                            reviewerId, itemId, 1, AuctionReviewDecision.REJECTED, "  Add clearer photos  "
+                    )
+            );
+
+            assertThat(rejected.item().reviewStatus()).isEqualTo(AuctionItemReviewStatus.REJECTED);
+            assertThat(rejected.item().approvedAt()).isNull();
+            assertThat(rejected.item().version()).isEqualTo(2L);
+            assertThat(rejected.session().status()).isEqualTo(AuctionSessionStatus.DRAFT);
+            assertThat(rejected.session().version()).isZero();
+            assertThat(rejected.review().comment()).isEqualTo("Add clearer photos");
+
+            Instant revisedStart = now.plus(Duration.ofMinutes(4));
+            AuctionDraftTransaction.UpdatedDraft revised = draftUpdateService.update(
+                    new AuctionDraftUpdateService.UpdateDraftCommand(
+                            sellerId, itemId, rejected.item().version(), rejected.session().version(),
+                            "Mechanical keyboard with clearer photos",
+                            "Updated listing after the administrator requested clearer auction photos",
+                            "ELECTRONICS", AuctionItemCondition.GOOD,
+                            new BigDecimal("110.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                            revisedStart, revisedStart.plus(Duration.ofHours(2))
+                    )
+            );
+            AuctionSubmissionTransaction.SubmittedAuction secondSubmission = submissionService.submit(
+                    new AuctionSubmissionService.SubmitCommand(
+                            sellerId, itemId, revised.item().version(), revised.session().version()
+                    )
+            );
+
+            assertThat(firstSubmission.item().submissionVersion()).isEqualTo(1);
+            assertThat(secondSubmission.item().reviewStatus()).isEqualTo(AuctionItemReviewStatus.PENDING_REVIEW);
+            assertThat(secondSubmission.item().submissionVersion()).isEqualTo(2);
+            assertThat(secondSubmission.session().status()).isEqualTo(AuctionSessionStatus.DRAFT);
+            assertThat(itemRepository.findReview(itemId, 1)).contains(rejected.review());
+        } finally {
+            itemRepository.findReview(itemId, 1).ifPresent(review -> reviewMapper.deleteById(review.id()));
+            imageMapper.deleteById(imageId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void concurrentAdministratorsCanPersistOnlyOneDecisionForOneSubmission() throws Exception {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem item = pendingReviewItem(itemId, sellerId, now.minusSeconds(60));
+        AuctionSession session = draftSession(auctionId, itemId, sellerId, now, 0L);
+        AuctionReview approval = new AuctionReview(
+                IdWorker.getId(), itemId, 1, IdWorker.getId(),
+                AuctionReviewDecision.APPROVED, null, now
+        );
+        AuctionReview rejection = new AuctionReview(
+                IdWorker.getId(), itemId, 1, IdWorker.getId(),
+                AuctionReviewDecision.REJECTED, "Needs clearer photos", now
+        );
+
+        try {
+            itemRepository.insertItem(item);
+            sessionRepository.insertSession(session);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                Future<String> first = executor.submit(() -> reviewConcurrently(
+                        ready, start, () -> reviewTransaction.approve(approval, item.version(), session)
+                ));
+                Future<String> second = executor.submit(() -> reviewConcurrently(
+                        ready, start, () -> reviewTransaction.reject(rejection, item.version(), session)
+                ));
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                assertThat(List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                        .containsExactlyInAnyOrder("SUCCESS", "CONFLICT");
+            }
+
+            AuctionReview storedReview = itemRepository.findReview(itemId, 1).orElseThrow();
+            AuctionItem storedItem = itemRepository.findItemById(itemId).orElseThrow();
+            AuctionSession storedSession = sessionRepository.findSessionById(auctionId).orElseThrow();
+            if (storedReview.decision() == AuctionReviewDecision.APPROVED) {
+                assertThat(storedItem.reviewStatus()).isEqualTo(AuctionItemReviewStatus.APPROVED);
+                assertThat(storedSession.status()).isEqualTo(AuctionSessionStatus.SCHEDULED);
+            } else {
+                assertThat(storedItem.reviewStatus()).isEqualTo(AuctionItemReviewStatus.REJECTED);
+                assertThat(storedSession.status()).isEqualTo(AuctionSessionStatus.DRAFT);
+            }
+        } finally {
+            itemRepository.findReview(itemId, 1).ifPresent(review -> reviewMapper.deleteById(review.id()));
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    private static String reviewConcurrently(
+            CountDownLatch ready,
+            CountDownLatch start,
+            Supplier<AuctionReviewTransaction.ReviewedAuction> operation
+    ) throws InterruptedException {
+        ready.countDown();
+        if (!start.await(5, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("Concurrent review start timed out");
+        }
+        try {
+            operation.get();
+            return "SUCCESS";
+        } catch (AuctionReviewTransaction.ReviewConflictException exception) {
+            return "CONFLICT";
         }
     }
 

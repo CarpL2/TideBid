@@ -69,10 +69,10 @@ class AuctionReviewServiceTest {
         when(idGenerator.nextId()).thenReturn(301L);
         when(transaction.approve(any(), eq(item.version()), eq(session))).thenAnswer(invocation -> {
             AuctionReview review = invocation.getArgument(0);
-            return new AuctionReviewTransaction.ApprovedAuction(approved, scheduled, review);
+            return new AuctionReviewTransaction.ReviewedAuction(approved, scheduled, review);
         });
 
-        AuctionReviewTransaction.ApprovedAuction result = service.approve(command("  Looks good  "));
+        AuctionReviewTransaction.ReviewedAuction result = service.review(approveCommand("  Looks good  "));
 
         assertThat(result.item().reviewStatus()).isEqualTo(AuctionItemReviewStatus.APPROVED);
         assertThat(result.session().status()).isEqualTo(AuctionSessionStatus.SCHEDULED);
@@ -89,7 +89,7 @@ class AuctionReviewServiceTest {
     void rejectsAdministratorReviewingOwnAssetBeforeReadingSession() {
         when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(pendingItem(REVIEWER_ID)));
 
-        assertError(AuctionErrorCode.ASSET_ACCESS_DENIED, () -> service.approve(command(null)));
+        assertError(AuctionErrorCode.ASSET_ACCESS_DENIED, () -> service.review(approveCommand(null)));
 
         verifyNoInteractions(sessionRepository, transaction, idGenerator);
     }
@@ -98,8 +98,10 @@ class AuctionReviewServiceTest {
     void rejectsStaleSubmissionVersionBeforeReadingSession() {
         when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(pendingItem()));
 
-        assertError(AuctionErrorCode.SUBMISSION_VERSION_CONFLICT, () -> service.approve(
-                new AuctionReviewService.ApproveCommand(REVIEWER_ID, ITEM_ID, 2, null)
+        assertError(AuctionErrorCode.SUBMISSION_VERSION_CONFLICT, () -> service.review(
+                new AuctionReviewService.ReviewCommand(
+                        REVIEWER_ID, ITEM_ID, 2, AuctionReviewDecision.APPROVED, null
+                )
         ));
 
         verifyNoInteractions(sessionRepository, transaction, idGenerator);
@@ -108,13 +110,13 @@ class AuctionReviewServiceTest {
     @Test
     void rejectsNonPendingItemAndExpiredStartTime() {
         when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(approvedItem()));
-        assertError(AuctionErrorCode.ASSET_STATE_CONFLICT, () -> service.approve(command(null)));
+        assertError(AuctionErrorCode.ASSET_STATE_CONFLICT, () -> service.review(approveCommand(null)));
         verify(sessionRepository, never()).findSessionByItemId(ITEM_ID);
 
         when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(pendingItem()));
         when(sessionRepository.findSessionByItemId(ITEM_ID))
                 .thenReturn(Optional.of(draftSession(NOW)));
-        assertError(AuctionErrorCode.AUCTION_TIME_INVALID, () -> service.approve(command(null)));
+        assertError(AuctionErrorCode.AUCTION_TIME_INVALID, () -> service.review(approveCommand(null)));
         verifyNoInteractions(transaction, idGenerator);
     }
 
@@ -128,22 +130,74 @@ class AuctionReviewServiceTest {
         when(transaction.approve(any(), eq(item.version()), eq(session)))
                 .thenThrow(new AuctionReviewTransaction.ReviewConflictException("changed concurrently"));
 
-        assertError(AuctionErrorCode.ASSET_STATE_CONFLICT, () -> service.approve(command(null)));
+        assertError(AuctionErrorCode.ASSET_STATE_CONFLICT, () -> service.review(approveCommand(null)));
     }
 
     @Test
     void rejectsInvalidCommandAndOversizedComment() {
-        assertError(AuctionErrorCode.ASSET_INVALID, () -> service.approve(null));
+        assertError(AuctionErrorCode.ASSET_INVALID, () -> service.review(null));
         when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(pendingItem()));
         when(sessionRepository.findSessionByItemId(ITEM_ID))
                 .thenReturn(Optional.of(draftSession(NOW.plusSeconds(3600))));
 
-        assertError(AuctionErrorCode.ASSET_INVALID, () -> service.approve(command("x".repeat(501))));
+        assertError(AuctionErrorCode.ASSET_INVALID, () -> service.review(approveCommand("x".repeat(501))));
         verifyNoInteractions(transaction, idGenerator);
     }
 
-    private static AuctionReviewService.ApproveCommand command(String comment) {
-        return new AuctionReviewService.ApproveCommand(REVIEWER_ID, ITEM_ID, 1, comment);
+    @Test
+    void rejectsCurrentSubmissionWithRequiredTrimmedCommentAndKeepsSessionDraft() {
+        AuctionItem item = pendingItem();
+        AuctionSession session = draftSession(NOW.minusSeconds(1));
+        AuctionItem rejected = rejectedItem();
+        when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(item));
+        when(sessionRepository.findSessionByItemId(ITEM_ID)).thenReturn(Optional.of(session));
+        when(idGenerator.nextId()).thenReturn(302L);
+        when(transaction.reject(any(), eq(item.version()), eq(session))).thenAnswer(invocation -> {
+            AuctionReview review = invocation.getArgument(0);
+            return new AuctionReviewTransaction.ReviewedAuction(rejected, session, review);
+        });
+
+        AuctionReviewTransaction.ReviewedAuction result = service.review(rejectCommand("  Add clearer photos  "));
+
+        assertThat(result.item().reviewStatus()).isEqualTo(AuctionItemReviewStatus.REJECTED);
+        assertThat(result.session().status()).isEqualTo(AuctionSessionStatus.DRAFT);
+        ArgumentCaptor<AuctionReview> review = ArgumentCaptor.forClass(AuctionReview.class);
+        verify(transaction).reject(review.capture(), eq(item.version()), eq(session));
+        assertThat(review.getValue().decision()).isEqualTo(AuctionReviewDecision.REJECTED);
+        assertThat(review.getValue().comment()).isEqualTo("Add clearer photos");
+    }
+
+    @Test
+    void requiresRejectionCommentBeforeReadingStateOrGeneratingId() {
+        assertError(AuctionErrorCode.ASSET_INVALID, () -> service.review(rejectCommand(null)));
+        assertError(AuctionErrorCode.ASSET_INVALID, () -> service.review(rejectCommand("   ")));
+
+        verifyNoInteractions(itemRepository, sessionRepository, transaction, idGenerator);
+    }
+
+    @Test
+    void mapsConcurrentRejectionFailureToStateConflict() {
+        AuctionItem item = pendingItem();
+        AuctionSession session = draftSession(NOW.plusSeconds(3600));
+        when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(item));
+        when(sessionRepository.findSessionByItemId(ITEM_ID)).thenReturn(Optional.of(session));
+        when(idGenerator.nextId()).thenReturn(303L);
+        when(transaction.reject(any(), eq(item.version()), eq(session)))
+                .thenThrow(new AuctionReviewTransaction.ReviewConflictException("changed concurrently"));
+
+        assertError(AuctionErrorCode.ASSET_STATE_CONFLICT, () -> service.review(rejectCommand("Needs work")));
+    }
+
+    private static AuctionReviewService.ReviewCommand approveCommand(String comment) {
+        return new AuctionReviewService.ReviewCommand(
+                REVIEWER_ID, ITEM_ID, 1, AuctionReviewDecision.APPROVED, comment
+        );
+    }
+
+    private static AuctionReviewService.ReviewCommand rejectCommand(String comment) {
+        return new AuctionReviewService.ReviewCommand(
+                REVIEWER_ID, ITEM_ID, 1, AuctionReviewDecision.REJECTED, comment
+        );
     }
 
     private static AuctionItem pendingItem() {
@@ -163,6 +217,14 @@ class AuctionReviewServiceTest {
                 ITEM_ID, SELLER_ID, "Mechanical keyboard", "A submitted auction item for review",
                 "ELECTRONICS", AuctionItemCondition.GOOD, AuctionItemReviewStatus.APPROVED,
                 1, 3L, NOW.minusSeconds(600), NOW, NOW.minusSeconds(3600), NOW
+        );
+    }
+
+    private static AuctionItem rejectedItem() {
+        return new AuctionItem(
+                ITEM_ID, SELLER_ID, "Mechanical keyboard", "A submitted auction item for review",
+                "ELECTRONICS", AuctionItemCondition.GOOD, AuctionItemReviewStatus.REJECTED,
+                1, 3L, NOW.minusSeconds(600), null, NOW.minusSeconds(3600), NOW
         );
     }
 

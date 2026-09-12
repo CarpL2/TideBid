@@ -18,7 +18,7 @@ public record AdminReviewResponse(
         long sessionVersion,
         Instant reviewedAt
 ) {
-    static AdminReviewResponse from(AuctionReviewTransaction.ApprovedAuction source) {
+    static AdminReviewResponse from(AuctionReviewTransaction.ReviewedAuction source) {
         return new AdminReviewResponse(
                 Long.toString(source.item().id()), Long.toString(source.session().id()),
                 source.review().submissionVersion(), source.review().decision(), source.item().reviewStatus(),

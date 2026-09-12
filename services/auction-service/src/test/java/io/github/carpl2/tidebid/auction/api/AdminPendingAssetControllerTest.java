@@ -122,7 +122,9 @@ class AdminPendingAssetControllerTest {
 
     @Test
     void approvesCurrentSubmissionWithTrustedAdministratorIdentity() throws Exception {
-        when(reviewService.approve(new AuctionReviewService.ApproveCommand(99L, ITEM_ID, 1, "Looks good")))
+        when(reviewService.review(new AuctionReviewService.ReviewCommand(
+                99L, ITEM_ID, 1, AuctionReviewDecision.APPROVED, "Looks good"
+        )))
                 .thenReturn(approvedAuction());
 
         String response = mockMvc.perform(post("/api/admin/assets/{assetId}/reviews", Long.toString(ITEM_ID))
@@ -142,7 +144,34 @@ class AdminPendingAssetControllerTest {
                 .andExpect(jsonPath("$.data.sessionStatus").value("SCHEDULED"))
                 .andReturn().getResponse().getContentAsString();
 
-        verify(reviewService).approve(new AuctionReviewService.ApproveCommand(99L, ITEM_ID, 1, "Looks good"));
+        verify(reviewService).review(new AuctionReviewService.ReviewCommand(
+                99L, ITEM_ID, 1, AuctionReviewDecision.APPROVED, "Looks good"
+        ));
+        assertThat(response).doesNotContain("reviewerId", "sellerId", "comment");
+    }
+
+    @Test
+    void rejectsCurrentSubmissionWithTrustedAdministratorIdentity() throws Exception {
+        when(reviewService.review(new AuctionReviewService.ReviewCommand(
+                99L, ITEM_ID, 1, AuctionReviewDecision.REJECTED, "Add clearer photos"
+        ))).thenReturn(rejectedAuction());
+
+        String response = mockMvc.perform(post("/api/admin/assets/{assetId}/reviews", Long.toString(ITEM_ID))
+                        .header("Authorization", "Bearer admin-token")
+                        .header("X-Request-Id", "reject-request-01")
+                        .contentType("application/json")
+                        .content("""
+                                {"decision":"REJECT","submissionVersion":1,"comment":"Add clearer photos"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.decision").value("REJECTED"))
+                .andExpect(jsonPath("$.data.itemStatus").value("REJECTED"))
+                .andExpect(jsonPath("$.data.sessionStatus").value("DRAFT"))
+                .andReturn().getResponse().getContentAsString();
+
+        verify(reviewService).review(new AuctionReviewService.ReviewCommand(
+                99L, ITEM_ID, 1, AuctionReviewDecision.REJECTED, "Add clearer photos"
+        ));
         assertThat(response).doesNotContain("reviewerId", "sellerId", "comment");
     }
 
@@ -182,7 +211,7 @@ class AdminPendingAssetControllerTest {
         );
     }
 
-    private static AuctionReviewTransaction.ApprovedAuction approvedAuction() {
+    private static AuctionReviewTransaction.ReviewedAuction approvedAuction() {
         AuctionItem item = new AuctionItem(
                 ITEM_ID, 42L, "Mechanical keyboard", "A submitted auction item for review",
                 "ELECTRONICS", AuctionItemCondition.GOOD, AuctionItemReviewStatus.APPROVED,
@@ -197,6 +226,24 @@ class AdminPendingAssetControllerTest {
         AuctionReview review = new AuctionReview(
                 ITEM_ID + 3, ITEM_ID, 1, 99L, AuctionReviewDecision.APPROVED, "Looks good", NOW
         );
-        return new AuctionReviewTransaction.ApprovedAuction(item, session, review);
+        return new AuctionReviewTransaction.ReviewedAuction(item, session, review);
+    }
+
+    private static AuctionReviewTransaction.ReviewedAuction rejectedAuction() {
+        AuctionItem item = new AuctionItem(
+                ITEM_ID, 42L, "Mechanical keyboard", "A submitted auction item for review",
+                "ELECTRONICS", AuctionItemCondition.GOOD, AuctionItemReviewStatus.REJECTED,
+                1, 3L, NOW.minusSeconds(600), null, NOW.minusSeconds(3600), NOW
+        );
+        AuctionSession session = new AuctionSession(
+                ITEM_ID + 1, ITEM_ID, 42L,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0L, NOW.plusSeconds(3600), NOW.plusSeconds(7200),
+                AuctionSessionStatus.DRAFT, 3L, NOW.minusSeconds(3600), NOW.minusSeconds(600)
+        );
+        AuctionReview review = new AuctionReview(
+                ITEM_ID + 3, ITEM_ID, 1, 99L, AuctionReviewDecision.REJECTED, "Add clearer photos", NOW
+        );
+        return new AuctionReviewTransaction.ReviewedAuction(item, session, review);
     }
 }

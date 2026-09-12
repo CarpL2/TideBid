@@ -28,7 +28,7 @@ public class MybatisAuctionReviewTransaction implements AuctionReviewTransaction
 
     @Override
     @Transactional
-    public ApprovedAuction approve(
+    public ReviewedAuction approve(
             AuctionReview review,
             long expectedItemVersion,
             AuctionSession session
@@ -53,6 +53,31 @@ public class MybatisAuctionReviewTransaction implements AuctionReviewTransaction
                 .orElseThrow(() -> new IllegalStateException("Approved auction item could not be reloaded"));
         AuctionSession storedSession = sessionRepository.findSessionByItemId(review.itemId())
                 .orElseThrow(() -> new IllegalStateException("Scheduled auction session could not be reloaded"));
-        return new ApprovedAuction(storedItem, storedSession, storedReview);
+        return new ReviewedAuction(storedItem, storedSession, storedReview);
+    }
+
+    @Override
+    @Transactional
+    public ReviewedAuction reject(
+            AuctionReview review,
+            long expectedItemVersion,
+            AuctionSession session
+    ) {
+        if (review == null || session == null
+                || review.decision() != AuctionReviewDecision.REJECTED
+                || review.itemId() != session.itemId()) {
+            throw new IllegalArgumentException("Rejection review and auction session are inconsistent");
+        }
+        if (!itemRepository.rejectPendingItem(
+                review.itemId(), review.submissionVersion(), expectedItemVersion, review.reviewedAt()
+        )) {
+            throw new ReviewConflictException("Auction submission changed before review");
+        }
+        AuctionReview storedReview = itemRepository.insertReview(review);
+        AuctionItem storedItem = itemRepository.findItemById(review.itemId())
+                .orElseThrow(() -> new IllegalStateException("Rejected auction item could not be reloaded"));
+        AuctionSession storedSession = sessionRepository.findSessionByItemId(review.itemId())
+                .orElseThrow(() -> new IllegalStateException("Draft auction session could not be reloaded"));
+        return new ReviewedAuction(storedItem, storedSession, storedReview);
     }
 }

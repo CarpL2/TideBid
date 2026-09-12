@@ -6,14 +6,20 @@ import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 
 public interface AuctionReviewTransaction {
 
-    ApprovedAuction approve(
+    ReviewedAuction approve(
             AuctionReview review,
             long expectedItemVersion,
             AuctionSession session
     );
 
-    record ApprovedAuction(AuctionItem item, AuctionSession session, AuctionReview review) {
-        public ApprovedAuction {
+    ReviewedAuction reject(
+            AuctionReview review,
+            long expectedItemVersion,
+            AuctionSession session
+    );
+
+    record ReviewedAuction(AuctionItem item, AuctionSession session, AuctionReview review) {
+        public ReviewedAuction {
             if (item == null || session == null || review == null) {
                 throw new IllegalArgumentException("item, session and review must not be null");
             }

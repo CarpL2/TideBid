@@ -29,6 +29,13 @@ public interface AuctionItemRepository {
             Instant approvedAt
     );
 
+    boolean rejectPendingItem(
+            long itemId,
+            int expectedSubmissionVersion,
+            long expectedVersion,
+            Instant rejectedAt
+    );
+
     AuctionItemImage insertImage(AuctionItemImage image);
 
     Optional<AuctionItemImage> findImageByObjectKey(String objectKey);

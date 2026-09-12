@@ -45,9 +45,9 @@ public class AuctionReviewService {
         this.clock = clock;
     }
 
-    public AuctionReviewTransaction.ApprovedAuction approve(ApproveCommand command) {
+    public AuctionReviewTransaction.ReviewedAuction review(ReviewCommand command) {
         validateCommand(command);
-        String comment = normalizeComment(command.comment());
+        String comment = normalizeComment(command.comment(), command.decision() == AuctionReviewDecision.REJECTED);
         AuctionItem item = itemRepository.findItemById(command.itemId())
                 .orElseThrow(() -> new BusinessException(AuctionErrorCode.ASSET_NOT_FOUND));
         if (item.sellerId() == command.reviewerId()) {
@@ -69,7 +69,7 @@ public class AuctionReviewService {
             throw new BusinessException(AuctionErrorCode.ASSET_STATE_CONFLICT);
         }
         Instant reviewedAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
-        if (!session.startAt().isAfter(reviewedAt)) {
+        if (command.decision() == AuctionReviewDecision.APPROVED && !session.startAt().isAfter(reviewedAt)) {
             throw new BusinessException(
                     AuctionErrorCode.AUCTION_TIME_INVALID,
                     "Auction start time must still be in the future when approved"
@@ -78,10 +78,13 @@ public class AuctionReviewService {
 
         AuctionReview review = new AuctionReview(
                 nextId(), item.id(), item.submissionVersion(), command.reviewerId(),
-                AuctionReviewDecision.APPROVED, comment, reviewedAt
+                command.decision(), comment, reviewedAt
         );
         try {
-            return reviewTransaction.approve(review, item.version(), session);
+            return switch (command.decision()) {
+                case APPROVED -> reviewTransaction.approve(review, item.version(), session);
+                case REJECTED -> reviewTransaction.reject(review, item.version(), session);
+            };
         } catch (AuctionReviewTransaction.ReviewConflictException exception) {
             AuctionItem latest = itemRepository.findItemById(item.id())
                     .orElseThrow(() -> new BusinessException(AuctionErrorCode.ASSET_NOT_FOUND));
@@ -100,12 +103,18 @@ public class AuctionReviewService {
         return id;
     }
 
-    private static String normalizeComment(String value) {
+    private static String normalizeComment(String value, boolean required) {
         if (value == null) {
+            if (required) {
+                throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "comment is required when rejecting");
+            }
             return null;
         }
         String normalized = value.trim();
         if (normalized.isEmpty()) {
+            if (required) {
+                throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "comment is required when rejecting");
+            }
             return null;
         }
         if (normalized.length() > MAXIMUM_COMMENT_LENGTH) {
@@ -114,9 +123,12 @@ public class AuctionReviewService {
         return normalized;
     }
 
-    private static void validateCommand(ApproveCommand command) {
+    private static void validateCommand(ReviewCommand command) {
         if (command == null) {
             throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "command must not be null");
+        }
+        if (command.decision() == null) {
+            throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "decision must not be null");
         }
         if (command.reviewerId() <= 0 || command.itemId() <= 0 || command.submissionVersion() <= 0) {
             throw new BusinessException(
@@ -126,6 +138,12 @@ public class AuctionReviewService {
         }
     }
 
-    public record ApproveCommand(long reviewerId, long itemId, int submissionVersion, String comment) {
+    public record ReviewCommand(
+            long reviewerId,
+            long itemId,
+            int submissionVersion,
+            AuctionReviewDecision decision,
+            String comment
+    ) {
     }
 }

@@ -3,6 +3,7 @@ package io.github.carpl2.tidebid.auction.api;
 import io.github.carpl2.tidebid.auction.application.AuctionAssetQueryService;
 import io.github.carpl2.tidebid.auction.application.AuctionReviewService;
 import io.github.carpl2.tidebid.auction.domain.AuctionErrorCode;
+import io.github.carpl2.tidebid.auction.domain.AuctionReviewDecision;
 import io.github.carpl2.tidebid.core.ApiResponse;
 import io.github.carpl2.tidebid.core.BusinessException;
 import io.github.carpl2.tidebid.core.TraceIds;
@@ -52,12 +53,13 @@ public class AdminPendingAssetController {
             @Valid @RequestBody AdminReviewRequest request,
             HttpServletRequest servletRequest
     ) {
-        if (request.decision() != AdminReviewRequest.Decision.APPROVE) {
-            throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "review decision is not supported");
-        }
-        AdminReviewResponse response = AdminReviewResponse.from(reviewService.approve(
-                new AuctionReviewService.ApproveCommand(
-                        identity.userId(), parseId(assetId), request.submissionVersion(), request.comment()
+        AdminReviewResponse response = AdminReviewResponse.from(reviewService.review(
+                new AuctionReviewService.ReviewCommand(
+                        identity.userId(), parseId(assetId), request.submissionVersion(),
+                        request.decision() == AdminReviewRequest.Decision.APPROVE
+                                ? AuctionReviewDecision.APPROVED
+                                : AuctionReviewDecision.REJECTED,
+                        request.comment()
                 )
         ));
         return ApiResponse.success(response, traceId(servletRequest));
