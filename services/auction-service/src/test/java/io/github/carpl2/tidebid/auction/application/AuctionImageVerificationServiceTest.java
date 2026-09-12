@@ -119,6 +119,35 @@ class AuctionImageVerificationServiceTest {
         verify(repository).findImageByObjectKey(OBJECT_KEY);
     }
 
+    @Test
+    void verifiesBoundImageWithoutApplyingExpiredUploadIntentTime() {
+        AuctionItemImage bound = boundImage(42L, 201L, 0, SHA256);
+        storage.store(metadata("image/webp", 4096, SHA256));
+
+        AuctionImageVerificationService.VerifiedUpload verified =
+                service.verifyBoundImage(42L, 201L, bound);
+
+        assertThat(verified.imageId()).isEqualTo(101L);
+        assertThat(storage.headRequests()).containsExactly(OBJECT_KEY);
+    }
+
+    @Test
+    void rejectsForeignUnboundOrMismatchedBoundImageBeforeSubmission() {
+        AuctionItemImage bound = boundImage(7L, 201L, 0, SHA256);
+        assertThatThrownBy(() -> service.verifyBoundImage(42L, 201L, bound))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.ASSET_ACCESS_DENIED));
+
+        assertImageInvalid(() -> service.verifyBoundImage(
+                42L, 201L, boundImage(42L, 202L, 0, SHA256)
+        ));
+
+        AuctionItemImage validBinding = boundImage(42L, 201L, 0, SHA256);
+        assertImageInvalid(() -> service.verifyBoundImage(42L, 201L, validBinding));
+        storage.store(metadata("image/png", 4096, SHA256));
+        assertImageInvalid(() -> service.verifyBoundImage(42L, 201L, validBinding));
+    }
+
     private static AuctionItemImage image(
             long ownerId,
             AuctionImageStatus status,
@@ -138,6 +167,29 @@ class AuctionImageVerificationServiceTest {
                 status,
                 expiresAt,
                 NOW.minusSeconds(60),
+                NOW.minusSeconds(60)
+        );
+    }
+
+    private static AuctionItemImage boundImage(
+            long ownerId,
+            long itemId,
+            int sortOrder,
+            String checksum
+    ) {
+        return new AuctionItemImage(
+                101L,
+                itemId,
+                ownerId,
+                OBJECT_KEY,
+                "photo.webp",
+                "image/webp",
+                4096,
+                checksum,
+                sortOrder,
+                AuctionImageStatus.BOUND,
+                NOW.minusSeconds(1),
+                NOW.minusSeconds(120),
                 NOW.minusSeconds(60)
         );
     }

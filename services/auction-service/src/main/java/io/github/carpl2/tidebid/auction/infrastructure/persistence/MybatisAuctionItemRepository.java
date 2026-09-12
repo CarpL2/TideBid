@@ -69,6 +69,17 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
     }
 
     @Override
+    public boolean submitForReview(long itemId, long sellerId, long expectedVersion, Instant submittedAt) {
+        requirePositive(itemId, "itemId");
+        requirePositive(sellerId, "sellerId");
+        if (expectedVersion < 0) {
+            throw new IllegalArgumentException("expectedVersion must not be negative");
+        }
+        requireInstant(submittedAt, "submittedAt");
+        return itemMapper.submitForReview(itemId, sellerId, expectedVersion, submittedAt) == 1;
+    }
+
+    @Override
     public AuctionItemImage insertImage(AuctionItemImage image) {
         AuctionItemImageEntity entity = AuctionPersistenceMapping.toEntity(image);
         requireSingleRow(imageMapper.insert(entity), "auction image insert");

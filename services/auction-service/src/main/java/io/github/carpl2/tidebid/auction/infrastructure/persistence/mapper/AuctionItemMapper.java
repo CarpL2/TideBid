@@ -44,4 +44,24 @@ public interface AuctionItemMapper extends BaseMapper<AuctionItemEntity> {
               AND version = #{item.version}
             """)
     int updateEditable(@Param("item") AuctionItemEntity item);
+
+    @Update("""
+            UPDATE auction_item
+            SET review_status = 'PENDING_REVIEW',
+                submission_version = submission_version + 1,
+                submitted_at = #{submittedAt},
+                approved_at = NULL,
+                updated_at = #{submittedAt},
+                version = version + 1
+            WHERE id = #{itemId}
+              AND seller_id = #{sellerId}
+              AND review_status IN ('DRAFT', 'REJECTED')
+              AND version = #{expectedVersion}
+            """)
+    int submitForReview(
+            @Param("itemId") long itemId,
+            @Param("sellerId") long sellerId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("submittedAt") java.time.Instant submittedAt
+    );
 }

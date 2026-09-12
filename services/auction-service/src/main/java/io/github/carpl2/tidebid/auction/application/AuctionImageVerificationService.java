@@ -56,13 +56,44 @@ public class AuctionImageVerificationService {
 
         ObjectStoragePort.StoredObjectMetadata object = objectStorage.headObject(controlledObjectKey)
                 .orElseThrow(() -> imageInvalid("Uploaded object does not exist"));
-        if (!intent.objectKey().equals(object.objectKey())
-                || !intent.contentType().equals(object.contentType())
-                || intent.contentLength() != object.contentLength()
-                || !checksumMatches(intent.contentSha256(), object.checksumSha256())) {
+        if (!metadataMatches(intent, object)) {
             throw imageInvalid("Uploaded object metadata does not match the upload intent");
         }
         return new VerifiedUpload(intent.id(), intent.objectKey());
+    }
+
+    public VerifiedUpload verifyBoundImage(long ownerId, long itemId, AuctionItemImage image) {
+        if (ownerId <= 0 || itemId <= 0) {
+            throw imageInvalid("ownerId and itemId must be positive");
+        }
+        if (image == null) {
+            throw imageInvalid("Bound image must not be null");
+        }
+        if (image.ownerId() != ownerId) {
+            throw new BusinessException(AuctionErrorCode.ASSET_ACCESS_DENIED);
+        }
+        if (!Long.valueOf(itemId).equals(image.itemId())
+                || image.storageStatus() != AuctionImageStatus.BOUND
+                || image.sortOrder() == null) {
+            throw imageInvalid("Image is not bound to this auction item");
+        }
+
+        ObjectStoragePort.StoredObjectMetadata object = objectStorage.headObject(image.objectKey())
+                .orElseThrow(() -> imageInvalid("Bound image object does not exist"));
+        if (!metadataMatches(image, object)) {
+            throw imageInvalid("Bound image object metadata does not match the stored record");
+        }
+        return new VerifiedUpload(image.id(), image.objectKey());
+    }
+
+    private static boolean metadataMatches(
+            AuctionItemImage image,
+            ObjectStoragePort.StoredObjectMetadata object
+    ) {
+        return image.objectKey().equals(object.objectKey())
+                && image.contentType().equals(object.contentType())
+                && image.contentLength() == object.contentLength()
+                && checksumMatches(image.contentSha256(), object.checksumSha256());
     }
 
     private static boolean checksumMatches(String expected, String actual) {

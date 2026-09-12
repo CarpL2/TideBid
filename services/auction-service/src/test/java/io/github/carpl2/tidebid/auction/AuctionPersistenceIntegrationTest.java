@@ -9,13 +9,16 @@ import io.github.carpl2.tidebid.auction.application.AuctionPendingImageCleanupSe
 import io.github.carpl2.tidebid.auction.application.AuctionDraftCreationService;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftFieldsValidator;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftUpdateService;
+import io.github.carpl2.tidebid.auction.application.AuctionSubmissionService;
 import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
 import io.github.carpl2.tidebid.auction.application.port.AuctionDraftTransaction;
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionSubmissionTransaction;
 import io.github.carpl2.tidebid.auction.application.port.ObjectStoragePort;
+import io.github.carpl2.tidebid.auction.domain.AuctionErrorCode;
 import io.github.carpl2.tidebid.auction.domain.AuctionImageStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionItem;
 import io.github.carpl2.tidebid.auction.domain.AuctionItemCondition;
@@ -40,6 +43,7 @@ import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageCleanu
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
 import io.github.carpl2.tidebid.auction.support.FakeObjectStorageAdapter;
+import io.github.carpl2.tidebid.core.BusinessException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -77,6 +81,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionTimingProperties timingProperties;
     @Autowired private AuctionDraftTransaction draftTransaction;
     @Autowired private AuctionDraftUpdateService draftUpdateService;
+    @Autowired private AuctionSubmissionTransaction submissionTransaction;
     @Autowired private AuctionAssetQueryService assetQueryService;
     @Autowired private IdGenerator idGenerator;
     @Autowired private Clock clock;
@@ -598,6 +603,61 @@ class AuctionPersistenceIntegrationTest {
             itemMapper.deleteById(anotherSellerItemId);
             itemMapper.deleteById(higherItemId);
             itemMapper.deleteById(lowerItemId);
+        }
+    }
+
+    @Test
+    void submissionPersistsPendingReviewAndLocksTheSubmittedDraft() {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        long imageId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem item = draftItem(itemId, sellerId, now);
+        AuctionSession session = draftSession(auctionId, itemId, sellerId, now, 0L);
+        AuctionItemImage image = boundImage(imageId, itemId, sellerId, 0, now);
+        FakeObjectStorageAdapter storage = new FakeObjectStorageAdapter();
+        storage.store(metadata(image));
+        AuctionSubmissionService service = new AuctionSubmissionService(
+                itemRepository,
+                sessionRepository,
+                new AuctionImageVerificationService(itemRepository, storage, clock),
+                new AuctionDraftFieldsValidator(timingProperties, clock),
+                submissionTransaction,
+                clock
+        );
+
+        try {
+            itemRepository.insertItem(item);
+            sessionRepository.insertSession(session);
+            itemRepository.insertImage(image);
+
+            AuctionSubmissionTransaction.SubmittedAuction submitted = service.submit(
+                    new AuctionSubmissionService.SubmitCommand(sellerId, itemId, 0L, 0L)
+            );
+
+            assertThat(submitted.item().reviewStatus()).isEqualTo(AuctionItemReviewStatus.PENDING_REVIEW);
+            assertThat(submitted.item().submissionVersion()).isEqualTo(1);
+            assertThat(submitted.item().version()).isEqualTo(1L);
+            assertThat(submitted.item().submittedAt()).isNotNull();
+            assertThat(submitted.session().status()).isEqualTo(AuctionSessionStatus.DRAFT);
+            assertThat(submitted.session().version()).isZero();
+            assertThat(storage.headRequests()).containsExactly(image.objectKey());
+
+            assertThatThrownBy(() -> draftUpdateService.update(
+                    new AuctionDraftUpdateService.UpdateDraftCommand(
+                            sellerId, itemId, 1L, 0L,
+                            "Locked title", "The submitted snapshot must no longer be editable",
+                            "ELECTRONICS", AuctionItemCondition.GOOD,
+                            new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                            now.plus(Duration.ofMinutes(3)), now.plus(Duration.ofHours(2))
+                    )
+            )).isInstanceOfSatisfying(BusinessException.class, exception ->
+                    assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.ASSET_STATE_CONFLICT));
+        } finally {
+            imageMapper.deleteById(imageId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
         }
     }
 

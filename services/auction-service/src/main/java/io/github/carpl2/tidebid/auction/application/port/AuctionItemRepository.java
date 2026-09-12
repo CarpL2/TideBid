@@ -18,6 +18,8 @@ public interface AuctionItemRepository {
 
     boolean updateEditableItem(AuctionItem item);
 
+    boolean submitForReview(long itemId, long sellerId, long expectedVersion, Instant submittedAt);
+
     AuctionItemImage insertImage(AuctionItemImage image);
 
     Optional<AuctionItemImage> findImageByObjectKey(String objectKey);
