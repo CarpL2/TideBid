@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
+import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
+import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
 import io.github.carpl2.tidebid.auction.domain.AuctionImageStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionItem;
 import io.github.carpl2.tidebid.auction.domain.AuctionItemCondition;
@@ -23,6 +25,9 @@ import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.Auctio
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionReviewMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionSessionMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.BidRecordMapper;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
+import io.github.carpl2.tidebid.auction.support.FakeObjectStorageAdapter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +36,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.Clock;
 import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +58,39 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionSessionMapper sessionMapper;
     @Autowired private AuctionRegistrationMapper registrationMapper;
     @Autowired private BidRecordMapper bidMapper;
+    @Autowired private AuctionImageProperties imageProperties;
+    @Autowired private AuctionStorageProperties storageProperties;
+    @Autowired private Clock clock;
+
+    @Test
+    void uploadIntentServicePersistsAPendingImageInMySql() {
+        AuctionUploadIntentService service = new AuctionUploadIntentService(
+                itemRepository,
+                new FakeObjectStorageAdapter(),
+                IdWorker::getId,
+                new AuctionObjectKeyFactory(),
+                imageProperties,
+                storageProperties,
+                clock
+        );
+
+        AuctionUploadIntentService.UploadIntent intent = service.create(
+                new AuctionUploadIntentService.UploadIntentCommand(
+                        IdWorker.getId(), "auction-photo.webp", "image/webp", 4096, null
+                )
+        );
+
+        try {
+            AuctionItemImage stored = itemRepository.findImageByObjectKey(intent.objectKey()).orElseThrow();
+            assertThat(stored.id()).isEqualTo(intent.imageId());
+            assertThat(stored.storageStatus()).isEqualTo(AuctionImageStatus.PENDING);
+            assertThat(stored.itemId()).isNull();
+            assertThat(stored.sortOrder()).isNull();
+            assertThat(stored.uploadExpiresAt()).isEqualTo(intent.upload().expiresAt());
+        } finally {
+            imageMapper.deleteById(intent.imageId());
+        }
+    }
 
     @Test
     void repositoriesRoundTripTheCompleteAuctionPersistenceGraph() {

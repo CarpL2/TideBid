@@ -59,6 +59,7 @@ tidebid:
       bucket: ${TIDEBID_OSS_BUCKET:}
       access-key-id: ${ALIBABA_CLOUD_ACCESS_KEY_ID:}
       access-key-secret: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:}
+      object-key-prefix: dev
       upload-url-ttl: 10m
       read-url-ttl: 5m
       pending-retention: 24h

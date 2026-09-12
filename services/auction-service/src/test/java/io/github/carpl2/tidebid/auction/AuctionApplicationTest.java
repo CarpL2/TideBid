@@ -95,6 +95,7 @@ class AuctionApplicationTest {
         assertThat(storageProperties.endpoint()).isEmpty();
         assertThat(storageProperties.accessKeyId()).isEmpty();
         assertThat(storageProperties.accessKeySecret()).isEmpty();
+        assertThat(storageProperties.objectKeyPrefix()).isEqualTo("dev");
         assertThat(storageProperties.uploadUrlTtl()).isEqualTo(Duration.ofMinutes(10));
         assertThat(storageProperties.readUrlTtl()).isEqualTo(Duration.ofMinutes(5));
         assertThat(storageProperties.pendingRetention()).isEqualTo(Duration.ofHours(24));

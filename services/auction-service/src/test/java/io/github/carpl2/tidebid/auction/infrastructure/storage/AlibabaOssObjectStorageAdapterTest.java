@@ -145,6 +145,7 @@ class AlibabaOssObjectStorageAdapterTest {
                 BUCKET,
                 "test-access-key-id",
                 "test-access-key-secret",
+                "dev",
                 Duration.ofMinutes(10),
                 Duration.ofMinutes(5),
                 Duration.ofHours(24)

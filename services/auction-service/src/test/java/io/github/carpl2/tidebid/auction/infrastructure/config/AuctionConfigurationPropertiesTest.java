@@ -84,6 +84,7 @@ class AuctionConfigurationPropertiesTest {
                 bucket,
                 accessKeyId,
                 accessKeySecret,
+                "dev",
                 Duration.ofMinutes(10),
                 Duration.ofMinutes(5),
                 Duration.ofHours(24)

@@ -15,6 +15,7 @@ public record AuctionStorageProperties(
         String bucket,
         String accessKeyId,
         String accessKeySecret,
+        String objectKeyPrefix,
         Duration uploadUrlTtl,
         Duration readUrlTtl,
         Duration pendingRetention
@@ -25,6 +26,7 @@ public record AuctionStorageProperties(
     private static final Duration MAXIMUM_PENDING_RETENTION = Duration.ofDays(30);
     private static final Pattern REGION_PATTERN = Pattern.compile("[a-z0-9]+(?:-[a-z0-9]+)*");
     private static final Pattern BUCKET_PATTERN = Pattern.compile("[a-z0-9][a-z0-9-]{1,61}[a-z0-9]");
+    private static final Pattern OBJECT_KEY_PREFIX_PATTERN = Pattern.compile("[a-z0-9][a-z0-9-]{0,31}");
 
     public AuctionStorageProperties {
         endpoint = normalize(endpoint);
@@ -32,12 +34,14 @@ public record AuctionStorageProperties(
         bucket = normalize(bucket);
         accessKeyId = normalize(accessKeyId);
         accessKeySecret = normalize(accessKeySecret);
+        objectKeyPrefix = normalize(objectKeyPrefix);
         uploadUrlTtl = Objects.requireNonNull(uploadUrlTtl, "uploadUrlTtl must not be null");
         readUrlTtl = Objects.requireNonNull(readUrlTtl, "readUrlTtl must not be null");
         pendingRetention = Objects.requireNonNull(pendingRetention, "pendingRetention must not be null");
 
         requireUrlTtl(uploadUrlTtl, "uploadUrlTtl");
         requireUrlTtl(readUrlTtl, "readUrlTtl");
+        requireMatching(objectKeyPrefix, OBJECT_KEY_PREFIX_PATTERN, "objectKeyPrefix");
         if (pendingRetention.compareTo(uploadUrlTtl) < 0
                 || pendingRetention.compareTo(MAXIMUM_PENDING_RETENTION) > 0) {
             throw new IllegalArgumentException("pendingRetention must be between uploadUrlTtl and 30 days");
@@ -61,6 +65,7 @@ public record AuctionStorageProperties(
                 + ", bucket=" + bucket
                 + ", accessKeyId=[REDACTED]"
                 + ", accessKeySecret=[REDACTED]"
+                + ", objectKeyPrefix=" + objectKeyPrefix
                 + ", uploadUrlTtl=" + uploadUrlTtl
                 + ", readUrlTtl=" + readUrlTtl
                 + ", pendingRetention=" + pendingRetention + "]";
