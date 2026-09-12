@@ -1,8 +1,15 @@
 package io.github.carpl2.tidebid.auction.api;
 
 import io.github.carpl2.tidebid.auction.application.AuctionAssetQueryService;
+import io.github.carpl2.tidebid.auction.application.AuctionReviewService;
+import io.github.carpl2.tidebid.auction.application.port.AuctionReviewTransaction;
+import io.github.carpl2.tidebid.auction.domain.AuctionItem;
 import io.github.carpl2.tidebid.auction.domain.AuctionItemCondition;
 import io.github.carpl2.tidebid.auction.domain.AuctionItemReviewStatus;
+import io.github.carpl2.tidebid.auction.domain.AuctionReview;
+import io.github.carpl2.tidebid.auction.domain.AuctionReviewDecision;
+import io.github.carpl2.tidebid.auction.domain.AuctionSession;
+import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.infrastructure.security.AuctionSecurityConfiguration;
 import io.github.carpl2.tidebid.security.JwtAccessTokenVerifier;
 import io.github.carpl2.tidebid.security.JwtClaims;
@@ -28,6 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -45,6 +53,9 @@ class AdminPendingAssetControllerTest {
 
     @MockitoBean
     private AuctionAssetQueryService queryService;
+
+    @MockitoBean
+    private AuctionReviewService reviewService;
 
     @MockitoBean
     private JwtAccessTokenVerifier tokenVerifier;
@@ -109,6 +120,53 @@ class AdminPendingAssetControllerTest {
         verifyNoInteractions(queryService);
     }
 
+    @Test
+    void approvesCurrentSubmissionWithTrustedAdministratorIdentity() throws Exception {
+        when(reviewService.approve(new AuctionReviewService.ApproveCommand(99L, ITEM_ID, 1, "Looks good")))
+                .thenReturn(approvedAuction());
+
+        String response = mockMvc.perform(post("/api/admin/assets/{assetId}/reviews", Long.toString(ITEM_ID))
+                        .header("Authorization", "Bearer admin-token")
+                        .header("X-Request-Id", "approve-request-01")
+                        .header("X-Trace-Id", "approve-trace-01")
+                        .contentType("application/json")
+                        .content("""
+                                {"decision":"APPROVE","submissionVersion":1,"comment":"Looks good"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Trace-Id", "approve-trace-01"))
+                .andExpect(jsonPath("$.data.itemId").value("9007199254740993"))
+                .andExpect(jsonPath("$.data.auctionId").value("9007199254740994"))
+                .andExpect(jsonPath("$.data.decision").value("APPROVED"))
+                .andExpect(jsonPath("$.data.itemStatus").value("APPROVED"))
+                .andExpect(jsonPath("$.data.sessionStatus").value("SCHEDULED"))
+                .andReturn().getResponse().getContentAsString();
+
+        verify(reviewService).approve(new AuctionReviewService.ApproveCommand(99L, ITEM_ID, 1, "Looks good"));
+        assertThat(response).doesNotContain("reviewerId", "sellerId", "comment");
+    }
+
+    @Test
+    void rejectsOrdinaryUserAndMissingRequestIdBeforeApproval() throws Exception {
+        String body = """
+                {"decision":"APPROVE","submissionVersion":1}
+                """;
+        mockMvc.perform(post("/api/admin/assets/101/reviews")
+                        .header("Authorization", "Bearer user-token")
+                        .header("X-Request-Id", "approve-request-02")
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/admin/assets/101/reviews")
+                        .header("Authorization", "Bearer admin-token")
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(reviewService);
+    }
+
     private static AuctionAssetQueryService.AdminReviewSummary summary() {
         return new AuctionAssetQueryService.AdminReviewSummary(
                 ITEM_ID, ITEM_ID + 1, 42L,
@@ -122,5 +180,23 @@ class AdminPendingAssetControllerTest {
                         URI.create("https://object-storage.invalid/read?signature=secret"), NOW.plusSeconds(300)
                 )
         );
+    }
+
+    private static AuctionReviewTransaction.ApprovedAuction approvedAuction() {
+        AuctionItem item = new AuctionItem(
+                ITEM_ID, 42L, "Mechanical keyboard", "A submitted auction item for review",
+                "ELECTRONICS", AuctionItemCondition.GOOD, AuctionItemReviewStatus.APPROVED,
+                1, 3L, NOW.minusSeconds(600), NOW, NOW.minusSeconds(3600), NOW
+        );
+        AuctionSession session = new AuctionSession(
+                ITEM_ID + 1, ITEM_ID, 42L,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0L, NOW.plusSeconds(3600), NOW.plusSeconds(7200),
+                AuctionSessionStatus.SCHEDULED, 4L, NOW.minusSeconds(3600), NOW
+        );
+        AuctionReview review = new AuctionReview(
+                ITEM_ID + 3, ITEM_ID, 1, 99L, AuctionReviewDecision.APPROVED, "Looks good", NOW
+        );
+        return new AuctionReviewTransaction.ApprovedAuction(item, session, review);
     }
 }

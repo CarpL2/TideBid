@@ -11,6 +11,7 @@ import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.BidRec
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -69,6 +70,25 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
             throw new IllegalArgumentException("session must not be null");
         }
         return sessionMapper.updateDraft(AuctionPersistenceMapping.toEntity(session)) == 1;
+    }
+
+    @Override
+    public boolean scheduleDraftSession(
+            long auctionId,
+            long itemId,
+            long sellerId,
+            long expectedVersion,
+            Instant scheduledAt
+    ) {
+        MybatisAuctionItemRepository.requirePositive(auctionId, "auctionId");
+        MybatisAuctionItemRepository.requirePositive(itemId, "itemId");
+        MybatisAuctionItemRepository.requirePositive(sellerId, "sellerId");
+        if (expectedVersion < 0 || scheduledAt == null) {
+            throw new IllegalArgumentException("expectedVersion and scheduledAt are invalid");
+        }
+        return sessionMapper.scheduleDraft(
+                auctionId, itemId, sellerId, expectedVersion, scheduledAt
+        ) == 1;
     }
 
     @Override

@@ -6,6 +6,8 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.Instant;
+
 @Mapper
 public interface AuctionSessionMapper extends BaseMapper<AuctionSessionEntity> {
 
@@ -25,4 +27,24 @@ public interface AuctionSessionMapper extends BaseMapper<AuctionSessionEntity> {
               AND version = #{session.version}
             """)
     int updateDraft(@Param("session") AuctionSessionEntity session);
+
+    @Update("""
+            UPDATE auction_session
+            SET status = 'SCHEDULED',
+                updated_at = #{scheduledAt},
+                version = version + 1
+            WHERE id = #{auctionId}
+              AND item_id = #{itemId}
+              AND seller_id = #{sellerId}
+              AND status = 'DRAFT'
+              AND version = #{expectedVersion}
+              AND start_at > #{scheduledAt}
+            """)
+    int scheduleDraft(
+            @Param("auctionId") long auctionId,
+            @Param("itemId") long itemId,
+            @Param("sellerId") long sellerId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("scheduledAt") Instant scheduledAt
+    );
 }

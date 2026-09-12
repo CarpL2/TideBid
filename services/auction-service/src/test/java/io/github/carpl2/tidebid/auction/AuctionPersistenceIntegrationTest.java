@@ -10,11 +10,13 @@ import io.github.carpl2.tidebid.auction.application.AuctionDraftCreationService;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftFieldsValidator;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftUpdateService;
 import io.github.carpl2.tidebid.auction.application.AuctionSubmissionService;
+import io.github.carpl2.tidebid.auction.application.AuctionReviewService;
 import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
 import io.github.carpl2.tidebid.auction.application.port.AuctionDraftTransaction;
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionReviewTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSubmissionTransaction;
 import io.github.carpl2.tidebid.auction.application.port.ObjectStoragePort;
@@ -82,7 +84,9 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionDraftTransaction draftTransaction;
     @Autowired private AuctionDraftUpdateService draftUpdateService;
     @Autowired private AuctionSubmissionTransaction submissionTransaction;
+    @Autowired private AuctionReviewTransaction reviewTransaction;
     @Autowired private AuctionAssetQueryService assetQueryService;
+    @Autowired private AuctionReviewService reviewService;
     @Autowired private IdGenerator idGenerator;
     @Autowired private Clock clock;
 
@@ -706,6 +710,86 @@ class AuctionPersistenceIntegrationTest {
                     assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.ASSET_STATE_CONFLICT));
         } finally {
             imageMapper.deleteById(imageId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void approvalAtomicallyPersistsReviewAndSchedulesSession() {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        long reviewerId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem item = pendingReviewItem(itemId, sellerId, now.minusSeconds(60));
+        AuctionSession session = draftSession(auctionId, itemId, sellerId, now, 0L);
+
+        try {
+            itemRepository.insertItem(item);
+            sessionRepository.insertSession(session);
+
+            AuctionReviewTransaction.ApprovedAuction approved = reviewService.approve(
+                    new AuctionReviewService.ApproveCommand(reviewerId, itemId, 1, "  Approved for auction  ")
+            );
+
+            assertThat(approved.item().reviewStatus()).isEqualTo(AuctionItemReviewStatus.APPROVED);
+            assertThat(approved.item().approvedAt()).isEqualTo(approved.review().reviewedAt());
+            assertThat(approved.item().version()).isEqualTo(2L);
+            assertThat(approved.session().status()).isEqualTo(AuctionSessionStatus.SCHEDULED);
+            assertThat(approved.session().version()).isEqualTo(1L);
+            assertThat(approved.review().decision()).isEqualTo(AuctionReviewDecision.APPROVED);
+            assertThat(approved.review().reviewerId()).isEqualTo(reviewerId);
+            assertThat(approved.review().comment()).isEqualTo("Approved for auction");
+            assertThat(itemRepository.findReview(itemId, 1)).contains(approved.review());
+
+            assertThatThrownBy(() -> reviewService.approve(
+                    new AuctionReviewService.ApproveCommand(IdWorker.getId(), itemId, 1, null)
+            )).isInstanceOfSatisfying(BusinessException.class, exception ->
+                    assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.ASSET_STATE_CONFLICT));
+            assertThat(itemRepository.findReview(itemId, 1)).contains(approved.review());
+        } finally {
+            itemRepository.findReview(itemId, 1).ifPresent(review -> reviewMapper.deleteById(review.id()));
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void approvalRollsBackItemWhenSessionCasFails() {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        long reviewerId = IdWorker.getId();
+        long reviewId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem item = pendingReviewItem(itemId, sellerId, now.minusSeconds(60));
+        AuctionSession storedSession = draftSession(auctionId, itemId, sellerId, now, 0L);
+        AuctionSession staleSession = new AuctionSession(
+                storedSession.id(), storedSession.itemId(), storedSession.sellerId(),
+                storedSession.startPrice(), storedSession.bidIncrement(), storedSession.depositAmount(),
+                null, null, 0L, storedSession.startAt(), storedSession.endAt(),
+                AuctionSessionStatus.DRAFT, 1L, storedSession.createdAt(), storedSession.updatedAt()
+        );
+        AuctionReview review = new AuctionReview(
+                reviewId, itemId, 1, reviewerId, AuctionReviewDecision.APPROVED, null, now
+        );
+
+        try {
+            itemRepository.insertItem(item);
+            sessionRepository.insertSession(storedSession);
+
+            assertThatThrownBy(() -> reviewTransaction.approve(review, item.version(), staleSession))
+                    .isInstanceOf(AuctionReviewTransaction.ReviewConflictException.class);
+
+            assertThat(itemRepository.findItemById(itemId).orElseThrow().reviewStatus())
+                    .isEqualTo(AuctionItemReviewStatus.PENDING_REVIEW);
+            assertThat(itemRepository.findItemById(itemId).orElseThrow().version()).isEqualTo(1L);
+            assertThat(sessionRepository.findSessionById(auctionId).orElseThrow().status())
+                    .isEqualTo(AuctionSessionStatus.DRAFT);
+            assertThat(itemRepository.findReview(itemId, 1)).isEmpty();
+        } finally {
+            reviewMapper.deleteById(reviewId);
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
         }
