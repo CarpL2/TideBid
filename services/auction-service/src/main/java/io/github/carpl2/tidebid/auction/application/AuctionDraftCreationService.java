@@ -11,7 +11,6 @@ import io.github.carpl2.tidebid.auction.domain.AuctionItemReviewStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProperties;
-import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
 import io.github.carpl2.tidebid.core.BusinessException;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -23,24 +22,17 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Objects;
 import java.util.Set;
 
 @Service
 @Profile({"local-db", "nacos"})
 public class AuctionDraftCreationService {
 
-    private static final BigDecimal MAXIMUM_AMOUNT = new BigDecimal("99999999999999999.99");
-    private static final Set<String> CATEGORIES = Set.of(
-            "ELECTRONICS", "COLLECTIBLES", "ART", "FASHION", "HOME", "SPORTS", "OTHER"
-    );
-
     private final AuctionImageVerificationService imageVerificationService;
     private final AuctionDraftTransaction draftTransaction;
     private final IdGenerator idGenerator;
     private final AuctionImageProperties imageProperties;
-    private final AuctionTimingProperties timingProperties;
+    private final AuctionDraftFieldsValidator fieldsValidator;
     private final Clock clock;
 
     public AuctionDraftCreationService(
@@ -48,34 +40,45 @@ public class AuctionDraftCreationService {
             AuctionDraftTransaction draftTransaction,
             IdGenerator idGenerator,
             AuctionImageProperties imageProperties,
-            AuctionTimingProperties timingProperties,
+            AuctionDraftFieldsValidator fieldsValidator,
             Clock clock
     ) {
         this.imageVerificationService = imageVerificationService;
         this.draftTransaction = draftTransaction;
         this.idGenerator = idGenerator;
         this.imageProperties = imageProperties;
-        this.timingProperties = timingProperties;
+        this.fieldsValidator = fieldsValidator;
         this.clock = clock;
     }
 
     public AuctionDraftTransaction.CreatedDraft create(CreateDraftCommand command) {
-        ValidatedDraft draft = validate(command);
+        if (command == null) {
+            throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "command must not be null");
+        }
+        if (command.sellerId() <= 0) {
+            throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "sellerId must be positive");
+        }
+        AuctionDraftFieldsValidator.ValidatedFields fields = fieldsValidator.validate(
+                command.title(), command.description(), command.category(), command.itemCondition(),
+                command.startPrice(), command.bidIncrement(), command.depositAmount(),
+                command.startAt(), command.endAt()
+        );
+        List<String> imageObjectKeys = normalizeImageKeys(command.imageObjectKeys());
         List<AuctionDraftTransaction.ImageBinding> bindings = verifyImages(
-                draft.sellerId(),
-                draft.imageObjectKeys()
+                command.sellerId(),
+                imageObjectKeys
         );
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
-        validateTiming(draft.startAt(), draft.endAt(), now);
+        fieldsValidator.validateTiming(fields.startAt(), fields.endAt(), now);
         long itemId = nextId();
         long auctionId = nextId();
         AuctionItem item = new AuctionItem(
                 itemId,
-                draft.sellerId(),
-                draft.title(),
-                draft.description(),
-                draft.category(),
-                draft.itemCondition(),
+                command.sellerId(),
+                fields.title(),
+                fields.description(),
+                fields.category(),
+                fields.itemCondition(),
                 AuctionItemReviewStatus.DRAFT,
                 0,
                 0,
@@ -87,15 +90,15 @@ public class AuctionDraftCreationService {
         AuctionSession session = new AuctionSession(
                 auctionId,
                 itemId,
-                draft.sellerId(),
-                draft.startPrice(),
-                draft.bidIncrement(),
-                draft.depositAmount(),
+                command.sellerId(),
+                fields.startPrice(),
+                fields.bidIncrement(),
+                fields.depositAmount(),
                 null,
                 null,
                 0,
-                draft.startAt(),
-                draft.endAt(),
+                fields.startAt(),
+                fields.endAt(),
                 AuctionSessionStatus.DRAFT,
                 0,
                 now,
@@ -105,52 +108,6 @@ public class AuctionDraftCreationService {
             return draftTransaction.create(item, session, bindings, now);
         } catch (AuctionDraftTransaction.ImageBindingConflictException exception) {
             throw new BusinessException(AuctionErrorCode.IMAGE_INVALID, exception.getMessage());
-        }
-    }
-
-    private ValidatedDraft validate(CreateDraftCommand command) {
-        if (command == null) {
-            throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "command must not be null");
-        }
-        if (command.sellerId() <= 0) {
-            throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "sellerId must be positive");
-        }
-        String title = requireText(command.title(), 2, 80, "title");
-        String description = requireText(command.description(), 10, 2000, "description");
-        String category = command.category() == null
-                ? ""
-                : command.category().trim().toUpperCase(Locale.ROOT);
-        if (!CATEGORIES.contains(category)) {
-            throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "category is not supported");
-        }
-        if (command.itemCondition() == null) {
-            throw new BusinessException(AuctionErrorCode.ASSET_INVALID, "itemCondition must not be null");
-        }
-
-        BigDecimal startPrice = requireAmount(command.startPrice(), "startPrice");
-        BigDecimal bidIncrement = requireAmount(command.bidIncrement(), "bidIncrement");
-        BigDecimal depositAmount = requireAmount(command.depositAmount(), "depositAmount");
-        Instant startAt = requireTime(command.startAt(), "startAt");
-        Instant endAt = requireTime(command.endAt(), "endAt");
-        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
-        validateTiming(startAt, endAt, now);
-
-        List<String> imageObjectKeys = normalizeImageKeys(command.imageObjectKeys());
-        return new ValidatedDraft(
-                command.sellerId(), title, description, category, command.itemCondition(),
-                startPrice, bidIncrement, depositAmount, startAt, endAt, imageObjectKeys
-        );
-    }
-
-    private void validateTiming(Instant startAt, Instant endAt, Instant now) {
-        if (startAt.isBefore(now.plus(timingProperties.minimumLeadTime()))) {
-            throw new BusinessException(AuctionErrorCode.AUCTION_TIME_INVALID, "startAt is too early");
-        }
-        if (!endAt.isAfter(startAt)) {
-            throw new BusinessException(AuctionErrorCode.AUCTION_TIME_INVALID, "endAt must be after startAt");
-        }
-        if (java.time.Duration.between(startAt, endAt).compareTo(timingProperties.maximumDuration()) > 0) {
-            throw new BusinessException(AuctionErrorCode.AUCTION_TIME_INVALID, "auction duration is too long");
         }
     }
 
@@ -189,34 +146,6 @@ public class AuctionDraftCreationService {
         return List.copyOf(normalized);
     }
 
-    private static String requireText(String value, int minimum, int maximum, String name) {
-        String normalized = value == null ? "" : value.trim();
-        if (normalized.length() < minimum || normalized.length() > maximum) {
-            throw new BusinessException(
-                    AuctionErrorCode.ASSET_INVALID,
-                    name + " must contain " + minimum + " to " + maximum + " characters"
-            );
-        }
-        return normalized;
-    }
-
-    private static BigDecimal requireAmount(BigDecimal value, String name) {
-        if (value == null || value.signum() <= 0 || value.scale() > 2 || value.compareTo(MAXIMUM_AMOUNT) > 0) {
-            throw new BusinessException(
-                    AuctionErrorCode.AUCTION_AMOUNT_INVALID,
-                    name + " must be positive and fit DECIMAL(19,2)"
-            );
-        }
-        return value.setScale(2);
-    }
-
-    private static Instant requireTime(Instant value, String name) {
-        if (value == null) {
-            throw new BusinessException(AuctionErrorCode.AUCTION_TIME_INVALID, name + " must not be null");
-        }
-        return value.truncatedTo(ChronoUnit.MICROS);
-    }
-
     private long nextId() {
         long id = idGenerator.nextId();
         if (id <= 0) {
@@ -240,21 +169,4 @@ public class AuctionDraftCreationService {
     ) {
     }
 
-    private record ValidatedDraft(
-            long sellerId,
-            String title,
-            String description,
-            String category,
-            AuctionItemCondition itemCondition,
-            BigDecimal startPrice,
-            BigDecimal bidIncrement,
-            BigDecimal depositAmount,
-            Instant startAt,
-            Instant endAt,
-            List<String> imageObjectKeys
-    ) {
-        private ValidatedDraft {
-            Objects.requireNonNull(imageObjectKeys, "imageObjectKeys must not be null");
-        }
-    }
 }

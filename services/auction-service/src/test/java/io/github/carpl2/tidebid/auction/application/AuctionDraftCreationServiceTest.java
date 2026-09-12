@@ -163,7 +163,10 @@ class AuctionDraftCreationServiceTest {
                         DataSize.ofMegabytes(10),
                         9
                 ),
-                new AuctionTimingProperties(Duration.ofMinutes(1), Duration.ofDays(7), Duration.ofSeconds(1)),
+                new AuctionDraftFieldsValidator(
+                        new AuctionTimingProperties(Duration.ofMinutes(1), Duration.ofDays(7), Duration.ofSeconds(1)),
+                        Clock.fixed(NOW, ZoneOffset.UTC)
+                ),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }

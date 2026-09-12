@@ -14,6 +14,8 @@ public interface AuctionItemRepository {
 
     Optional<AuctionItem> findItemById(long itemId);
 
+    boolean updateEditableItem(AuctionItem item);
+
     AuctionItemImage insertImage(AuctionItemImage image);
 
     Optional<AuctionItemImage> findImageByObjectKey(String objectKey);

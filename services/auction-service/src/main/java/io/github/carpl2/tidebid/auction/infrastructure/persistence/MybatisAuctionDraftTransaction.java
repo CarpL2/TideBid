@@ -72,4 +72,25 @@ public class MybatisAuctionDraftTransaction implements AuctionDraftTransaction {
         }
         return new CreatedDraft(storedItem, storedSession, storedImages);
     }
+
+    @Override
+    @Transactional
+    public UpdatedDraft update(AuctionItem item, AuctionSession session) {
+        Objects.requireNonNull(item, "item must not be null");
+        Objects.requireNonNull(session, "session must not be null");
+        if (session.itemId() != item.id() || session.sellerId() != item.sellerId()) {
+            throw new IllegalArgumentException("session does not belong to the item and seller");
+        }
+        if (!itemRepository.updateEditableItem(item)) {
+            throw new DraftUpdateConflictException("Auction item changed before the update");
+        }
+        if (!sessionRepository.updateDraftSession(session)) {
+            throw new DraftUpdateConflictException("Auction session changed before the update");
+        }
+        AuctionItem storedItem = itemRepository.findItemById(item.id())
+                .orElseThrow(() -> new IllegalStateException("Updated auction item could not be reloaded"));
+        AuctionSession storedSession = sessionRepository.findSessionById(session.id())
+                .orElseThrow(() -> new IllegalStateException("Updated auction session could not be reloaded"));
+        return new UpdatedDraft(storedItem, storedSession);
+    }
 }

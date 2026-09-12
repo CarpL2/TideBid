@@ -6,6 +6,8 @@ import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationServ
 import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
 import io.github.carpl2.tidebid.auction.application.AuctionPendingImageCleanupService;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftCreationService;
+import io.github.carpl2.tidebid.auction.application.AuctionDraftFieldsValidator;
+import io.github.carpl2.tidebid.auction.application.AuctionDraftUpdateService;
 import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
 import io.github.carpl2.tidebid.auction.application.port.AuctionDraftTransaction;
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
@@ -73,6 +75,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionStorageProperties storageProperties;
     @Autowired private AuctionTimingProperties timingProperties;
     @Autowired private AuctionDraftTransaction draftTransaction;
+    @Autowired private AuctionDraftUpdateService draftUpdateService;
     @Autowired private IdGenerator idGenerator;
     @Autowired private Clock clock;
 
@@ -114,13 +117,15 @@ class AuctionPersistenceIntegrationTest {
                             .verifyPendingUpload(stored.ownerId(), stored.objectKey());
             assertThat(verified.imageId()).isEqualTo(stored.id());
 
+            Instant previewExpiresNotBefore = clock.instant().truncatedTo(ChronoUnit.MICROS)
+                    .plus(storageProperties.readUrlTtl());
             AuctionImagePreviewService.ImagePreview preview =
                     new AuctionImagePreviewService(itemRepository, storage, storageProperties, clock)
                             .createOwnerPreview(stored.ownerId(), stored.objectKey());
+            Instant previewExpiresNotAfter = clock.instant().truncatedTo(ChronoUnit.MICROS)
+                    .plus(storageProperties.readUrlTtl());
             assertThat(preview.objectKey()).isEqualTo(stored.objectKey());
-            assertThat(preview.expiresAt()).isEqualTo(
-                    clock.instant().truncatedTo(ChronoUnit.MICROS).plus(storageProperties.readUrlTtl())
-            );
+            assertThat(preview.expiresAt()).isBetween(previewExpiresNotBefore, previewExpiresNotAfter);
             assertThat(storage.readRequests()).containsExactly(
                     new ObjectStoragePort.ReadSigningRequest(stored.objectKey(), preview.expiresAt())
             );
@@ -369,7 +374,7 @@ class AuctionPersistenceIntegrationTest {
                 draftTransaction,
                 idGenerator,
                 imageProperties,
-                timingProperties,
+                new AuctionDraftFieldsValidator(timingProperties, clock),
                 clock
         );
         AuctionDraftTransaction.CreatedDraft created = null;
@@ -458,6 +463,87 @@ class AuctionPersistenceIntegrationTest {
         }
     }
 
+    @Test
+    void draftUpdatePersistsItemAndSessionWithIndependentOptimisticVersions() {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem item = draftItem(itemId, sellerId, now);
+        AuctionSession session = draftSession(auctionId, itemId, sellerId, now, 0L);
+
+        try {
+            itemRepository.insertItem(item);
+            sessionRepository.insertSession(session);
+
+            AuctionDraftTransaction.UpdatedDraft updated = draftUpdateService.update(
+                    new AuctionDraftUpdateService.UpdateDraftCommand(
+                            sellerId, itemId, 0L, 0L,
+                            "Updated mechanical keyboard",
+                            "The seller updated both auction item and session fields",
+                            "electronics",
+                            AuctionItemCondition.LIKE_NEW,
+                            new BigDecimal("120"),
+                            new BigDecimal("20"),
+                            new BigDecimal("60"),
+                            now.plus(Duration.ofMinutes(3)),
+                            now.plus(Duration.ofHours(3))
+                    )
+            );
+
+            assertThat(updated.item().title()).isEqualTo("Updated mechanical keyboard");
+            assertThat(updated.item().category()).isEqualTo("ELECTRONICS");
+            assertThat(updated.item().version()).isEqualTo(1L);
+            assertThat(updated.session().startPrice()).isEqualByComparingTo("120.00");
+            assertThat(updated.session().bidIncrement()).isEqualByComparingTo("20.00");
+            assertThat(updated.session().depositAmount()).isEqualByComparingTo("60.00");
+            assertThat(updated.session().version()).isEqualTo(1L);
+        } finally {
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void draftUpdateRollsBackItemWhenSessionVersionConflicts() {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem originalItem = draftItem(itemId, sellerId, now);
+        AuctionSession originalSession = draftSession(auctionId, itemId, sellerId, now, 0L);
+        AuctionItem changedItem = new AuctionItem(
+                originalItem.id(), originalItem.sellerId(),
+                "This title must roll back", originalItem.description(), originalItem.category(),
+                originalItem.itemCondition(), originalItem.reviewStatus(), originalItem.submissionVersion(),
+                originalItem.version(), originalItem.submittedAt(), originalItem.approvedAt(),
+                originalItem.createdAt(), now
+        );
+        AuctionSession staleSession = new AuctionSession(
+                originalSession.id(), originalSession.itemId(), originalSession.sellerId(),
+                new BigDecimal("120.00"), originalSession.bidIncrement(), originalSession.depositAmount(),
+                originalSession.currentPrice(), originalSession.currentBidderId(), originalSession.bidCount(),
+                originalSession.startAt(), originalSession.endAt(), originalSession.status(),
+                99L, originalSession.createdAt(), now
+        );
+
+        try {
+            itemRepository.insertItem(originalItem);
+            sessionRepository.insertSession(originalSession);
+
+            assertThatThrownBy(() -> draftTransaction.update(changedItem, staleSession))
+                    .isInstanceOf(AuctionDraftTransaction.DraftUpdateConflictException.class);
+
+            AuctionItem rolledBackItem = itemRepository.findItemById(itemId).orElseThrow();
+            assertThat(rolledBackItem.title()).isEqualTo(originalItem.title());
+            assertThat(rolledBackItem.version()).isZero();
+            assertThat(sessionRepository.findSessionById(auctionId).orElseThrow().version()).isZero();
+        } finally {
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
     private static AuctionItem draftItem(long itemId, long sellerId, Instant now) {
         return new AuctionItem(
                 itemId,
@@ -473,6 +559,22 @@ class AuctionPersistenceIntegrationTest {
                 null,
                 now.minusSeconds(60),
                 now.minusSeconds(60)
+        );
+    }
+
+    private static AuctionSession draftSession(
+            long auctionId,
+            long itemId,
+            long sellerId,
+            Instant now,
+            long version
+    ) {
+        return new AuctionSession(
+                auctionId, itemId, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0,
+                now.plus(Duration.ofMinutes(2)), now.plus(Duration.ofHours(2)),
+                AuctionSessionStatus.DRAFT, version, now, now
         );
     }
 

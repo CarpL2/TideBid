@@ -16,6 +16,8 @@ public interface AuctionDraftTransaction {
             Instant boundAt
     );
 
+    UpdatedDraft update(AuctionItem item, AuctionSession session);
+
     record ImageBinding(long imageId, long ownerId, String objectKey, int sortOrder) {
         public ImageBinding {
             if (imageId <= 0 || ownerId <= 0) {
@@ -37,8 +39,22 @@ public interface AuctionDraftTransaction {
         }
     }
 
+    record UpdatedDraft(AuctionItem item, AuctionSession session) {
+        public UpdatedDraft {
+            if (item == null || session == null) {
+                throw new IllegalArgumentException("item and session must not be null");
+            }
+        }
+    }
+
     final class ImageBindingConflictException extends RuntimeException {
         public ImageBindingConflictException(String message) {
+            super(message);
+        }
+    }
+
+    final class DraftUpdateConflictException extends RuntimeException {
+        public DraftUpdateConflictException(String message) {
             super(message);
         }
     }

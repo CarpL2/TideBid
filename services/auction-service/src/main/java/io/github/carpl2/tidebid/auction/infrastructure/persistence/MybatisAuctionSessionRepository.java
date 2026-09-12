@@ -49,6 +49,14 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
     }
 
     @Override
+    public boolean updateDraftSession(AuctionSession session) {
+        if (session == null) {
+            throw new IllegalArgumentException("session must not be null");
+        }
+        return sessionMapper.updateDraft(AuctionPersistenceMapping.toEntity(session)) == 1;
+    }
+
+    @Override
     public BidRecord insertBid(BidRecord bid) {
         BidRecordEntity entity = AuctionPersistenceMapping.toEntity(bid);
         MybatisAuctionItemRepository.requireSingleRow(bidMapper.insert(entity), "bid record insert");

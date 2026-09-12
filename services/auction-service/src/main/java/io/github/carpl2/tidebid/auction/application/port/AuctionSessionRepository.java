@@ -13,6 +13,8 @@ public interface AuctionSessionRepository {
 
     Optional<AuctionSession> findSessionByItemId(long itemId);
 
+    boolean updateDraftSession(AuctionSession session);
+
     BidRecord insertBid(BidRecord bid);
 
     Optional<BidRecord> findBid(long bidderId, String requestId);

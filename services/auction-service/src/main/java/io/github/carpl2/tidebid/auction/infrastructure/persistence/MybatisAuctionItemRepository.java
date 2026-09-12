@@ -51,6 +51,14 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
     }
 
     @Override
+    public boolean updateEditableItem(AuctionItem item) {
+        if (item == null) {
+            throw new IllegalArgumentException("item must not be null");
+        }
+        return itemMapper.updateEditable(AuctionPersistenceMapping.toEntity(item)) == 1;
+    }
+
+    @Override
     public AuctionItemImage insertImage(AuctionItemImage image) {
         AuctionItemImageEntity entity = AuctionPersistenceMapping.toEntity(image);
         requireSingleRow(imageMapper.insert(entity), "auction image insert");
