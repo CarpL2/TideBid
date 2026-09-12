@@ -1,0 +1,165 @@
+package io.github.carpl2.tidebid.auction;
+
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
+import io.github.carpl2.tidebid.auction.domain.AuctionImageStatus;
+import io.github.carpl2.tidebid.auction.domain.AuctionItem;
+import io.github.carpl2.tidebid.auction.domain.AuctionItemCondition;
+import io.github.carpl2.tidebid.auction.domain.AuctionItemImage;
+import io.github.carpl2.tidebid.auction.domain.AuctionItemReviewStatus;
+import io.github.carpl2.tidebid.auction.domain.AuctionRegistration;
+import io.github.carpl2.tidebid.auction.domain.AuctionRegistrationStatus;
+import io.github.carpl2.tidebid.auction.domain.AuctionReview;
+import io.github.carpl2.tidebid.auction.domain.AuctionReviewDecision;
+import io.github.carpl2.tidebid.auction.domain.AuctionSession;
+import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
+import io.github.carpl2.tidebid.auction.domain.BidRecord;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionItemEntity;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionItemImageMapper;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionItemMapper;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionRegistrationMapper;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionReviewMapper;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionSessionMapper;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.BidRecordMapper;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.NONE,
+        properties = "tidebid.auction.account-client.internal-token=test-internal-token-with-at-least-32-characters"
+)
+@ActiveProfiles("local-db")
+@EnabledIfEnvironmentVariable(named = "TIDEBID_AUCTION_DB_PASSWORD", matches = ".+")
+class AuctionPersistenceIntegrationTest {
+
+    @Autowired private AuctionItemRepository itemRepository;
+    @Autowired private AuctionSessionRepository sessionRepository;
+    @Autowired private AuctionRegistrationRepository registrationRepository;
+    @Autowired private AuctionItemMapper itemMapper;
+    @Autowired private AuctionItemImageMapper imageMapper;
+    @Autowired private AuctionReviewMapper reviewMapper;
+    @Autowired private AuctionSessionMapper sessionMapper;
+    @Autowired private AuctionRegistrationMapper registrationMapper;
+    @Autowired private BidRecordMapper bidMapper;
+
+    @Test
+    void repositoriesRoundTripTheCompleteAuctionPersistenceGraph() {
+        long itemId = IdWorker.getId();
+        long imageId = IdWorker.getId();
+        long reviewId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long registrationId = IdWorker.getId();
+        long bidId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        long bidderId = IdWorker.getId();
+        long reviewerId = IdWorker.getId();
+        Instant createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS).minusSeconds(7200);
+        Instant submittedAt = createdAt.plusMillis(100);
+        Instant approvedAt = createdAt.plusMillis(200);
+        Instant startAt = approvedAt.plusSeconds(3600);
+        Instant endAt = approvedAt.plusSeconds(7200);
+        Instant bidAt = startAt.plusSeconds(1);
+
+        AuctionItem item = new AuctionItem(
+                itemId, sellerId, "Mechanical keyboard", "A hot-swappable mechanical keyboard",
+                "ELECTRONICS", AuctionItemCondition.LIKE_NEW, AuctionItemReviewStatus.APPROVED,
+                1, 0, submittedAt, approvedAt, createdAt, approvedAt
+        );
+        AuctionItemImage image = new AuctionItemImage(
+                imageId, itemId, sellerId, "dev/users/test/item.webp", "item.webp",
+                "image/webp", 4096, null, 0, AuctionImageStatus.BOUND,
+                createdAt.plusSeconds(600), createdAt, approvedAt
+        );
+        AuctionReview review = new AuctionReview(
+                reviewId, itemId, 1, reviewerId, AuctionReviewDecision.APPROVED,
+                "The listing satisfies the platform requirements", approvedAt
+        );
+        AuctionSession session = new AuctionSession(
+                auctionId, itemId, sellerId, new BigDecimal("100.00"), new BigDecimal("10.00"),
+                new BigDecimal("50.00"), new BigDecimal("100.00"), bidderId, 1,
+                startAt, endAt, AuctionSessionStatus.OPEN, 0, createdAt, bidAt
+        );
+        AuctionRegistration registration = new AuctionRegistration(
+                registrationId, "REGISTRATION:" + registrationId, auctionId, bidderId,
+                new BigDecimal("50.00"), AuctionRegistrationStatus.REGISTERED, null, 1,
+                null, approvedAt, null, null, approvedAt, 0, createdAt, approvedAt
+        );
+        BidRecord bid = new BidRecord(
+                bidId, auctionId, bidderId, "request_" + bidId, new BigDecimal("100.00"),
+                null, 1, bidAt
+        );
+
+        try {
+            assertThat(itemRepository.insertItem(item)).usingRecursiveComparison().isEqualTo(item);
+            assertThat(itemRepository.insertImage(image)).usingRecursiveComparison().isEqualTo(image);
+            assertThat(itemRepository.insertReview(review)).usingRecursiveComparison().isEqualTo(review);
+            assertThat(sessionRepository.insertSession(session)).usingRecursiveComparison().isEqualTo(session);
+            assertThat(registrationRepository.insert(registration)).usingRecursiveComparison().isEqualTo(registration);
+            assertThat(sessionRepository.insertBid(bid)).usingRecursiveComparison().isEqualTo(bid);
+
+            assertThat(itemRepository.findImageByObjectKey(image.objectKey())).contains(image);
+            assertThat(itemRepository.findReview(itemId, 1)).contains(review);
+            assertThat(sessionRepository.findSessionByItemId(itemId)).contains(session);
+            assertThat(registrationRepository.findByRegistrationNo(registration.registrationNo()))
+                    .contains(registration);
+            assertThat(registrationRepository.findByAuctionAndBidder(auctionId, bidderId))
+                    .contains(registration);
+            assertThat(sessionRepository.findBid(bidderId, bid.requestId())).contains(bid);
+        } finally {
+            bidMapper.deleteById(bidId);
+            registrationMapper.deleteById(registrationId);
+            sessionMapper.deleteById(auctionId);
+            reviewMapper.deleteById(reviewId);
+            imageMapper.deleteById(imageId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void assignIdAuditFillAndOptimisticLockAreActive() {
+        AuctionItemEntity entity = new AuctionItemEntity();
+        entity.setSellerId(IdWorker.getId());
+        entity.setTitle("Original title");
+        entity.setDescription("A listing used to verify optimistic locking");
+        entity.setCategory("OTHER");
+        entity.setItemCondition("GOOD");
+        entity.setReviewStatus("DRAFT");
+        entity.setSubmissionVersion(0);
+
+        try {
+            assertThat(itemMapper.insert(entity)).isEqualTo(1);
+            assertThat(entity.getId()).isPositive();
+            assertThat(entity.getVersion()).isZero();
+            assertThat(entity.getCreatedAt()).isNotNull();
+            assertThat(entity.getUpdatedAt()).isNotNull();
+
+            AuctionItemEntity firstWriter = itemMapper.selectById(entity.getId());
+            AuctionItemEntity staleWriter = itemMapper.selectById(entity.getId());
+            firstWriter.setTitle("First writer wins");
+            staleWriter.setTitle("Stale writer must fail");
+
+            assertThat(itemMapper.updateById(firstWriter)).isEqualTo(1);
+            assertThat(firstWriter.getVersion()).isEqualTo(1L);
+            assertThat(itemMapper.updateById(staleWriter)).isZero();
+
+            AuctionItemEntity stored = itemMapper.selectById(entity.getId());
+            assertThat(stored.getTitle()).isEqualTo("First writer wins");
+            assertThat(stored.getVersion()).isEqualTo(1L);
+        } finally {
+            if (entity.getId() != null) {
+                itemMapper.deleteById(entity.getId());
+            }
+        }
+    }
+}
