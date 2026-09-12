@@ -5,6 +5,7 @@ import io.github.carpl2.tidebid.core.ErrorCode;
 public enum AuctionErrorCode implements ErrorCode {
 
     ASSET_NOT_FOUND("AUCTION_ASSET_NOT_FOUND", "Auction asset was not found", 404),
+    ASSET_INVALID("AUCTION_ASSET_INVALID", "Auction asset input is invalid", 400),
     ASSET_ACCESS_DENIED("AUCTION_ASSET_ACCESS_DENIED", "Access to the auction asset is forbidden", 403),
     ASSET_STATE_CONFLICT("AUCTION_ASSET_STATE_CONFLICT", "Auction asset is not in the required state", 409),
     SUBMISSION_VERSION_CONFLICT("AUCTION_SUBMISSION_VERSION_CONFLICT", "Auction submission version is stale", 409),

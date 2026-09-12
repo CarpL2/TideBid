@@ -5,7 +5,10 @@ import io.github.carpl2.tidebid.auction.application.AuctionImagePreviewService;
 import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationService;
 import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
 import io.github.carpl2.tidebid.auction.application.AuctionPendingImageCleanupService;
+import io.github.carpl2.tidebid.auction.application.AuctionDraftCreationService;
 import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
+import io.github.carpl2.tidebid.auction.application.port.AuctionDraftTransaction;
+import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
@@ -32,6 +35,7 @@ import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.BidRec
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageCleanupProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
 import io.github.carpl2.tidebid.auction.support.FakeObjectStorageAdapter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -46,6 +50,7 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
@@ -66,6 +71,9 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private BidRecordMapper bidMapper;
     @Autowired private AuctionImageProperties imageProperties;
     @Autowired private AuctionStorageProperties storageProperties;
+    @Autowired private AuctionTimingProperties timingProperties;
+    @Autowired private AuctionDraftTransaction draftTransaction;
+    @Autowired private IdGenerator idGenerator;
     @Autowired private Clock clock;
 
     @Test
@@ -345,6 +353,111 @@ class AuctionPersistenceIntegrationTest {
         }
     }
 
+    @Test
+    void draftCreationPersistsItemSessionAndVerifiedImagesAtomically() {
+        long sellerId = IdWorker.getId();
+        long firstImageId = IdWorker.getId();
+        long secondImageId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItemImage firstImage = pendingImage(firstImageId, sellerId, "draft-first.webp", now);
+        AuctionItemImage secondImage = pendingImage(secondImageId, sellerId, "draft-second.webp", now);
+        FakeObjectStorageAdapter storage = new FakeObjectStorageAdapter();
+        storage.store(metadata(firstImage));
+        storage.store(metadata(secondImage));
+        AuctionDraftCreationService service = new AuctionDraftCreationService(
+                new AuctionImageVerificationService(itemRepository, storage, clock),
+                draftTransaction,
+                idGenerator,
+                imageProperties,
+                timingProperties,
+                clock
+        );
+        AuctionDraftTransaction.CreatedDraft created = null;
+
+        try {
+            itemRepository.insertImage(firstImage);
+            itemRepository.insertImage(secondImage);
+            created = service.create(new AuctionDraftCreationService.CreateDraftCommand(
+                    sellerId,
+                    "Mechanical keyboard",
+                    "A keyboard created through the transactional draft workflow",
+                    "electronics",
+                    AuctionItemCondition.GOOD,
+                    new BigDecimal("100.00"),
+                    new BigDecimal("10.00"),
+                    new BigDecimal("50.00"),
+                    now.plus(Duration.ofMinutes(2)),
+                    now.plus(Duration.ofHours(2)),
+                    java.util.List.of(firstImage.objectKey(), secondImage.objectKey())
+            ));
+
+            assertThat(itemRepository.findItemById(created.item().id())).contains(created.item());
+            assertThat(sessionRepository.findSessionByItemId(created.item().id())).contains(created.session());
+            assertThat(created.session().status()).isEqualTo(AuctionSessionStatus.DRAFT);
+            assertThat(created.images()).extracting(AuctionItemImage::sortOrder).containsExactly(0, 1);
+            long createdItemId = created.item().id();
+            assertThat(created.images()).allMatch(image ->
+                    image.storageStatus() == AuctionImageStatus.BOUND
+                            && Long.valueOf(createdItemId).equals(image.itemId())
+            );
+        } finally {
+            imageMapper.deleteById(secondImageId);
+            imageMapper.deleteById(firstImageId);
+            if (created != null) {
+                sessionMapper.deleteById(created.session().id());
+                itemMapper.deleteById(created.item().id());
+            }
+        }
+    }
+
+    @Test
+    void draftTransactionRollsBackItemSessionAndEarlierImageBindingOnLaterConflict() {
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long sellerId = IdWorker.getId();
+        long imageId = IdWorker.getId();
+        long missingImageId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionItem item = draftItem(itemId, sellerId, now);
+        AuctionSession session = new AuctionSession(
+                auctionId, itemId, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0,
+                now.plus(Duration.ofMinutes(2)), now.plus(Duration.ofHours(2)),
+                AuctionSessionStatus.DRAFT, 0, now, now
+        );
+        AuctionItemImage image = pendingImage(imageId, sellerId, "rollback.webp", now);
+
+        try {
+            itemRepository.insertImage(image);
+
+            assertThatThrownBy(() -> draftTransaction.create(
+                    item,
+                    session,
+                    java.util.List.of(
+                            new AuctionDraftTransaction.ImageBinding(imageId, sellerId, image.objectKey(), 0),
+                            new AuctionDraftTransaction.ImageBinding(
+                                    missingImageId,
+                                    sellerId,
+                                    "dev/users/" + sellerId + "/202609/missing.webp",
+                                    1
+                            )
+                    ),
+                    now
+            )).isInstanceOf(AuctionDraftTransaction.ImageBindingConflictException.class);
+
+            assertThat(itemRepository.findItemById(itemId)).isEmpty();
+            assertThat(sessionRepository.findSessionById(auctionId)).isEmpty();
+            AuctionItemImage rolledBack = itemRepository.findImageByObjectKey(image.objectKey()).orElseThrow();
+            assertThat(rolledBack.storageStatus()).isEqualTo(AuctionImageStatus.PENDING);
+            assertThat(rolledBack.itemId()).isNull();
+        } finally {
+            imageMapper.deleteById(imageId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
     private static AuctionItem draftItem(long itemId, long sellerId, Instant now) {
         return new AuctionItem(
                 itemId,
@@ -409,6 +522,12 @@ class AuctionPersistenceIntegrationTest {
                 createdAt.plus(Duration.ofMinutes(10)),
                 createdAt,
                 createdAt
+        );
+    }
+
+    private static ObjectStoragePort.StoredObjectMetadata metadata(AuctionItemImage image) {
+        return new ObjectStoragePort.StoredObjectMetadata(
+                image.objectKey(), image.contentType(), image.contentLength(), image.contentSha256()
         );
     }
 }
