@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.github.carpl2.tidebid.auction.application.AuctionImagePreviewService;
 import io.github.carpl2.tidebid.auction.application.AuctionAssetQueryService;
+import io.github.carpl2.tidebid.auction.application.AuctionBidService;
 import io.github.carpl2.tidebid.auction.application.AuctionDetailQueryService;
 import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationService;
 import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
@@ -107,6 +108,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionSubmissionTransaction submissionTransaction;
     @Autowired private AuctionReviewTransaction reviewTransaction;
     @Autowired private AuctionAssetQueryService assetQueryService;
+    @Autowired private AuctionBidService bidService;
     @Autowired private AuctionDetailQueryService detailQueryService;
     @Autowired private AuctionRegistrationCreationService registrationCreationService;
     @Autowired private AuctionRegistrationRecoveryTransaction registrationRecoveryTransaction;
@@ -1188,6 +1190,114 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void bidServiceReturnsOnePersistedResultForIdempotentRetries() {
+        long sellerId = IdWorker.getId();
+        long bidderId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long registrationId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession opened = openSession(
+                auctionId, itemId, sellerId,
+                now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)), 4L, now
+        );
+        AuctionRegistration registered = new AuctionRegistration(
+                registrationId, "REGISTRATION:" + registrationId, auctionId, bidderId,
+                new BigDecimal("50.00"), AuctionRegistrationStatus.REGISTERED, null, 1,
+                null, now.minusSeconds(30), null, null, now.minusSeconds(30), 1L,
+                now.minusSeconds(60), now.minusSeconds(30)
+        );
+        String requestId = "service-bid-" + bidderId;
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(opened);
+            registrationRepository.insert(registered);
+
+            BidRecord first = bidService.place(new AuctionBidService.PlaceBidCommand(
+                    bidderId, auctionId, requestId, new BigDecimal("100")
+            ));
+            BidRecord repeated = bidService.place(new AuctionBidService.PlaceBidCommand(
+                    bidderId, auctionId, requestId, new BigDecimal("100.0")
+            ));
+
+            assertThat(repeated).isEqualTo(first);
+            assertThat(bidMapper.selectCount(new LambdaQueryWrapper<BidRecordEntity>()
+                    .eq(BidRecordEntity::getAuctionId, auctionId))).isEqualTo(1L);
+            AuctionSession stored = sessionRepository.findSessionById(auctionId).orElseThrow();
+            assertThat(stored.currentPrice()).isEqualByComparingTo("100.00");
+            assertThat(stored.currentBidderId()).isEqualTo(bidderId);
+            assertThat(stored.bidCount()).isEqualTo(1L);
+            assertThat(stored.version()).isEqualTo(opened.version() + 1);
+
+            assertThatThrownBy(() -> bidService.place(new AuctionBidService.PlaceBidCommand(
+                    bidderId, auctionId, requestId, new BigDecimal("110.00")
+            ))).isInstanceOfSatisfying(BusinessException.class, exception ->
+                    assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.IDEMPOTENCY_CONFLICT)
+            );
+            assertThat(sessionRepository.findSessionById(auctionId)).contains(stored);
+        } finally {
+            bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
+                    .eq(BidRecordEntity::getAuctionId, auctionId));
+            registrationMapper.deleteById(registrationId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void concurrentSameBidRequestReturnsOneIdempotentResult() throws Exception {
+        long sellerId = IdWorker.getId();
+        long bidderId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long registrationId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession opened = openSession(
+                auctionId, itemId, sellerId,
+                now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)), 2L, now
+        );
+        AuctionRegistration registered = new AuctionRegistration(
+                registrationId, "REGISTRATION:" + registrationId, auctionId, bidderId,
+                new BigDecimal("50.00"), AuctionRegistrationStatus.REGISTERED, null, 1,
+                null, now.minusSeconds(30), null, null, now.minusSeconds(30), 1L,
+                now.minusSeconds(60), now.minusSeconds(30)
+        );
+        AuctionBidService.PlaceBidCommand command = new AuctionBidService.PlaceBidCommand(
+                bidderId, auctionId, "concurrent-idempotent-bid", new BigDecimal("100.00")
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(opened);
+            registrationRepository.insert(registered);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                Future<BidRecord> first = executor.submit(() -> placeBidConcurrently(ready, start, command));
+                Future<BidRecord> second = executor.submit(() -> placeBidConcurrently(ready, start, command));
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                assertThat(first.get(10, TimeUnit.SECONDS))
+                        .isEqualTo(second.get(10, TimeUnit.SECONDS));
+            }
+
+            assertThat(bidMapper.selectCount(new LambdaQueryWrapper<BidRecordEntity>()
+                    .eq(BidRecordEntity::getAuctionId, auctionId))).isEqualTo(1L);
+            AuctionSession stored = sessionRepository.findSessionById(auctionId).orElseThrow();
+            assertThat(stored.currentPrice()).isEqualByComparingTo("100.00");
+            assertThat(stored.bidCount()).isEqualTo(1L);
+            assertThat(stored.version()).isEqualTo(opened.version() + 1);
+        } finally {
+            bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
+                    .eq(BidRecordEntity::getAuctionId, auctionId));
+            registrationMapper.deleteById(registrationId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void assetDetailCatchesUpPastEndSessionWithoutSkippingLifecycleStates() {
         long sellerId = IdWorker.getId();
         long itemId = IdWorker.getId();
@@ -1808,6 +1918,18 @@ class AuctionPersistenceIntegrationTest {
         } catch (AuctionBidTransaction.BidConflictException exception) {
             return "CONFLICT";
         }
+    }
+
+    private BidRecord placeBidConcurrently(
+            CountDownLatch ready,
+            CountDownLatch start,
+            AuctionBidService.PlaceBidCommand command
+    ) throws InterruptedException {
+        ready.countDown();
+        if (!start.await(5, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("Concurrent idempotent bid start timed out");
+        }
+        return bidService.place(command);
     }
 
     private static AuctionItem draftItem(long itemId, long sellerId, Instant now) {
