@@ -46,15 +46,16 @@ class AuctionAssetQueryServiceTest {
     private AuctionItemRepository itemRepository;
     private AuctionSessionRepository sessionRepository;
     private ObjectStoragePort objectStorage;
-    private AuctionSessionOpeningService sessionOpeningService;
+    private AuctionSessionLifecycleService sessionLifecycleService;
 
     @BeforeEach
     void setUp() {
         itemRepository = mock(AuctionItemRepository.class);
         sessionRepository = mock(AuctionSessionRepository.class);
         objectStorage = mock(ObjectStoragePort.class);
-        sessionOpeningService = mock(AuctionSessionOpeningService.class);
-        when(sessionOpeningService.openIfDue(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        sessionLifecycleService = mock(AuctionSessionLifecycleService.class);
+        when(sessionLifecycleService.advanceToCurrentState(any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
@@ -156,7 +157,7 @@ class AuctionAssetQueryServiceTest {
         when(itemRepository.findItemById(102L)).thenReturn(Optional.of(approved));
         when(sessionRepository.findSessionByItemId(101L)).thenReturn(Optional.of(session(201L, 101L)));
         when(sessionRepository.findSessionByItemId(102L)).thenReturn(Optional.of(scheduled));
-        when(sessionOpeningService.openIfDue(scheduled)).thenReturn(opened);
+        when(sessionLifecycleService.advanceToCurrentState(scheduled)).thenReturn(opened);
         when(itemRepository.findBoundImagesByItemIds(any())).thenReturn(List.of());
         when(itemRepository.findLatestReview(anyLong())).thenReturn(Optional.empty());
         AuctionAssetQueryService service = service(false);
@@ -272,7 +273,7 @@ class AuctionAssetQueryServiceTest {
                 sessionRepository,
                 objectStorage,
                 storageProperties(storageEnabled),
-                sessionOpeningService,
+                sessionLifecycleService,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }

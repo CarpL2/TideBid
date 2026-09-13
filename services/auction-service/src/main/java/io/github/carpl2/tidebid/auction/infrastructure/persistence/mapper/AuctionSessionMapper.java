@@ -63,4 +63,20 @@ public interface AuctionSessionMapper extends BaseMapper<AuctionSessionEntity> {
             @Param("expectedVersion") long expectedVersion,
             @Param("openedAt") Instant openedAt
     );
+
+    @Update("""
+            UPDATE auction_session
+            SET status = 'AWAITING_CLOSE',
+                updated_at = #{endedAt},
+                version = version + 1
+            WHERE id = #{auctionId}
+              AND status = 'OPEN'
+              AND version = #{expectedVersion}
+              AND end_at <= #{endedAt}
+            """)
+    int markAwaitingClose(
+            @Param("auctionId") long auctionId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("endedAt") Instant endedAt
+    );
 }

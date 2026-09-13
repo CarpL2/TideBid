@@ -31,6 +31,8 @@ public interface AuctionSessionRepository {
 
     boolean openScheduledSession(long auctionId, long expectedVersion, Instant openedAt);
 
+    boolean markOpenSessionAwaitingClose(long auctionId, long expectedVersion, Instant endedAt);
+
     BidRecord insertBid(BidRecord bid);
 
     Optional<BidRecord> findBid(long bidderId, String requestId);

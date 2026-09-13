@@ -45,7 +45,6 @@ import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProper
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageCleanupProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
-import io.github.carpl2.tidebid.auction.infrastructure.scheduling.AuctionSessionOpeningJob;
 import io.github.carpl2.tidebid.auction.support.FakeObjectStorageAdapter;
 import io.github.carpl2.tidebid.core.BusinessException;
 import org.junit.jupiter.api.Test;
@@ -74,7 +73,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
                 "tidebid.auction.account-client.internal-token=test-internal-token-with-at-least-32-characters",
-                "tidebid.auction.timing.opening-scan-interval=1m"
+                "tidebid.auction.timing.opening-scan-enabled=false"
         }
 )
 @ActiveProfiles("local-db")
@@ -100,7 +99,6 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionAssetQueryService assetQueryService;
     @Autowired private AuctionReviewService reviewService;
     @Autowired private AuctionSessionOpeningService sessionOpeningService;
-    @Autowired private AuctionSessionOpeningJob sessionOpeningJob;
     @Autowired private IdGenerator idGenerator;
     @Autowired private Clock clock;
 
@@ -913,8 +911,6 @@ class AuctionPersistenceIntegrationTest {
             assertThat(sessionRepository.findDueScheduledSessions(now, 1))
                     .extracting(AuctionSession::id)
                     .containsExactly(olderAuctionId);
-            assertThat(sessionOpeningJob).isNotNull();
-
             assertThat(sessionOpeningService.openDueSessions())
                     .isEqualTo(new AuctionSessionOpeningService.OpeningResult(2, 2, 0));
             assertThat(sessionRepository.findSessionById(olderAuctionId).orElseThrow().status())
@@ -957,6 +953,78 @@ class AuctionPersistenceIntegrationTest {
             assertThat(stored.status()).isEqualTo(AuctionSessionStatus.OPEN);
             assertThat(stored.version()).isEqualTo(scheduled.version() + 1);
             assertThat(stored.updatedAt()).isAfterOrEqualTo(now);
+        } finally {
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void awaitingCloseCasHonorsEndTimeVersionAndTerminalState() {
+        long sellerId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        Instant endedAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession opened = openSession(
+                auctionId, itemId, sellerId,
+                endedAt.minus(Duration.ofHours(2)), endedAt, 4L, endedAt
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, endedAt));
+            sessionRepository.insertSession(opened);
+
+            assertThat(sessionRepository.markOpenSessionAwaitingClose(
+                    auctionId, opened.version(), endedAt.minusNanos(1_000)
+            )).isFalse();
+            assertThat(sessionRepository.markOpenSessionAwaitingClose(
+                    auctionId, opened.version() - 1, endedAt
+            )).isFalse();
+            assertThat(sessionRepository.markOpenSessionAwaitingClose(
+                    auctionId, opened.version(), endedAt
+            )).isTrue();
+
+            AuctionSession awaitingClose = sessionRepository.findSessionById(auctionId).orElseThrow();
+            assertThat(awaitingClose.status()).isEqualTo(AuctionSessionStatus.AWAITING_CLOSE);
+            assertThat(awaitingClose.version()).isEqualTo(opened.version() + 1);
+            assertThat(awaitingClose.updatedAt()).isEqualTo(endedAt);
+            assertThat(sessionRepository.markOpenSessionAwaitingClose(
+                    auctionId, awaitingClose.version(), endedAt
+            )).isFalse();
+        } finally {
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void assetDetailCatchesUpPastEndSessionWithoutSkippingLifecycleStates() {
+        long sellerId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Instant startAt = now.minus(Duration.ofHours(2));
+        AuctionSession scheduled = new AuctionSession(
+                auctionId, itemId, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0,
+                startAt, now.minusSeconds(1), AuctionSessionStatus.SCHEDULED, 9L,
+                startAt.minusSeconds(60), startAt.minusSeconds(30)
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(scheduled);
+
+            AuctionAssetQueryService.AssetDetail detail = assetQueryService.findDetail(
+                    sellerId, false, itemId
+            );
+
+            assertThat(detail.sessionStatus()).isEqualTo(AuctionSessionStatus.AWAITING_CLOSE);
+            assertThat(detail.sessionVersion()).isEqualTo(scheduled.version() + 2);
+            AuctionSession stored = sessionRepository.findSessionById(auctionId).orElseThrow();
+            assertThat(stored.status()).isEqualTo(AuctionSessionStatus.AWAITING_CLOSE);
+            assertThat(stored.version()).isEqualTo(scheduled.version() + 2);
         } finally {
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
@@ -1187,6 +1255,24 @@ class AuctionPersistenceIntegrationTest {
                 null, null, 0,
                 startAt, startAt.plus(Duration.ofHours(2)),
                 AuctionSessionStatus.SCHEDULED, version, now.minusSeconds(180), now.minusSeconds(60)
+        );
+    }
+
+    private static AuctionSession openSession(
+            long auctionId,
+            long itemId,
+            long sellerId,
+            Instant startAt,
+            Instant endAt,
+            long version,
+            Instant now
+    ) {
+        return new AuctionSession(
+                auctionId, itemId, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0,
+                startAt, endAt, AuctionSessionStatus.OPEN, version,
+                startAt.minusSeconds(60), now.minusSeconds(1)
         );
     }
 

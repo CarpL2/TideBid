@@ -13,7 +13,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -78,50 +77,6 @@ class AuctionSessionOpeningServiceTest {
                 .hasMessage("database unavailable");
     }
 
-    @Test
-    void lazyOpeningDoesNothingBeforeTheStartInstant() {
-        AuctionSession scheduled = session(103L, 5L, OPENED_AT.plusSeconds(1));
-
-        assertThat(service.openIfDue(scheduled)).isSameAs(scheduled);
-
-        verify(repository, never()).openScheduledSession(anyLong(), anyLong(), any());
-        verify(repository, never()).findSessionById(anyLong());
-    }
-
-    @Test
-    void lazyOpeningUsesCasAtTheExactStartInstantAndReturnsDatabaseTruth() {
-        AuctionSession scheduled = session(104L, 8L, OPENED_AT);
-        AuctionSession opened = withState(scheduled, AuctionSessionStatus.OPEN, 9L, OPENED_AT);
-        when(repository.openScheduledSession(104L, 8L, OPENED_AT)).thenReturn(true);
-        when(repository.findSessionById(104L)).thenReturn(Optional.of(opened));
-
-        assertThat(service.openIfDue(scheduled)).isEqualTo(opened);
-
-        verify(repository).openScheduledSession(104L, 8L, OPENED_AT);
-        verify(repository).findSessionById(104L);
-    }
-
-    @Test
-    void lazyOpeningReloadsWinnerWhenAnotherInstanceWinsTheCas() {
-        AuctionSession stale = session(105L, 2L, OPENED_AT.minusSeconds(1));
-        AuctionSession opened = withState(stale, AuctionSessionStatus.OPEN, 3L, OPENED_AT);
-        when(repository.openScheduledSession(105L, 2L, OPENED_AT)).thenReturn(false);
-        when(repository.findSessionById(105L)).thenReturn(Optional.of(opened));
-
-        assertThat(service.openIfDue(stale)).isEqualTo(opened);
-    }
-
-    @Test
-    void lazyOpeningIsIdempotentForAnAlreadyOpenSnapshot() {
-        AuctionSession scheduled = session(106L, 4L, OPENED_AT.minusSeconds(10));
-        AuctionSession opened = withState(scheduled, AuctionSessionStatus.OPEN, 5L, OPENED_AT.minusSeconds(5));
-
-        assertThat(service.openIfDue(opened)).isSameAs(opened);
-
-        verify(repository, never()).openScheduledSession(anyLong(), anyLong(), any());
-        verify(repository, never()).findSessionById(anyLong());
-    }
-
     private static AuctionSession session(long auctionId, long version, Instant startAt) {
         return new AuctionSession(
                 auctionId, auctionId + 1000, auctionId + 2000,
@@ -132,17 +87,4 @@ class AuctionSessionOpeningServiceTest {
         );
     }
 
-    private static AuctionSession withState(
-            AuctionSession source,
-            AuctionSessionStatus status,
-            long version,
-            Instant updatedAt
-    ) {
-        return new AuctionSession(
-                source.id(), source.itemId(), source.sellerId(),
-                source.startPrice(), source.bidIncrement(), source.depositAmount(),
-                source.currentPrice(), source.currentBidderId(), source.bidCount(),
-                source.startAt(), source.endAt(), status, version, source.createdAt(), updatedAt
-        );
-    }
 }
