@@ -39,11 +39,22 @@ public interface AuctionSessionRepository {
 
     Optional<BidRecord> findBid(long bidderId, String requestId);
 
+    BidPage findBidsByAuction(long auctionId, int offset, int limit);
+
     record LobbySessionPage(List<AuctionSession> sessions, long total) {
         public LobbySessionPage {
             sessions = List.copyOf(sessions);
             if (total < sessions.size()) {
                 throw new IllegalArgumentException("total must not be below the returned session count");
+            }
+        }
+    }
+
+    record BidPage(List<BidRecord> bids, long total) {
+        public BidPage {
+            bids = List.copyOf(bids);
+            if (total < bids.size()) {
+                throw new IllegalArgumentException("total must not be below the returned bid count");
             }
         }
     }

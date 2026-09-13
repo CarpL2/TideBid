@@ -1051,6 +1051,58 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void bidHistoryUsesAuctionScopedDescendingSequencePagination() {
+        long sellerId = IdWorker.getId();
+        long firstBidderId = IdWorker.getId();
+        long secondBidderId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession opened = openSession(
+                auctionId, itemId, sellerId,
+                now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)), 1L, now
+        );
+        BidRecord first = new BidRecord(
+                IdWorker.getId(), auctionId, firstBidderId, "history-first-" + auctionId,
+                new BigDecimal("100.00"), null, 1L, now.plusSeconds(1)
+        );
+        BidRecord second = new BidRecord(
+                IdWorker.getId(), auctionId, secondBidderId, "history-second-" + auctionId,
+                new BigDecimal("110.00"), new BigDecimal("100.00"), 2L, now.plusSeconds(2)
+        );
+        BidRecord third = new BidRecord(
+                IdWorker.getId(), auctionId, firstBidderId, "history-third-" + auctionId,
+                new BigDecimal("130.00"), new BigDecimal("110.00"), 3L, now.plusSeconds(3)
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(opened);
+            sessionRepository.insertBid(first);
+            sessionRepository.insertBid(second);
+            sessionRepository.insertBid(third);
+
+            AuctionSessionRepository.BidPage firstPage =
+                    sessionRepository.findBidsByAuction(auctionId, 0, 2);
+            AuctionSessionRepository.BidPage secondPage =
+                    sessionRepository.findBidsByAuction(auctionId, 2, 2);
+
+            assertThat(firstPage.total()).isEqualTo(3L);
+            assertThat(firstPage.bids()).extracting(BidRecord::sequenceNo)
+                    .containsExactly(3L, 2L);
+            assertThat(secondPage.total()).isEqualTo(3L);
+            assertThat(secondPage.bids()).extracting(BidRecord::sequenceNo)
+                    .containsExactly(1L);
+            assertThat(sessionRepository.findBidsByAuction(IdWorker.getId(), 0, 20).bids()).isEmpty();
+        } finally {
+            bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
+                    .eq(BidRecordEntity::getAuctionId, auctionId));
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void bidTransactionRejectsStaleVersionAndEndBoundaryWithoutWritingABid() {
         long sellerId = IdWorker.getId();
         long bidderId = IdWorker.getId();
