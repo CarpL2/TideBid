@@ -8,6 +8,8 @@ import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRegistratio
 import io.github.carpl2.tidebid.core.TraceIds;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -19,6 +21,7 @@ import java.util.List;
 @Profile({"local-db", "nacos"})
 public class AuctionRegistrationRecoveryService {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(AuctionRegistrationRecoveryService.class);
     private static final String IDEMPOTENCY_CONFLICT = "ACCOUNT_WALLET_HOLD_IDEMPOTENCY_CONFLICT";
 
     private final AuctionRegistrationRecoveryTransaction recoveryTransaction;
@@ -132,6 +135,16 @@ public class AuctionRegistrationRecoveryService {
 
     private RecoveryOutcome scheduleRetry(AuctionRegistration registration, Instant attemptedAt) {
         int completedAttempts = registration.attemptCount() + 1;
+        if (completedAttempts >= properties.maximumAttempts()) {
+            AuctionRegistration exhausted = resultTransaction.markRecoveryExhausted(
+                    registration.id(), attemptedAt
+            );
+            LOGGER.error(
+                    "Registration recovery exhausted registrationId={} attempts={} status={}",
+                    registration.id(), completedAttempts, exhausted.status()
+            );
+            return outcome(exhausted);
+        }
         return outcome(resultTransaction.scheduleRetry(
                 registration.id(),
                 attemptedAt,

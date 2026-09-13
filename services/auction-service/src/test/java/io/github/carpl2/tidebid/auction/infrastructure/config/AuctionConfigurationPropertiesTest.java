@@ -65,19 +65,24 @@ class AuctionConfigurationPropertiesTest {
                 .hasMessageContaining("openingScanBatchSize");
         assertThatThrownBy(() -> new AuctionRegistrationRecoveryProperties(
                 Duration.ofMinutes(10), Duration.ofMinutes(5), Duration.ofSeconds(30),
-                Duration.ofSeconds(2), 50))
+                Duration.ofSeconds(2), 50, 8))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must not be shorter");
         assertThatThrownBy(() -> new AuctionRegistrationRecoveryProperties(
                 Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofSeconds(30),
-                Duration.ofSeconds(2), 0))
+                Duration.ofSeconds(2), 0, 8))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("batchSize");
         assertThatThrownBy(() -> new AuctionRegistrationRecoveryProperties(
                 Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofSeconds(30),
-                Duration.ofMillis(99), 50))
+                Duration.ofMillis(99), 50, 8))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("scanInterval");
+        assertThatThrownBy(() -> new AuctionRegistrationRecoveryProperties(
+                Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofSeconds(30),
+                Duration.ofSeconds(2), 50, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maximumAttempts");
         assertThatThrownBy(() -> new AuctionImageCleanupProperties(Duration.ofSeconds(5), 50))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("scanInterval");

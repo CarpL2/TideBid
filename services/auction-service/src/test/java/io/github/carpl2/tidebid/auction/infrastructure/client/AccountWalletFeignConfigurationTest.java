@@ -14,11 +14,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AccountWalletFeignConfigurationTest {
 
     @Test
-    void resolvesAccountByNacosServiceNameWithoutFixedUrl() {
+    void usesNacosServiceNameAndAllowsAnOptionalFixedUrlOverride() {
         FeignClient annotation = AccountWalletFeignClient.class.getAnnotation(FeignClient.class);
 
         assertThat(annotation.name()).isEqualTo("tidebid-account");
-        assertThat(annotation.url()).isEmpty();
+        assertThat(annotation.url()).isEqualTo("${tidebid.auction.account-client.base-url:}");
     }
 
     @Test

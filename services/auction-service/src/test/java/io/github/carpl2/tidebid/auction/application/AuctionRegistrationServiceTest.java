@@ -51,7 +51,7 @@ class AuctionRegistrationServiceTest {
                 resultTransaction,
                 new AuctionRegistrationRecoveryProperties(
                         Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofSeconds(30),
-                        Duration.ofSeconds(2), 50
+                        Duration.ofSeconds(2), 50, 8
                 ),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );

@@ -20,6 +20,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -50,7 +51,7 @@ class AuctionRegistrationRecoveryServiceTest {
                 accountWallet,
                 new AuctionRegistrationRecoveryProperties(
                         Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofSeconds(30),
-                        Duration.ofSeconds(2), 50
+                        Duration.ofSeconds(2), 50, 8
                 ),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
@@ -154,15 +155,31 @@ class AuctionRegistrationRecoveryServiceTest {
 
     @Test
     void convertsAnUnexpectedClientFailureIntoABoundedRetry() {
-        arrangeClaimed(claimedRegistration(10));
+        arrangeClaimed(claimedRegistration(6));
         when(accountWallet.findByHoldNo(anyString(), anyString()))
                 .thenThrow(new IllegalStateException("provider details must not escape"));
         when(resultTransaction.scheduleRetry(
                 REGISTRATION_ID, NOW, NOW.plus(Duration.ofMinutes(5))
-        )).thenReturn(pendingAfterRetry(11, NOW.plus(Duration.ofMinutes(5))));
+        )).thenReturn(pendingAfterRetry(7, NOW.plus(Duration.ofMinutes(5))));
 
         assertThat(service.recoverBatch("worker-01").pending()).isEqualTo(1);
         verify(resultTransaction).scheduleRetry(REGISTRATION_ID, NOW, NOW.plus(Duration.ofMinutes(5)));
+    }
+
+    @Test
+    void stopsAutomaticRecoveryAtTheConfiguredAttemptLimitWithoutInventingAFailure() {
+        arrangeClaimed(claimedRegistration(7));
+        when(accountWallet.findByHoldNo(anyString(), anyString()))
+                .thenReturn(new AccountWalletPort.Unknown("AUCTION_ACCOUNT_SERVICE_UNAVAILABLE"));
+        when(resultTransaction.markRecoveryExhausted(REGISTRATION_ID, NOW))
+                .thenReturn(pendingAfterRetry(8, null));
+
+        AuctionRegistrationRecoveryService.RecoveryResult result = service.recoverBatch("worker-01");
+
+        assertThat(result).isEqualTo(new AuctionRegistrationRecoveryService.RecoveryResult(1, 0, 0, 1));
+        verify(resultTransaction).markRecoveryExhausted(REGISTRATION_ID, NOW);
+        verify(resultTransaction, never()).scheduleRetry(anyLong(), any(), any());
+        verify(accountWallet, never()).hold(any());
     }
 
     private void arrangeClaimed(AuctionRegistration registration) {

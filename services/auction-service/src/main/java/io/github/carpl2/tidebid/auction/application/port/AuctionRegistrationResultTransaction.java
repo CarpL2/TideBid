@@ -11,4 +11,6 @@ public interface AuctionRegistrationResultTransaction {
     AuctionRegistration markFailed(long registrationId, String failureCode, Instant attemptedAt);
 
     AuctionRegistration scheduleRetry(long registrationId, Instant attemptedAt, Instant nextRetryAt);
+
+    AuctionRegistration markRecoveryExhausted(long registrationId, Instant attemptedAt);
 }

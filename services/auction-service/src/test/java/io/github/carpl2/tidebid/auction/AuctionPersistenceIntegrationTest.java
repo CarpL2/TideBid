@@ -1395,6 +1395,53 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void exhaustedRegistrationRemainsDiagnosableAndLeavesTheRecoveryQueue() {
+        long sellerId = IdWorker.getId();
+        long buyerId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long registrationId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+
+        AuctionRegistration pending = new AuctionRegistration(
+                registrationId, "REGISTRATION:" + registrationId, auctionId, buyerId,
+                new BigDecimal("50.00"), AuctionRegistrationStatus.PENDING_HOLD, null, 7,
+                now.minusSeconds(1), now.minusSeconds(5), null, null, null, 7,
+                now.minusSeconds(60), now.minusSeconds(5)
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(scheduledSession(
+                    auctionId, itemId, sellerId, now.plus(Duration.ofHours(1)), 1L, now
+            ));
+            registrationRepository.insert(pending);
+            assertThat(registrationRecoveryTransaction.claimDue(
+                    now, "exhaustion-worker", now.plusSeconds(30), 10
+            )).hasSize(1);
+
+            AuctionRegistration exhausted = registrationResultTransaction.markRecoveryExhausted(
+                    registrationId, now.plusSeconds(1)
+            );
+
+            assertThat(exhausted.status()).isEqualTo(AuctionRegistrationStatus.PENDING_HOLD);
+            assertThat(exhausted.failureCode()).isNull();
+            assertThat(exhausted.attemptCount()).isEqualTo(8);
+            assertThat(exhausted.lastAttemptAt()).isEqualTo(now.plusSeconds(1));
+            assertThat(exhausted.nextRetryAt()).isNull();
+            assertThat(exhausted.leaseOwner()).isNull();
+            assertThat(exhausted.leaseUntil()).isNull();
+            assertThat(registrationRecoveryTransaction.claimDue(
+                    now.plus(Duration.ofDays(1)), "later-worker", now.plus(Duration.ofDays(1)).plusSeconds(30), 10
+            )).isEmpty();
+        } finally {
+            registrationMapper.deleteById(registrationId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void rejectionPersistsReasonAndAllowsEditThenNewSubmissionVersion() {
         long itemId = IdWorker.getId();
         long auctionId = IdWorker.getId();

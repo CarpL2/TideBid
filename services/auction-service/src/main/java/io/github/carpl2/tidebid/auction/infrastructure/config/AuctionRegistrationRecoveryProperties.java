@@ -11,7 +11,8 @@ public record AuctionRegistrationRecoveryProperties(
         Duration maximumRetryDelay,
         Duration leaseDuration,
         Duration scanInterval,
-        int batchSize
+        int batchSize,
+        int maximumAttempts
 ) {
 
     public AuctionRegistrationRecoveryProperties {
@@ -28,6 +29,9 @@ public record AuctionRegistrationRecoveryProperties(
         }
         if (batchSize < 1 || batchSize > 1000) {
             throw new IllegalArgumentException("batchSize must be between 1 and 1000");
+        }
+        if (maximumAttempts < 2 || maximumAttempts > 100) {
+            throw new IllegalArgumentException("maximumAttempts must be between 2 and 100");
         }
     }
 

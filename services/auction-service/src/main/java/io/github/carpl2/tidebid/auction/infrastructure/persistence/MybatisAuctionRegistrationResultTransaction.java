@@ -56,6 +56,14 @@ public class MybatisAuctionRegistrationResultTransaction implements AuctionRegis
         return reload(registrationId);
     }
 
+    @Override
+    @Transactional
+    public AuctionRegistration markRecoveryExhausted(long registrationId, Instant attemptedAt) {
+        requireArguments(registrationId, attemptedAt);
+        registrationMapper.markRecoveryExhausted(registrationId, attemptedAt);
+        return reload(registrationId);
+    }
+
     private AuctionRegistration reload(long registrationId) {
         return registrationRepository.findById(registrationId)
                 .orElseThrow(() -> new IllegalStateException("Registration result update target was not found"));

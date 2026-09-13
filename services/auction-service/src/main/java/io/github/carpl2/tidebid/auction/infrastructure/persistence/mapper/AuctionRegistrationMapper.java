@@ -121,4 +121,21 @@ public interface AuctionRegistrationMapper extends BaseMapper<AuctionRegistratio
             @Param("attemptedAt") Instant attemptedAt,
             @Param("nextRetryAt") Instant nextRetryAt
     );
+
+    @Update("""
+            UPDATE auction_registration
+            SET attempt_count = attempt_count + 1,
+                next_retry_at = NULL,
+                last_attempt_at = #{attemptedAt},
+                lease_owner = NULL,
+                lease_until = NULL,
+                updated_at = #{attemptedAt},
+                version = version + 1
+            WHERE id = #{registrationId}
+              AND status = 'PENDING_HOLD'
+            """)
+    int markRecoveryExhausted(
+            @Param("registrationId") long registrationId,
+            @Param("attemptedAt") Instant attemptedAt
+    );
 }

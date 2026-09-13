@@ -86,3 +86,4 @@ tidebid:
       lease-duration: 30s
       scan-interval: 2s
       batch-size: 50
+      maximum-attempts: 8
