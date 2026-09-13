@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 @Mapper
@@ -78,5 +79,37 @@ public interface AuctionSessionMapper extends BaseMapper<AuctionSessionEntity> {
             @Param("auctionId") long auctionId,
             @Param("expectedVersion") long expectedVersion,
             @Param("endedAt") Instant endedAt
+    );
+
+    @Update("""
+            UPDATE auction_session
+            SET current_price = #{amount},
+                current_bidder_id = #{bidderId},
+                bid_count = bid_count + 1,
+                updated_at = #{acceptedAt},
+                version = version + 1
+            WHERE id = #{auctionId}
+              AND status = 'OPEN'
+              AND version = #{expectedVersion}
+              AND start_at <= #{acceptedAt}
+              AND end_at > #{acceptedAt}
+              AND ((bid_count = 0
+                    AND current_price IS NULL
+                    AND #{previousPrice} IS NULL
+                    AND #{sequenceNo} = 1
+                    AND #{amount} >= start_price)
+                OR (bid_count > 0
+                    AND current_price = #{previousPrice}
+                    AND #{sequenceNo} = bid_count + 1
+                    AND #{amount} >= current_price + bid_increment))
+            """)
+    int acceptBid(
+            @Param("auctionId") long auctionId,
+            @Param("bidderId") long bidderId,
+            @Param("amount") BigDecimal amount,
+            @Param("previousPrice") BigDecimal previousPrice,
+            @Param("sequenceNo") long sequenceNo,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("acceptedAt") Instant acceptedAt
     );
 }

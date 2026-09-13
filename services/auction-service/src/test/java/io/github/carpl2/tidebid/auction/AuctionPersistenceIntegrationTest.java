@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.auction;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import io.github.carpl2.tidebid.auction.application.AuctionImagePreviewService;
 import io.github.carpl2.tidebid.auction.application.AuctionAssetQueryService;
 import io.github.carpl2.tidebid.auction.application.AuctionDetailQueryService;
@@ -16,6 +17,7 @@ import io.github.carpl2.tidebid.auction.application.AuctionReviewService;
 import io.github.carpl2.tidebid.auction.application.AuctionSessionOpeningService;
 import io.github.carpl2.tidebid.auction.application.AuctionUploadIntentService;
 import io.github.carpl2.tidebid.auction.application.port.AuctionDraftTransaction;
+import io.github.carpl2.tidebid.auction.application.port.AuctionBidTransaction;
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
@@ -40,6 +42,7 @@ import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionItemEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionRegistrationEntity;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.BidRecordEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionItemImageMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionItemMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionRegistrationMapper;
@@ -99,6 +102,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionStorageProperties storageProperties;
     @Autowired private AuctionTimingProperties timingProperties;
     @Autowired private AuctionDraftTransaction draftTransaction;
+    @Autowired private AuctionBidTransaction bidTransaction;
     @Autowired private AuctionDraftUpdateService draftUpdateService;
     @Autowired private AuctionSubmissionTransaction submissionTransaction;
     @Autowired private AuctionReviewTransaction reviewTransaction;
@@ -1008,6 +1012,182 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void bidTransactionAtomicallyUpdatesTheSessionAndInsertsTheBidRecord() {
+        long sellerId = IdWorker.getId();
+        long bidderId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long bidId = IdWorker.getId();
+        Instant acceptedAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession opened = openSession(
+                auctionId, itemId, sellerId,
+                acceptedAt.minus(Duration.ofHours(1)), acceptedAt.plus(Duration.ofHours(1)), 5L, acceptedAt
+        );
+        BidRecord bid = new BidRecord(
+                bidId, auctionId, bidderId, "bid-request-" + bidId,
+                new BigDecimal("125.00"), null, 1L, acceptedAt
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, acceptedAt));
+            sessionRepository.insertSession(opened);
+
+            AuctionBidTransaction.AcceptedBid accepted = bidTransaction.accept(bid, opened.version());
+
+            assertThat(accepted.bid()).usingRecursiveComparison().isEqualTo(bid);
+            assertThat(accepted.session().currentPrice()).isEqualByComparingTo("125.00");
+            assertThat(accepted.session().currentBidderId()).isEqualTo(bidderId);
+            assertThat(accepted.session().bidCount()).isEqualTo(1L);
+            assertThat(accepted.session().version()).isEqualTo(opened.version() + 1);
+            assertThat(accepted.session().updatedAt()).isEqualTo(acceptedAt);
+            assertThat(sessionRepository.findBid(bidderId, bid.requestId())).contains(bid);
+        } finally {
+            bidMapper.deleteById(bidId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void bidTransactionRejectsStaleVersionAndEndBoundaryWithoutWritingABid() {
+        long sellerId = IdWorker.getId();
+        long bidderId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Instant endAt = now.plusSeconds(30);
+        AuctionSession opened = openSession(
+                auctionId, itemId, sellerId, now.minusSeconds(30), endAt, 3L, now
+        );
+        BidRecord staleBid = new BidRecord(
+                IdWorker.getId(), auctionId, bidderId, "stale-bid-request",
+                new BigDecimal("100.00"), null, 1L, now
+        );
+        BidRecord endedBid = new BidRecord(
+                IdWorker.getId(), auctionId, bidderId, "ended-bid-request",
+                new BigDecimal("100.00"), null, 1L, endAt
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(opened);
+
+            assertThatThrownBy(() -> bidTransaction.accept(staleBid, opened.version() - 1))
+                    .isInstanceOf(AuctionBidTransaction.BidConflictException.class);
+            assertThatThrownBy(() -> bidTransaction.accept(endedBid, opened.version()))
+                    .isInstanceOf(AuctionBidTransaction.BidConflictException.class);
+
+            assertThat(sessionRepository.findBid(bidderId, staleBid.requestId())).isEmpty();
+            assertThat(sessionRepository.findBid(bidderId, endedBid.requestId())).isEmpty();
+            assertThat(sessionRepository.findSessionById(auctionId)).contains(opened);
+        } finally {
+            bidMapper.deleteById(staleBid.id());
+            bidMapper.deleteById(endedBid.id());
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void duplicateBidInsertRollsBackTheSessionCas() {
+        long sellerId = IdWorker.getId();
+        long bidderId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long existingBidId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession opened = new AuctionSession(
+                auctionId, itemId, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                new BigDecimal("100.00"), bidderId, 1L,
+                now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)),
+                AuctionSessionStatus.OPEN, 6L, now.minus(Duration.ofHours(2)), now.minusSeconds(1)
+        );
+        BidRecord existing = new BidRecord(
+                existingBidId, auctionId, bidderId, "duplicate-bid-request",
+                new BigDecimal("100.00"), null, 1L, now.minusSeconds(1)
+        );
+        BidRecord duplicate = new BidRecord(
+                IdWorker.getId(), auctionId, bidderId, existing.requestId(),
+                new BigDecimal("110.00"), new BigDecimal("100.00"), 2L, now
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(opened);
+            sessionRepository.insertBid(existing);
+
+            assertThatThrownBy(() -> bidTransaction.accept(duplicate, opened.version()))
+                    .isInstanceOf(AuctionBidTransaction.DuplicateBidException.class);
+
+            assertThat(sessionRepository.findSessionById(auctionId)).contains(opened);
+            assertThat(sessionRepository.findBid(bidderId, existing.requestId())).contains(existing);
+        } finally {
+            bidMapper.deleteById(duplicate.id());
+            bidMapper.deleteById(existingBidId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void concurrentBidsAgainstOneVersionProduceExactlyOneWinner() throws Exception {
+        long sellerId = IdWorker.getId();
+        long firstBidderId = IdWorker.getId();
+        long secondBidderId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession opened = openSession(
+                auctionId, itemId, sellerId,
+                now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)), 8L, now
+        );
+        BidRecord firstBid = new BidRecord(
+                IdWorker.getId(), auctionId, firstBidderId, "concurrent-first-bid",
+                new BigDecimal("100.00"), null, 1L, now
+        );
+        BidRecord secondBid = new BidRecord(
+                IdWorker.getId(), auctionId, secondBidderId, "concurrent-second-bid",
+                new BigDecimal("150.00"), null, 1L, now
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(opened);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                Future<String> first = executor.submit(() -> acceptBidConcurrently(
+                        ready, start, firstBid, opened.version()
+                ));
+                Future<String> second = executor.submit(() -> acceptBidConcurrently(
+                        ready, start, secondBid, opened.version()
+                ));
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                assertThat(List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                        .containsExactlyInAnyOrder("SUCCESS", "CONFLICT");
+            }
+
+            List<BidRecordEntity> storedBids = bidMapper.selectList(
+                    new LambdaQueryWrapper<BidRecordEntity>()
+                            .eq(BidRecordEntity::getAuctionId, auctionId)
+            );
+            assertThat(storedBids).hasSize(1);
+            AuctionSession winner = sessionRepository.findSessionById(auctionId).orElseThrow();
+            assertThat(winner.bidCount()).isEqualTo(1L);
+            assertThat(winner.version()).isEqualTo(opened.version() + 1);
+            assertThat(winner.currentBidderId()).isEqualTo(storedBids.getFirst().getBidderId());
+            assertThat(winner.currentPrice()).isEqualByComparingTo(storedBids.getFirst().getAmount());
+        } finally {
+            bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
+                    .eq(BidRecordEntity::getAuctionId, auctionId));
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void assetDetailCatchesUpPastEndSessionWithoutSkippingLifecycleStates() {
         long sellerId = IdWorker.getId();
         long itemId = IdWorker.getId();
@@ -1610,6 +1790,24 @@ class AuctionPersistenceIntegrationTest {
             throw new IllegalStateException("Concurrent session opening timed out");
         }
         return sessionRepository.openScheduledSession(auctionId, expectedVersion, openedAt);
+    }
+
+    private String acceptBidConcurrently(
+            CountDownLatch ready,
+            CountDownLatch start,
+            BidRecord bid,
+            long expectedVersion
+    ) throws InterruptedException {
+        ready.countDown();
+        if (!start.await(5, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("Concurrent bid start timed out");
+        }
+        try {
+            bidTransaction.accept(bid, expectedVersion);
+            return "SUCCESS";
+        } catch (AuctionBidTransaction.BidConflictException exception) {
+            return "CONFLICT";
+        }
     }
 
     private static AuctionItem draftItem(long itemId, long sellerId, Instant now) {
