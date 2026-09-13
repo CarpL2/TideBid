@@ -1153,6 +1153,60 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void registrationRepositoryPagesOnlyTheRequestedBuyerInNewestFirstOrder() {
+        long sellerId = IdWorker.getId();
+        long buyerId = IdWorker.getId();
+        long otherBuyerId = IdWorker.getId();
+        long firstItemId = IdWorker.getId();
+        long secondItemId = IdWorker.getId();
+        long otherItemId = IdWorker.getId();
+        long firstAuctionId = IdWorker.getId();
+        long secondAuctionId = IdWorker.getId();
+        long otherAuctionId = IdWorker.getId();
+        long firstRegistrationId = IdWorker.getId();
+        long secondRegistrationId = IdWorker.getId();
+        long otherRegistrationId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+
+        try {
+            itemRepository.insertItem(approvedItem(firstItemId, sellerId, now));
+            itemRepository.insertItem(approvedItem(secondItemId, sellerId, now));
+            itemRepository.insertItem(approvedItem(otherItemId, sellerId, now));
+            sessionRepository.insertSession(scheduledSession(firstAuctionId, firstItemId, sellerId, now.plusSeconds(60), 0, now));
+            sessionRepository.insertSession(scheduledSession(secondAuctionId, secondItemId, sellerId, now.plusSeconds(60), 0, now));
+            sessionRepository.insertSession(scheduledSession(otherAuctionId, otherItemId, sellerId, now.plusSeconds(60), 0, now));
+            registrationRepository.insert(pendingRegistration(
+                    firstRegistrationId, firstAuctionId, buyerId, now.minusSeconds(2)
+            ));
+            registrationRepository.insert(pendingRegistration(
+                    secondRegistrationId, secondAuctionId, buyerId, now.minusSeconds(1)
+            ));
+            registrationRepository.insert(pendingRegistration(
+                    otherRegistrationId, otherAuctionId, otherBuyerId, now
+            ));
+
+            AuctionRegistrationRepository.RegistrationPage page =
+                    registrationRepository.findByBidder(buyerId, 0, 10);
+
+            assertThat(page.total()).isEqualTo(2);
+            assertThat(page.registrations()).extracting(AuctionRegistration::id)
+                    .containsExactly(secondRegistrationId, firstRegistrationId);
+            assertThat(page.registrations()).extracting(AuctionRegistration::bidderId)
+                    .containsOnly(buyerId);
+        } finally {
+            registrationMapper.deleteById(otherRegistrationId);
+            registrationMapper.deleteById(secondRegistrationId);
+            registrationMapper.deleteById(firstRegistrationId);
+            sessionMapper.deleteById(otherAuctionId);
+            sessionMapper.deleteById(secondAuctionId);
+            sessionMapper.deleteById(firstAuctionId);
+            itemMapper.deleteById(otherItemId);
+            itemMapper.deleteById(secondItemId);
+            itemMapper.deleteById(firstItemId);
+        }
+    }
+
+    @Test
     void concurrentRegistrationCreationPersistsOneStablePendingHold() throws Exception {
         long sellerId = IdWorker.getId();
         long buyerId = IdWorker.getId();

@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
+import java.util.List;
 
 @Repository
 @Profile({"local-db", "nacos"})
@@ -52,5 +53,23 @@ public class MybatisAuctionRegistrationRepository implements AuctionRegistration
                         .eq(AuctionRegistrationEntity::getAuctionId, auctionId)
                         .eq(AuctionRegistrationEntity::getBidderId, bidderId)))
                 .map(AuctionPersistenceMapping::toDomain);
+    }
+
+    @Override
+    public RegistrationPage findByBidder(long bidderId, int offset, int limit) {
+        MybatisAuctionItemRepository.requirePositive(bidderId, "bidderId");
+        if (offset < 0) {
+            throw new IllegalArgumentException("offset must not be negative");
+        }
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit must be positive");
+        }
+        long total = registrationMapper.countByBidder(bidderId);
+        List<AuctionRegistration> registrations = total == 0
+                ? List.of()
+                : registrationMapper.findByBidder(bidderId, offset, limit).stream()
+                        .map(AuctionPersistenceMapping::toDomain)
+                        .toList();
+        return new RegistrationPage(registrations, total);
     }
 }

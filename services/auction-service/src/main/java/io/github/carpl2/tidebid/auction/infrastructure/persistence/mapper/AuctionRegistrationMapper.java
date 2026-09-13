@@ -13,6 +13,22 @@ import java.util.List;
 @Mapper
 public interface AuctionRegistrationMapper extends BaseMapper<AuctionRegistrationEntity> {
 
+    @Select("SELECT COUNT(*) FROM auction_registration WHERE bidder_id = #{bidderId}")
+    long countByBidder(@Param("bidderId") long bidderId);
+
+    @Select("""
+            SELECT *
+            FROM auction_registration
+            WHERE bidder_id = #{bidderId}
+            ORDER BY created_at DESC, id DESC
+            LIMIT #{limit} OFFSET #{offset}
+            """)
+    List<AuctionRegistrationEntity> findByBidder(
+            @Param("bidderId") long bidderId,
+            @Param("offset") int offset,
+            @Param("limit") int limit
+    );
+
     @Select("""
             SELECT id
             FROM auction_registration
