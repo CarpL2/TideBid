@@ -52,4 +52,12 @@ public record AuctionSession(
             throw new IllegalArgumentException("updatedAt must not be before createdAt");
         }
     }
+
+    public BigDecimal displayPrice() {
+        return currentPrice == null ? startPrice : currentPrice;
+    }
+
+    public BigDecimal minimumNextBid() {
+        return currentPrice == null ? startPrice : currentPrice.add(bidIncrement);
+    }
 }

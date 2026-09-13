@@ -205,10 +205,7 @@ public class AuctionAssetQueryService {
         return new LobbySummary(
                 item.id(), session.id(), item.title(), item.category(), item.itemCondition(), session.status(),
                 session.startPrice(), session.currentPrice(),
-                session.currentPrice() == null ? session.startPrice() : session.currentPrice(),
-                session.currentPrice() == null
-                        ? session.startPrice()
-                        : session.currentPrice().add(session.bidIncrement()),
+                session.displayPrice(), session.minimumNextBid(),
                 session.bidCount(), session.startAt(), session.endAt(),
                 cover == null ? null : lobbyCover(item, cover, previewExpiresAt)
         );

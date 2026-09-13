@@ -85,16 +85,10 @@ public class AuctionDetailQueryService {
                 : registrationRepository.findByAuctionAndBidder(auctionId, requesterId)
                         .map(AuctionDetailQueryService::registrationView)
                         .orElse(null);
-        BigDecimal displayPrice = session.currentPrice() == null
-                ? session.startPrice()
-                : session.currentPrice();
-        BigDecimal minimumNextBid = session.currentPrice() == null
-                ? session.startPrice()
-                : session.currentPrice().add(session.bidIncrement());
         return new AuctionDetail(
                 item.id(), session.id(), item.title(), item.description(), item.category(), item.itemCondition(),
                 session.status(), session.startPrice(), session.bidIncrement(), session.depositAmount(),
-                session.currentPrice(), displayPrice, minimumNextBid, session.bidCount(), session.startAt(),
+                session.currentPrice(), session.displayPrice(), session.minimumNextBid(), session.bidCount(), session.startAt(),
                 session.endAt(), item.sellerId() == requesterId, images, myRegistration
         );
     }
