@@ -4,12 +4,48 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionRegistrationEntity;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.Instant;
+import java.util.List;
 
 @Mapper
 public interface AuctionRegistrationMapper extends BaseMapper<AuctionRegistrationEntity> {
+
+    @Select("""
+            SELECT id
+            FROM auction_registration
+            WHERE status = 'PENDING_HOLD'
+              AND next_retry_at IS NOT NULL
+              AND next_retry_at <= #{now}
+              AND (lease_until IS NULL OR lease_until <= #{now})
+            ORDER BY next_retry_at ASC, id ASC
+            LIMIT #{batchSize}
+            """)
+    List<Long> findDueRecoveryIds(
+            @Param("now") Instant now,
+            @Param("batchSize") int batchSize
+    );
+
+    @Update("""
+            UPDATE auction_registration
+            SET lease_owner = #{leaseOwner},
+                lease_until = #{leaseUntil},
+                updated_at = #{now},
+                version = version + 1
+            WHERE id = #{registrationId}
+              AND status = 'PENDING_HOLD'
+              AND next_retry_at IS NOT NULL
+              AND next_retry_at <= #{now}
+              AND (lease_until IS NULL OR lease_until <= #{now})
+            """)
+    int claimForRecovery(
+            @Param("registrationId") long registrationId,
+            @Param("now") Instant now,
+            @Param("leaseOwner") String leaseOwner,
+            @Param("leaseUntil") Instant leaseUntil
+    );
 
     @Update("""
             UPDATE auction_registration

@@ -19,6 +19,7 @@ import io.github.carpl2.tidebid.auction.application.port.AuctionDraftTransaction
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRecoveryTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationResultTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionReviewTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
@@ -77,7 +78,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
                 "tidebid.auction.account-client.internal-token=test-internal-token-with-at-least-32-characters",
-                "tidebid.auction.timing.opening-scan-enabled=false"
+                "tidebid.auction.timing.opening-scan-enabled=false",
+                "tidebid.auction.registration-recovery.enabled=false"
         }
 )
 @ActiveProfiles("local-db")
@@ -103,6 +105,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionAssetQueryService assetQueryService;
     @Autowired private AuctionDetailQueryService detailQueryService;
     @Autowired private AuctionRegistrationCreationService registrationCreationService;
+    @Autowired private AuctionRegistrationRecoveryTransaction registrationRecoveryTransaction;
     @Autowired private AuctionRegistrationResultTransaction registrationResultTransaction;
     @Autowired private AuctionReviewService reviewService;
     @Autowired private AuctionSessionOpeningService sessionOpeningService;
@@ -1283,6 +1286,61 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void concurrentRecoveryWorkersClaimOneDueRegistrationAndExpiredLeaseCanBeReclaimed() throws Exception {
+        long sellerId = IdWorker.getId();
+        long buyerId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long registrationId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Instant leaseUntil = now.plusSeconds(30);
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(scheduledSession(
+                    auctionId, itemId, sellerId, now.plus(Duration.ofHours(1)), 1L, now
+            ));
+            registrationRepository.insert(pendingRegistration(
+                    registrationId, auctionId, buyerId, now, now.minusSeconds(1)
+            ));
+
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            List<List<AuctionRegistration>> claims;
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                Future<List<AuctionRegistration>> first = executor.submit(
+                        () -> claimConcurrently(ready, start, now, "recovery-worker-one", leaseUntil)
+                );
+                Future<List<AuctionRegistration>> second = executor.submit(
+                        () -> claimConcurrently(ready, start, now, "recovery-worker-two", leaseUntil)
+                );
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                claims = List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
+            }
+
+            assertThat(claims.get(0).size() + claims.get(1).size()).isEqualTo(1);
+            AuctionRegistration leased = registrationRepository.findById(registrationId).orElseThrow();
+            assertThat(leased.leaseOwner()).isIn("recovery-worker-one", "recovery-worker-two");
+            assertThat(leased.leaseUntil()).isEqualTo(leaseUntil);
+            assertThat(registrationRecoveryTransaction.claimDue(
+                    now.plusSeconds(1), "recovery-worker-three", now.plusSeconds(31), 10
+            )).isEmpty();
+
+            List<AuctionRegistration> reclaimed = registrationRecoveryTransaction.claimDue(
+                    leaseUntil, "recovery-worker-three", leaseUntil.plusSeconds(30), 10
+            );
+            assertThat(reclaimed).hasSize(1);
+            assertThat(reclaimed.getFirst().id()).isEqualTo(registrationId);
+            assertThat(reclaimed.getFirst().leaseOwner()).isEqualTo("recovery-worker-three");
+        } finally {
+            registrationMapper.deleteById(registrationId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void rejectionPersistsReasonAndAllowsEditThenNewSubmissionVersion() {
         long itemId = IdWorker.getId();
         long auctionId = IdWorker.getId();
@@ -1603,6 +1661,16 @@ class AuctionPersistenceIntegrationTest {
             long bidderId,
             Instant now
     ) {
+        return pendingRegistration(registrationId, auctionId, bidderId, now, null);
+    }
+
+    private static AuctionRegistration pendingRegistration(
+            long registrationId,
+            long auctionId,
+            long bidderId,
+            Instant now,
+            Instant nextRetryAt
+    ) {
         return new AuctionRegistration(
                 registrationId,
                 "REGISTRATION:" + registrationId,
@@ -1612,7 +1680,7 @@ class AuctionPersistenceIntegrationTest {
                 AuctionRegistrationStatus.PENDING_HOLD,
                 null,
                 0,
-                null,
+                nextRetryAt,
                 null,
                 null,
                 null,
@@ -1621,6 +1689,18 @@ class AuctionPersistenceIntegrationTest {
                 now,
                 now
         );
+    }
+
+    private List<AuctionRegistration> claimConcurrently(
+            CountDownLatch ready,
+            CountDownLatch start,
+            Instant now,
+            String leaseOwner,
+            Instant leaseUntil
+    ) throws Exception {
+        ready.countDown();
+        assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+        return registrationRecoveryTransaction.claimDue(now, leaseOwner, leaseUntil, 10);
     }
 
     private static AuctionItemImage boundImage(

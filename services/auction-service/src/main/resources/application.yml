@@ -80,7 +80,9 @@ tidebid:
       opening-scan-interval: 1s
       opening-scan-batch-size: 50
     registration-recovery:
+      enabled: true
       initial-retry-delay: 5s
       maximum-retry-delay: 5m
       lease-duration: 30s
+      scan-interval: 2s
       batch-size: 50
