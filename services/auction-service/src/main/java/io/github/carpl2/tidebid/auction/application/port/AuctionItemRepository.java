@@ -14,6 +14,8 @@ public interface AuctionItemRepository {
 
     Optional<AuctionItem> findItemById(long itemId);
 
+    List<AuctionItem> findItemsByIds(List<Long> itemIds);
+
     SellerItemPage findItemsBySeller(long sellerId, int offset, int limit);
 
     PendingReviewPage findPendingReviewItems(int offset, int limit);

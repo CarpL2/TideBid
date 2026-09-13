@@ -16,6 +16,10 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import static io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus.AWAITING_CLOSE;
+import static io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus.OPEN;
+import static io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus.SCHEDULED;
+
 @Repository
 @Profile({"local-db", "nacos"})
 public class MybatisAuctionSessionRepository implements AuctionSessionRepository {
@@ -85,6 +89,23 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
     }
 
     @Override
+    public LobbySessionPage findLobbySessions(int offset, int limit) {
+        requirePageWindow(offset, limit);
+        List<String> visibleStatuses = List.of(SCHEDULED.name(), OPEN.name(), AWAITING_CLOSE.name());
+        long total = sessionMapper.selectCount(new LambdaQueryWrapper<AuctionSessionEntity>()
+                .in(AuctionSessionEntity::getStatus, visibleStatuses));
+        List<AuctionSession> sessions = sessionMapper.selectList(new LambdaQueryWrapper<AuctionSessionEntity>()
+                        .in(AuctionSessionEntity::getStatus, visibleStatuses)
+                        .orderByAsc(AuctionSessionEntity::getStartAt)
+                        .orderByAsc(AuctionSessionEntity::getId)
+                        .last("LIMIT " + offset + ", " + limit))
+                .stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
+        return new LobbySessionPage(sessions, total);
+    }
+
+    @Override
     public boolean updateDraftSession(AuctionSession session) {
         if (session == null) {
             throw new IllegalArgumentException("session must not be null");
@@ -146,5 +167,11 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
                         .eq(BidRecordEntity::getBidderId, bidderId)
                         .eq(BidRecordEntity::getRequestId, normalizedRequestId)))
                 .map(AuctionPersistenceMapping::toDomain);
+    }
+
+    private static void requirePageWindow(int offset, int limit) {
+        if (offset < 0 || limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("invalid page window");
+        }
     }
 }

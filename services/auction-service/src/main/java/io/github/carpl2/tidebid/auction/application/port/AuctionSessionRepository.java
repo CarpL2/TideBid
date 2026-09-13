@@ -19,6 +19,8 @@ public interface AuctionSessionRepository {
 
     List<AuctionSession> findDueScheduledSessions(Instant dueAt, int limit);
 
+    LobbySessionPage findLobbySessions(int offset, int limit);
+
     boolean updateDraftSession(AuctionSession session);
 
     boolean scheduleDraftSession(
@@ -36,4 +38,13 @@ public interface AuctionSessionRepository {
     BidRecord insertBid(BidRecord bid);
 
     Optional<BidRecord> findBid(long bidderId, String requestId);
+
+    record LobbySessionPage(List<AuctionSession> sessions, long total) {
+        public LobbySessionPage {
+            sessions = List.copyOf(sessions);
+            if (total < sessions.size()) {
+                throw new IllegalArgumentException("total must not be below the returned session count");
+            }
+        }
+    }
 }

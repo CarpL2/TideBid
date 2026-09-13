@@ -1032,6 +1032,66 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void lobbyRepositoryFiltersStatesAndPaginatesSameStartTimeByAuctionId() {
+        long sellerId = IdWorker.getId();
+        long firstItemId = IdWorker.getId();
+        long secondItemId = IdWorker.getId();
+        long thirdItemId = IdWorker.getId();
+        long draftItemId = IdWorker.getId();
+        long firstAuctionId = IdWorker.getId();
+        long secondAuctionId = IdWorker.getId();
+        long thirdAuctionId = IdWorker.getId();
+        long draftAuctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Instant commonStartAt = Instant.parse("2099-01-01T00:00:00Z");
+        long totalBefore = sessionRepository.findLobbySessions(0, 1).total();
+
+        try {
+            itemRepository.insertItem(approvedItem(firstItemId, sellerId, now));
+            itemRepository.insertItem(approvedItem(secondItemId, sellerId, now));
+            itemRepository.insertItem(approvedItem(thirdItemId, sellerId, now));
+            itemRepository.insertItem(approvedItem(draftItemId, sellerId, now));
+            sessionRepository.insertSession(lobbySession(
+                    firstAuctionId, firstItemId, sellerId, commonStartAt, AuctionSessionStatus.SCHEDULED, now
+            ));
+            sessionRepository.insertSession(lobbySession(
+                    secondAuctionId, secondItemId, sellerId, commonStartAt, AuctionSessionStatus.OPEN, now
+            ));
+            sessionRepository.insertSession(lobbySession(
+                    thirdAuctionId, thirdItemId, sellerId, commonStartAt, AuctionSessionStatus.AWAITING_CLOSE, now
+            ));
+            sessionRepository.insertSession(lobbySession(
+                    draftAuctionId, draftItemId, sellerId, commonStartAt, AuctionSessionStatus.DRAFT, now
+            ));
+
+            AuctionSessionRepository.LobbySessionPage firstPage =
+                    sessionRepository.findLobbySessions(Math.toIntExact(totalBefore), 2);
+            AuctionSessionRepository.LobbySessionPage secondPage =
+                    sessionRepository.findLobbySessions(Math.toIntExact(totalBefore + 2), 2);
+
+            assertThat(firstPage.total()).isEqualTo(totalBefore + 3);
+            assertThat(secondPage.total()).isEqualTo(totalBefore + 3);
+            assertThat(firstPage.sessions()).extracting(AuctionSession::id)
+                    .containsExactly(firstAuctionId, secondAuctionId);
+            assertThat(secondPage.sessions()).extracting(AuctionSession::id)
+                    .containsExactly(thirdAuctionId);
+            assertThat(firstPage.sessions()).extracting(AuctionSession::status)
+                    .containsExactly(AuctionSessionStatus.SCHEDULED, AuctionSessionStatus.OPEN);
+            assertThat(secondPage.sessions()).extracting(AuctionSession::status)
+                    .containsExactly(AuctionSessionStatus.AWAITING_CLOSE);
+        } finally {
+            sessionMapper.deleteById(draftAuctionId);
+            sessionMapper.deleteById(thirdAuctionId);
+            sessionMapper.deleteById(secondAuctionId);
+            sessionMapper.deleteById(firstAuctionId);
+            itemMapper.deleteById(draftItemId);
+            itemMapper.deleteById(thirdItemId);
+            itemMapper.deleteById(secondItemId);
+            itemMapper.deleteById(firstItemId);
+        }
+    }
+
+    @Test
     void rejectionPersistsReasonAndAllowsEditThenNewSubmissionVersion() {
         long itemId = IdWorker.getId();
         long auctionId = IdWorker.getId();
@@ -1273,6 +1333,22 @@ class AuctionPersistenceIntegrationTest {
                 null, null, 0,
                 startAt, endAt, AuctionSessionStatus.OPEN, version,
                 startAt.minusSeconds(60), now.minusSeconds(1)
+        );
+    }
+
+    private static AuctionSession lobbySession(
+            long auctionId,
+            long itemId,
+            long sellerId,
+            Instant startAt,
+            AuctionSessionStatus status,
+            Instant now
+    ) {
+        return new AuctionSession(
+                auctionId, itemId, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0, startAt, startAt.plus(Duration.ofHours(2)), status, 0L,
+                now.minusSeconds(180), now.minusSeconds(60)
         );
     }
 

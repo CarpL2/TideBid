@@ -51,6 +51,17 @@ public class MybatisAuctionItemRepository implements AuctionItemRepository {
     }
 
     @Override
+    public List<AuctionItem> findItemsByIds(List<Long> itemIds) {
+        List<Long> normalizedIds = requireIds(itemIds, "itemIds");
+        if (normalizedIds.isEmpty()) {
+            return List.of();
+        }
+        return itemMapper.selectByIds(normalizedIds).stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
+    }
+
+    @Override
     public SellerItemPage findItemsBySeller(long sellerId, int offset, int limit) {
         requirePositive(sellerId, "sellerId");
         requirePageWindow(offset, limit);

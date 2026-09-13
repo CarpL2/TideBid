@@ -87,6 +87,38 @@ public class AuctionAssetQueryService {
         return new PageResult<>(page, size, storedPage.total(), items);
     }
 
+    public PageResult<LobbySummary> findLobby(int page, int size) {
+        int offset = pageOffset(page, size);
+        AuctionSessionRepository.LobbySessionPage storedPage =
+                sessionRepository.findLobbySessions(offset, size);
+        if (storedPage.sessions().isEmpty()) {
+            return new PageResult<>(page, size, storedPage.total(), List.of());
+        }
+
+        List<AuctionSession> sessions = storedPage.sessions().stream()
+                .map(sessionLifecycleService::advanceToCurrentState)
+                .toList();
+        List<Long> itemIds = sessions.stream().map(AuctionSession::itemId).toList();
+        Map<Long, AuctionItem> items = itemRepository.findItemsByIds(itemIds).stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        AuctionItem::id,
+                        Function.identity(),
+                        (first, second) -> {
+                            throw new IllegalStateException("Auction item was returned more than once");
+                        }
+                ));
+        Map<Long, List<AuctionItemImage>> images = imagesByItem(
+                itemRepository.findBoundImagesByItemIds(itemIds)
+        );
+        Instant previewExpiresAt = previewExpiresAt();
+        List<LobbySummary> summaries = sessions.stream()
+                .map(session -> lobbySummary(
+                        requireApprovedItem(items, session), session, images.get(session.itemId()), previewExpiresAt
+                ))
+                .toList();
+        return new PageResult<>(page, size, storedPage.total(), summaries);
+    }
+
     public AssetDetail findDetail(long requesterId, boolean administrator, long itemId) {
         requirePositive(requesterId, "requesterId");
         requirePositive(itemId, "itemId");
@@ -163,6 +195,25 @@ public class AuctionAssetQueryService {
         );
     }
 
+    private LobbySummary lobbySummary(
+            AuctionItem item,
+            AuctionSession session,
+            List<AuctionItemImage> images,
+            Instant previewExpiresAt
+    ) {
+        AuctionItemImage cover = images == null || images.isEmpty() ? null : images.getFirst();
+        return new LobbySummary(
+                item.id(), session.id(), item.title(), item.category(), item.itemCondition(), session.status(),
+                session.startPrice(), session.currentPrice(),
+                session.currentPrice() == null ? session.startPrice() : session.currentPrice(),
+                session.currentPrice() == null
+                        ? session.startPrice()
+                        : session.currentPrice().add(session.bidIncrement()),
+                session.bidCount(), session.startAt(), session.endAt(),
+                cover == null ? null : lobbyCover(item, cover, previewExpiresAt)
+        );
+    }
+
     private static AssetDetail detail(
             AuctionItem item,
             AuctionSession session,
@@ -217,6 +268,22 @@ public class AuctionAssetQueryService {
         );
     }
 
+    private LobbyCover lobbyCover(AuctionItem item, AuctionItemImage image, Instant previewExpiresAt) {
+        if (!Long.valueOf(item.id()).equals(image.itemId()) || image.ownerId() != item.sellerId()) {
+            throw new IllegalStateException("Auction image does not belong to the item and seller");
+        }
+        URI previewUrl = null;
+        Instant expiresAt = null;
+        if (previewExpiresAt != null) {
+            ObjectStoragePort.SignedRead signedRead = objectStorage.signRead(
+                    new ObjectStoragePort.ReadSigningRequest(image.objectKey(), previewExpiresAt)
+            );
+            previewUrl = signedRead.url();
+            expiresAt = signedRead.expiresAt();
+        }
+        return new LobbyCover(image.id(), image.contentType(), previewUrl, expiresAt);
+    }
+
     private Instant previewExpiresAt() {
         if (!storageProperties.enabled()) {
             return null;
@@ -242,6 +309,18 @@ public class AuctionAssetQueryService {
             throw new IllegalStateException("Auction item has no session");
         }
         return session;
+    }
+
+    private static AuctionItem requireApprovedItem(Map<Long, AuctionItem> items, AuctionSession session) {
+        AuctionItem item = items.get(session.itemId());
+        if (item == null) {
+            throw new IllegalStateException("Lobby auction has no item");
+        }
+        if (item.reviewStatus() != AuctionItemReviewStatus.APPROVED
+                || item.sellerId() != session.sellerId()) {
+            throw new IllegalStateException("Lobby auction has an inconsistent approved item");
+        }
+        return item;
     }
 
     private static ReviewFeedback reviewFeedback(AuctionReview review) {
@@ -293,6 +372,32 @@ public class AuctionAssetQueryService {
             ImageView coverImage,
             Instant createdAt,
             Instant updatedAt
+    ) {
+    }
+
+    public record LobbySummary(
+            long itemId,
+            long auctionId,
+            String title,
+            String category,
+            AuctionItemCondition itemCondition,
+            AuctionSessionStatus sessionStatus,
+            BigDecimal startPrice,
+            BigDecimal currentPrice,
+            BigDecimal displayPrice,
+            BigDecimal minimumNextBid,
+            long bidCount,
+            Instant startAt,
+            Instant endAt,
+            LobbyCover coverImage
+    ) {
+    }
+
+    public record LobbyCover(
+            long imageId,
+            String contentType,
+            URI previewUrl,
+            Instant previewExpiresAt
     ) {
     }
 
