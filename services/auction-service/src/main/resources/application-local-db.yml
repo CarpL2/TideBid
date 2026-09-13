@@ -32,3 +32,8 @@ spring:
   sql:
     init:
       mode: never
+
+tidebid:
+  auction:
+    account-client:
+      base-url: ${TIDEBID_ACCOUNT_BASE_URL:http://127.0.0.1:9101}

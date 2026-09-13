@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 @FeignClient(
         contextId = "accountWalletFeignClient",
         name = "tidebid-account",
+        url = "${tidebid.auction.account-client.base-url:}",
         configuration = AccountWalletFeignConfiguration.class
 )
 interface AccountWalletFeignClient {

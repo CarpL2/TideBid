@@ -202,8 +202,11 @@ Every service keeps the shared configuration files below:
 - `application-standalone.yml`: explicit switches for operation without Nacos.
 - `application-nacos.yml`: remote configuration and service registration for infrastructure integration.
 
-The account service additionally has `application-local-db.yml`. This profile keeps Nacos disabled but
-connects to the Docker MySQL on port 13306 using `tidebid_account_app`. On startup, Flyway validates
+The account and auction services additionally have `application-local-db.yml`. This profile keeps
+Nacos disabled but connects to Docker MySQL on port 13306 with each service's isolated database user.
+Auction calls Account directly at `http://127.0.0.1:9101` in this mode; override it with
+`TIDEBID_ACCOUNT_BASE_URL` when the Account address differs. In the `nacos` profile the URL remains
+unset and Feign resolves `tidebid-account` through service discovery. On startup, Flyway validates
 and applies versioned files under `db/migration`; MyBatis-Plus uses the same application data source
 for runtime persistence. `standalone` explicitly disables database and Flyway auto-configuration so
 the no-infrastructure skeleton tests remain useful.
