@@ -3,6 +3,7 @@ package io.github.carpl2.tidebid.auction;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import io.github.carpl2.tidebid.auction.application.AuctionImagePreviewService;
 import io.github.carpl2.tidebid.auction.application.AuctionAssetQueryService;
+import io.github.carpl2.tidebid.auction.application.AuctionDetailQueryService;
 import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationService;
 import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
 import io.github.carpl2.tidebid.auction.application.AuctionPendingImageCleanupService;
@@ -97,6 +98,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionSubmissionTransaction submissionTransaction;
     @Autowired private AuctionReviewTransaction reviewTransaction;
     @Autowired private AuctionAssetQueryService assetQueryService;
+    @Autowired private AuctionDetailQueryService detailQueryService;
     @Autowired private AuctionReviewService reviewService;
     @Autowired private AuctionSessionOpeningService sessionOpeningService;
     @Autowired private IdGenerator idGenerator;
@@ -1088,6 +1090,57 @@ class AuctionPersistenceIntegrationTest {
             itemMapper.deleteById(thirdItemId);
             itemMapper.deleteById(secondItemId);
             itemMapper.deleteById(firstItemId);
+        }
+    }
+
+    @Test
+    void auctionDetailReadsApprovedItemOrderedImagesAndOnlyCurrentBuyersRegistration() {
+        long sellerId = IdWorker.getId();
+        long buyerId = IdWorker.getId();
+        long strangerId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long firstImageId = IdWorker.getId();
+        long secondImageId = IdWorker.getId();
+        long registrationId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Instant startAt = now.minusSeconds(1);
+        AuctionSession session = scheduledSession(auctionId, itemId, sellerId, startAt, 1L, now);
+        AuctionRegistration registration = new AuctionRegistration(
+                registrationId, "REGISTRATION:" + registrationId, auctionId, buyerId,
+                session.depositAmount(), AuctionRegistrationStatus.REGISTERED, null, 1,
+                null, now.minusSeconds(30), null, null, now.minusSeconds(30), 1L,
+                now.minusSeconds(60), now.minusSeconds(30)
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(session);
+            itemRepository.insertImage(boundImage(secondImageId, itemId, sellerId, 1, now));
+            itemRepository.insertImage(boundImage(firstImageId, itemId, sellerId, 0, now));
+            registrationRepository.insert(registration);
+
+            AuctionDetailQueryService.AuctionDetail buyerDetail = detailQueryService.find(buyerId, auctionId);
+            AuctionDetailQueryService.AuctionDetail strangerDetail = detailQueryService.find(strangerId, auctionId);
+            AuctionDetailQueryService.AuctionDetail sellerDetail = detailQueryService.find(sellerId, auctionId);
+
+            assertThat(buyerDetail.images()).extracting(AuctionDetailQueryService.ImageView::imageId)
+                    .containsExactly(firstImageId, secondImageId);
+            assertThat(buyerDetail.sessionStatus()).isEqualTo(AuctionSessionStatus.OPEN);
+            assertThat(sessionRepository.findSessionById(auctionId).orElseThrow().status())
+                    .isEqualTo(AuctionSessionStatus.OPEN);
+            assertThat(buyerDetail.minimumNextBid()).isEqualByComparingTo(session.startPrice());
+            assertThat(buyerDetail.myRegistration().registrationId()).isEqualTo(registrationId);
+            assertThat(buyerDetail.myRegistration().status()).isEqualTo(AuctionRegistrationStatus.REGISTERED);
+            assertThat(strangerDetail.myRegistration()).isNull();
+            assertThat(sellerDetail.ownedByCurrentUser()).isTrue();
+            assertThat(sellerDetail.myRegistration()).isNull();
+        } finally {
+            registrationMapper.deleteById(registrationId);
+            imageMapper.deleteById(secondImageId);
+            imageMapper.deleteById(firstImageId);
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
         }
     }
 

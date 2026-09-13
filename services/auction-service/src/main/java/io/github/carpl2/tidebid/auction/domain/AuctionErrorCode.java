@@ -12,6 +12,7 @@ public enum AuctionErrorCode implements ErrorCode {
     IMAGE_INVALID("AUCTION_IMAGE_INVALID", "Auction image is invalid", 400),
     STORAGE_UNAVAILABLE("AUCTION_STORAGE_UNAVAILABLE", "Object storage is temporarily unavailable", 503),
     AUCTION_NOT_FOUND("AUCTION_NOT_FOUND", "Auction was not found", 404),
+    AUCTION_INVALID("AUCTION_INVALID", "Auction input is invalid", 400),
     AUCTION_STATE_CONFLICT("AUCTION_STATE_CONFLICT", "Auction is not in the required state", 409),
     AUCTION_TIME_INVALID("AUCTION_TIME_INVALID", "Auction time range is invalid", 400),
     AUCTION_AMOUNT_INVALID("AUCTION_AMOUNT_INVALID", "Auction amount is invalid", 400),
