@@ -19,6 +19,7 @@ import io.github.carpl2.tidebid.auction.application.port.AuctionDraftTransaction
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationResultTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionReviewTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSubmissionTransaction;
@@ -102,6 +103,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionAssetQueryService assetQueryService;
     @Autowired private AuctionDetailQueryService detailQueryService;
     @Autowired private AuctionRegistrationCreationService registrationCreationService;
+    @Autowired private AuctionRegistrationResultTransaction registrationResultTransaction;
     @Autowired private AuctionReviewService reviewService;
     @Autowired private AuctionSessionOpeningService sessionOpeningService;
     @Autowired private IdGenerator idGenerator;
@@ -1187,6 +1189,7 @@ class AuctionPersistenceIntegrationTest {
             assertThat(stored.registrationNo()).isEqualTo("REGISTRATION:" + stored.id());
             assertThat(stored.depositAmount()).isEqualByComparingTo(session.depositAmount());
             assertThat(stored.attemptCount()).isZero();
+            assertThat(stored.nextRetryAt()).isAfter(stored.createdAt());
             assertThat(registrationMapper.selectCount(
                     new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AuctionRegistrationEntity>()
                             .eq(AuctionRegistrationEntity::getAuctionId, auctionId)
@@ -1197,6 +1200,85 @@ class AuctionPersistenceIntegrationTest {
                     .ifPresent(registration -> registrationMapper.deleteById(registration.id()));
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
+    void registrationHoldResultsUseConditionalStateTransitions() {
+        long sellerId = IdWorker.getId();
+        long buyerId = IdWorker.getId();
+        long registeredItemId = IdWorker.getId();
+        long registeredAuctionId = IdWorker.getId();
+        long registeredId = IdWorker.getId();
+        long failedItemId = IdWorker.getId();
+        long failedAuctionId = IdWorker.getId();
+        long failedId = IdWorker.getId();
+        Instant createdAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Instant firstAttemptAt = createdAt.plusSeconds(1);
+        Instant retryAt = firstAttemptAt.plusSeconds(5);
+        Instant secondAttemptAt = firstAttemptAt.plusSeconds(2);
+        String failureCode = "ACCOUNT_WALLET_INSUFFICIENT_BALANCE";
+
+        try {
+            itemRepository.insertItem(approvedItem(registeredItemId, sellerId, createdAt));
+            sessionRepository.insertSession(scheduledSession(
+                    registeredAuctionId,
+                    registeredItemId,
+                    sellerId,
+                    createdAt.plus(Duration.ofHours(1)),
+                    1L,
+                    createdAt
+            ));
+            registrationRepository.insert(pendingRegistration(
+                    registeredId, registeredAuctionId, buyerId, createdAt
+            ));
+
+            AuctionRegistration scheduled = registrationResultTransaction.scheduleRetry(
+                    registeredId, firstAttemptAt, retryAt
+            );
+            assertThat(scheduled.status()).isEqualTo(AuctionRegistrationStatus.PENDING_HOLD);
+            assertThat(scheduled.attemptCount()).isEqualTo(1);
+            assertThat(scheduled.lastAttemptAt()).isEqualTo(firstAttemptAt);
+            assertThat(scheduled.nextRetryAt()).isEqualTo(retryAt);
+
+            AuctionRegistration registered = registrationResultTransaction.markRegistered(
+                    registeredId, secondAttemptAt
+            );
+            assertThat(registered.status()).isEqualTo(AuctionRegistrationStatus.REGISTERED);
+            assertThat(registered.attemptCount()).isEqualTo(2);
+            assertThat(registered.registeredAt()).isEqualTo(secondAttemptAt);
+            assertThat(registered.nextRetryAt()).isNull();
+
+            AuctionRegistration afterLateUnknown = registrationResultTransaction.scheduleRetry(
+                    registeredId, secondAttemptAt.plusSeconds(1), secondAttemptAt.plusSeconds(6)
+            );
+            assertThat(afterLateUnknown).isEqualTo(registered);
+
+            itemRepository.insertItem(approvedItem(failedItemId, sellerId, createdAt));
+            sessionRepository.insertSession(scheduledSession(
+                    failedAuctionId,
+                    failedItemId,
+                    sellerId,
+                    createdAt.plus(Duration.ofHours(1)),
+                    1L,
+                    createdAt
+            ));
+            registrationRepository.insert(pendingRegistration(failedId, failedAuctionId, buyerId, createdAt));
+
+            AuctionRegistration failed = registrationResultTransaction.markFailed(
+                    failedId, failureCode, firstAttemptAt
+            );
+            assertThat(failed.status()).isEqualTo(AuctionRegistrationStatus.FAILED);
+            assertThat(failed.failureCode()).isEqualTo(failureCode);
+            assertThat(failed.attemptCount()).isEqualTo(1);
+            assertThat(failed.registeredAt()).isNull();
+        } finally {
+            registrationMapper.deleteById(failedId);
+            registrationMapper.deleteById(registeredId);
+            sessionMapper.deleteById(failedAuctionId);
+            sessionMapper.deleteById(registeredAuctionId);
+            itemMapper.deleteById(failedItemId);
+            itemMapper.deleteById(registeredItemId);
         }
     }
 
@@ -1512,6 +1594,32 @@ class AuctionPersistenceIntegrationTest {
                 now.plusSeconds(60),
                 now.minusSeconds(60),
                 now.minusSeconds(60)
+        );
+    }
+
+    private static AuctionRegistration pendingRegistration(
+            long registrationId,
+            long auctionId,
+            long bidderId,
+            Instant now
+    ) {
+        return new AuctionRegistration(
+                registrationId,
+                "REGISTRATION:" + registrationId,
+                auctionId,
+                bidderId,
+                new BigDecimal("50.00"),
+                AuctionRegistrationStatus.PENDING_HOLD,
+                null,
+                0,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0,
+                now,
+                now
         );
     }
 

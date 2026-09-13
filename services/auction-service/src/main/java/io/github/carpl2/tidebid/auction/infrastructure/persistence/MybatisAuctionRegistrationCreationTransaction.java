@@ -27,7 +27,8 @@ public class MybatisAuctionRegistrationCreationTransaction implements AuctionReg
         Objects.requireNonNull(registration, "registration must not be null");
         if (registration.status() != AuctionRegistrationStatus.PENDING_HOLD
                 || registration.attemptCount() != 0
-                || registration.nextRetryAt() != null
+                || registration.nextRetryAt() == null
+                || !registration.nextRetryAt().isAfter(registration.createdAt())
                 || registration.lastAttemptAt() != null
                 || registration.leaseOwner() != null
                 || registration.leaseUntil() != null) {

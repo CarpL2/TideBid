@@ -24,6 +24,10 @@ public interface AccountWalletPort {
         return traceId;
     }
 
+    static String requireRequestId(String requestId) {
+        return requireMatching(requestId, HoldCommand.REQUEST_ID_PATTERN, "requestId");
+    }
+
     record HoldCommand(
             String holdNo,
             long userId,
@@ -43,7 +47,7 @@ public interface AccountWalletPort {
             if (amount.signum() <= 0 || amount.scale() > 2 || amount.compareTo(MAXIMUM_AMOUNT) > 0) {
                 throw new IllegalArgumentException("amount must be positive and fit DECIMAL(19,2)");
             }
-            requestId = requireMatching(requestId, REQUEST_ID_PATTERN, "requestId");
+            requestId = requireRequestId(requestId);
             traceId = requireTraceId(traceId);
         }
     }

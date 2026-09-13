@@ -13,6 +13,7 @@ import io.github.carpl2.tidebid.auction.domain.AuctionRegistration;
 import io.github.carpl2.tidebid.auction.domain.AuctionRegistrationStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRegistrationRecoveryProperties;
 import io.github.carpl2.tidebid.core.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -65,6 +67,9 @@ class AuctionRegistrationCreationServiceTest {
                 creationTransaction,
                 lifecycleService,
                 idGenerator,
+                new AuctionRegistrationRecoveryProperties(
+                        Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofSeconds(30), 50
+                ),
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }
@@ -94,7 +99,7 @@ class AuctionRegistrationCreationServiceTest {
         assertThat(pending.depositAmount()).isEqualByComparingTo("50.00");
         assertThat(pending.status()).isEqualTo(AuctionRegistrationStatus.PENDING_HOLD);
         assertThat(pending.attemptCount()).isZero();
-        assertThat(pending.nextRetryAt()).isNull();
+        assertThat(pending.nextRetryAt()).isEqualTo(STORED_NOW.plusSeconds(5));
         assertThat(pending.lastAttemptAt()).isNull();
         assertThat(pending.createdAt()).isEqualTo(STORED_NOW);
         assertThat(pending.updatedAt()).isEqualTo(STORED_NOW);
@@ -264,7 +269,7 @@ class AuctionRegistrationCreationServiceTest {
         return new AuctionRegistration(
                 REGISTRATION_ID, "REGISTRATION:" + REGISTRATION_ID, AUCTION_ID, BIDDER_ID,
                 new BigDecimal("50.00"), AuctionRegistrationStatus.PENDING_HOLD, null, 0,
-                null, null, null, null, null, 0, now, now
+                now.plusSeconds(5), null, null, null, null, 0, now, now
         );
     }
 

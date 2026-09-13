@@ -12,6 +12,7 @@ import io.github.carpl2.tidebid.auction.domain.AuctionRegistration;
 import io.github.carpl2.tidebid.auction.domain.AuctionRegistrationStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRegistrationRecoveryProperties;
 import io.github.carpl2.tidebid.core.BusinessException;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -32,6 +33,7 @@ public class AuctionRegistrationCreationService {
     private final AuctionRegistrationCreationTransaction creationTransaction;
     private final AuctionSessionLifecycleService lifecycleService;
     private final IdGenerator idGenerator;
+    private final AuctionRegistrationRecoveryProperties recoveryProperties;
     private final Clock clock;
 
     public AuctionRegistrationCreationService(
@@ -41,6 +43,7 @@ public class AuctionRegistrationCreationService {
             AuctionRegistrationCreationTransaction creationTransaction,
             AuctionSessionLifecycleService lifecycleService,
             IdGenerator idGenerator,
+            AuctionRegistrationRecoveryProperties recoveryProperties,
             Clock clock
     ) {
         this.sessionRepository = sessionRepository;
@@ -49,6 +52,7 @@ public class AuctionRegistrationCreationService {
         this.creationTransaction = creationTransaction;
         this.lifecycleService = lifecycleService;
         this.idGenerator = idGenerator;
+        this.recoveryProperties = recoveryProperties;
         this.clock = clock;
     }
 
@@ -88,7 +92,7 @@ public class AuctionRegistrationCreationService {
                 AuctionRegistrationStatus.PENDING_HOLD,
                 null,
                 0,
-                null,
+                now.plus(recoveryProperties.initialRetryDelay()),
                 null,
                 null,
                 null,
