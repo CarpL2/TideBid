@@ -7,6 +7,7 @@ import io.github.carpl2.tidebid.auction.application.AuctionDetailQueryService;
 import io.github.carpl2.tidebid.auction.application.AuctionImageVerificationService;
 import io.github.carpl2.tidebid.auction.application.AuctionObjectKeyFactory;
 import io.github.carpl2.tidebid.auction.application.AuctionPendingImageCleanupService;
+import io.github.carpl2.tidebid.auction.application.AuctionRegistrationCreationService;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftCreationService;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftFieldsValidator;
 import io.github.carpl2.tidebid.auction.application.AuctionDraftUpdateService;
@@ -36,6 +37,7 @@ import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionItemEntity;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionRegistrationEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionItemImageMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionItemMapper;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionRegistrationMapper;
@@ -99,6 +101,7 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionReviewTransaction reviewTransaction;
     @Autowired private AuctionAssetQueryService assetQueryService;
     @Autowired private AuctionDetailQueryService detailQueryService;
+    @Autowired private AuctionRegistrationCreationService registrationCreationService;
     @Autowired private AuctionReviewService reviewService;
     @Autowired private AuctionSessionOpeningService sessionOpeningService;
     @Autowired private IdGenerator idGenerator;
@@ -1145,6 +1148,59 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void concurrentRegistrationCreationPersistsOneStablePendingHold() throws Exception {
+        long sellerId = IdWorker.getId();
+        long buyerId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession session = scheduledSession(
+                auctionId, itemId, sellerId, now.plus(Duration.ofHours(1)), 1L, now
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(session);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            List<AuctionRegistrationCreationService.RegistrationCreationResult> results;
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                Future<AuctionRegistrationCreationService.RegistrationCreationResult> first = executor.submit(
+                        () -> registerConcurrently(ready, start, buyerId, auctionId)
+                );
+                Future<AuctionRegistrationCreationService.RegistrationCreationResult> second = executor.submit(
+                        () -> registerConcurrently(ready, start, buyerId, auctionId)
+                );
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                results = List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
+            }
+
+            assertThat(results).extracting(AuctionRegistrationCreationService.RegistrationCreationResult::created)
+                    .containsExactlyInAnyOrder(true, false);
+            assertThat(results.get(0).registration().id()).isEqualTo(results.get(1).registration().id());
+            assertThat(results.get(0).registration().registrationNo())
+                    .isEqualTo(results.get(1).registration().registrationNo());
+            AuctionRegistration stored = registrationRepository.findByAuctionAndBidder(auctionId, buyerId)
+                    .orElseThrow();
+            assertThat(stored.status()).isEqualTo(AuctionRegistrationStatus.PENDING_HOLD);
+            assertThat(stored.registrationNo()).isEqualTo("REGISTRATION:" + stored.id());
+            assertThat(stored.depositAmount()).isEqualByComparingTo(session.depositAmount());
+            assertThat(stored.attemptCount()).isZero();
+            assertThat(registrationMapper.selectCount(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AuctionRegistrationEntity>()
+                            .eq(AuctionRegistrationEntity::getAuctionId, auctionId)
+                            .eq(AuctionRegistrationEntity::getBidderId, buyerId)
+            )).isEqualTo(1L);
+        } finally {
+            registrationRepository.findByAuctionAndBidder(auctionId, buyerId)
+                    .ifPresent(registration -> registrationMapper.deleteById(registration.id()));
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void rejectionPersistsReasonAndAllowsEditThenNewSubmissionVersion() {
         long itemId = IdWorker.getId();
         long auctionId = IdWorker.getId();
@@ -1284,6 +1340,21 @@ class AuctionPersistenceIntegrationTest {
         } catch (AuctionReviewTransaction.ReviewConflictException exception) {
             return "CONFLICT";
         }
+    }
+
+    private AuctionRegistrationCreationService.RegistrationCreationResult registerConcurrently(
+            CountDownLatch ready,
+            CountDownLatch start,
+            long bidderId,
+            long auctionId
+    ) throws InterruptedException {
+        ready.countDown();
+        if (!start.await(5, TimeUnit.SECONDS)) {
+            throw new IllegalStateException("Concurrent registration start timed out");
+        }
+        return registrationCreationService.createPending(
+                new AuctionRegistrationCreationService.CreateRegistrationCommand(bidderId, auctionId)
+        );
     }
 
     private boolean openSessionConcurrently(

@@ -20,6 +20,7 @@ public enum AuctionErrorCode implements ErrorCode {
     AUCTION_ENDED("AUCTION_ENDED", "Auction has ended", 409),
     SELLER_CANNOT_PARTICIPATE("AUCTION_SELLER_CANNOT_PARTICIPATE", "Seller cannot participate in their own auction", 409),
     REGISTRATION_NOT_FOUND("AUCTION_REGISTRATION_NOT_FOUND", "Auction registration was not found", 404),
+    REGISTRATION_CLOSED("AUCTION_REGISTRATION_CLOSED", "Auction registration is closed", 409),
     REGISTRATION_REQUIRED("AUCTION_REGISTRATION_REQUIRED", "A completed registration is required", 409),
     REGISTRATION_PENDING("AUCTION_REGISTRATION_PENDING", "Auction registration is still processing", 409),
     DEPOSIT_INSUFFICIENT("AUCTION_DEPOSIT_INSUFFICIENT", "Available wallet balance is insufficient for the deposit", 409),
