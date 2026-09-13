@@ -46,12 +46,15 @@ class AuctionAssetQueryServiceTest {
     private AuctionItemRepository itemRepository;
     private AuctionSessionRepository sessionRepository;
     private ObjectStoragePort objectStorage;
+    private AuctionSessionOpeningService sessionOpeningService;
 
     @BeforeEach
     void setUp() {
         itemRepository = mock(AuctionItemRepository.class);
         sessionRepository = mock(AuctionSessionRepository.class);
         objectStorage = mock(ObjectStoragePort.class);
+        sessionOpeningService = mock(AuctionSessionOpeningService.class);
+        when(sessionOpeningService.openIfDue(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
@@ -141,10 +144,19 @@ class AuctionAssetQueryServiceTest {
     void accessPolicyAllowsPendingAdministratorAndApprovedAuthenticatedUser() {
         AuctionItem pending = item(101L, SELLER_ID, AuctionItemReviewStatus.PENDING_REVIEW);
         AuctionItem approved = item(102L, SELLER_ID, AuctionItemReviewStatus.APPROVED);
+        AuctionSession scheduled = session(202L, 102L);
+        AuctionSession opened = new AuctionSession(
+                scheduled.id(), scheduled.itemId(), scheduled.sellerId(),
+                scheduled.startPrice(), scheduled.bidIncrement(), scheduled.depositAmount(),
+                scheduled.currentPrice(), scheduled.currentBidderId(), scheduled.bidCount(),
+                scheduled.startAt(), scheduled.endAt(), AuctionSessionStatus.OPEN,
+                scheduled.version() + 1, scheduled.createdAt(), NOW
+        );
         when(itemRepository.findItemById(101L)).thenReturn(Optional.of(pending));
         when(itemRepository.findItemById(102L)).thenReturn(Optional.of(approved));
         when(sessionRepository.findSessionByItemId(101L)).thenReturn(Optional.of(session(201L, 101L)));
-        when(sessionRepository.findSessionByItemId(102L)).thenReturn(Optional.of(session(202L, 102L)));
+        when(sessionRepository.findSessionByItemId(102L)).thenReturn(Optional.of(scheduled));
+        when(sessionOpeningService.openIfDue(scheduled)).thenReturn(opened);
         when(itemRepository.findBoundImagesByItemIds(any())).thenReturn(List.of());
         when(itemRepository.findLatestReview(anyLong())).thenReturn(Optional.empty());
         AuctionAssetQueryService service = service(false);
@@ -153,6 +165,8 @@ class AuctionAssetQueryServiceTest {
                 .isEqualTo(AuctionItemReviewStatus.PENDING_REVIEW);
         AuctionAssetQueryService.AssetDetail approvedDetail = service.findDetail(88L, false, 102L);
         assertThat(approvedDetail.reviewStatus()).isEqualTo(AuctionItemReviewStatus.APPROVED);
+        assertThat(approvedDetail.sessionStatus()).isEqualTo(AuctionSessionStatus.OPEN);
+        assertThat(approvedDetail.sessionVersion()).isEqualTo(scheduled.version() + 1);
         assertThat(approvedDetail.latestReview()).isNull();
     }
 
@@ -258,6 +272,7 @@ class AuctionAssetQueryServiceTest {
                 sessionRepository,
                 objectStorage,
                 storageProperties(storageEnabled),
+                sessionOpeningService,
                 Clock.fixed(NOW, ZoneOffset.UTC)
         );
     }

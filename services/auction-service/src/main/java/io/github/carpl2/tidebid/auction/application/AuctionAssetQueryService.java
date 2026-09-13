@@ -40,6 +40,7 @@ public class AuctionAssetQueryService {
     private final AuctionSessionRepository sessionRepository;
     private final ObjectStoragePort objectStorage;
     private final AuctionStorageProperties storageProperties;
+    private final AuctionSessionOpeningService sessionOpeningService;
     private final Clock clock;
 
     public AuctionAssetQueryService(
@@ -47,12 +48,14 @@ public class AuctionAssetQueryService {
             AuctionSessionRepository sessionRepository,
             ObjectStoragePort objectStorage,
             AuctionStorageProperties storageProperties,
+            AuctionSessionOpeningService sessionOpeningService,
             Clock clock
     ) {
         this.itemRepository = itemRepository;
         this.sessionRepository = sessionRepository;
         this.objectStorage = objectStorage;
         this.storageProperties = storageProperties;
+        this.sessionOpeningService = sessionOpeningService;
         this.clock = clock;
     }
 
@@ -102,6 +105,7 @@ public class AuctionAssetQueryService {
         if (session.sellerId() != item.sellerId()) {
             throw new IllegalStateException("Auction item and session sellers do not match");
         }
+        session = sessionOpeningService.openIfDue(session);
         Instant previewExpiresAt = previewExpiresAt();
         List<ImageView> images = itemRepository.findBoundImagesByItemIds(List.of(itemId)).stream()
                 .map(image -> imageView(item, image, previewExpiresAt))

@@ -934,6 +934,36 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void assetDetailLazilyOpensADueScheduledSessionUsingMySqlCas() {
+        long sellerId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession scheduled = scheduledSession(
+                auctionId, itemId, sellerId, now.minusSeconds(1), 6L, now
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(scheduled);
+
+            AuctionAssetQueryService.AssetDetail detail = assetQueryService.findDetail(
+                    sellerId, false, itemId
+            );
+
+            assertThat(detail.sessionStatus()).isEqualTo(AuctionSessionStatus.OPEN);
+            assertThat(detail.sessionVersion()).isEqualTo(scheduled.version() + 1);
+            AuctionSession stored = sessionRepository.findSessionById(auctionId).orElseThrow();
+            assertThat(stored.status()).isEqualTo(AuctionSessionStatus.OPEN);
+            assertThat(stored.version()).isEqualTo(scheduled.version() + 1);
+            assertThat(stored.updatedAt()).isAfterOrEqualTo(now);
+        } finally {
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void rejectionPersistsReasonAndAllowsEditThenNewSubmissionVersion() {
         long itemId = IdWorker.getId();
         long auctionId = IdWorker.getId();
