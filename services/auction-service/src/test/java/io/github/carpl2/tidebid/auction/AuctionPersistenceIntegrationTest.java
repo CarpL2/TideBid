@@ -82,6 +82,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
                 "tidebid.auction.account-client.internal-token=test-internal-token-with-at-least-32-characters",
+                "tidebid.auction.storage.enabled=false",
                 "tidebid.auction.timing.opening-scan-enabled=false",
                 "tidebid.auction.registration-recovery.enabled=false"
         }

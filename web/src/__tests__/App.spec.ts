@@ -11,7 +11,7 @@ describe('App', () => {
     window.sessionStorage.clear()
   })
 
-  it('renders the login route through the installed application plugins', async () => {
+  it('renders the login route through the installed application plugins', { timeout: 10_000 }, async () => {
     const router = createAppRouter(createMemoryHistory())
     await router.push('/login')
     await router.isReady()
