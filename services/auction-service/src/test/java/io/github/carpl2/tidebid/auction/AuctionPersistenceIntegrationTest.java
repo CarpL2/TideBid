@@ -1242,6 +1242,87 @@ class AuctionPersistenceIntegrationTest {
     }
 
     @Test
+    void multipleConcurrentBidRoundsKeepSessionAndHistoryConsistent() throws Exception {
+        int rounds = 5;
+        long sellerId = IdWorker.getId();
+        long firstBidderId = IdWorker.getId();
+        long secondBidderId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        AuctionSession opened = openSession(
+                auctionId, itemId, sellerId,
+                now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)), 12L, now
+        );
+
+        try {
+            itemRepository.insertItem(approvedItem(itemId, sellerId, now));
+            sessionRepository.insertSession(opened);
+
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                for (int round = 1; round <= rounds; round++) {
+                    AuctionSession before = sessionRepository.findSessionById(auctionId).orElseThrow();
+                    long sequenceNo = before.bidCount() + 1;
+                    BigDecimal minimumAmount = before.minimumNextBid();
+                    BidRecord firstBid = new BidRecord(
+                            IdWorker.getId(), auctionId, firstBidderId, "multi-round-first-" + round,
+                            minimumAmount, before.currentPrice(), sequenceNo, now.plusMillis(round)
+                    );
+                    BidRecord secondBid = new BidRecord(
+                            IdWorker.getId(), auctionId, secondBidderId, "multi-round-second-" + round,
+                            minimumAmount.add(new BigDecimal("5.00")), before.currentPrice(), sequenceNo,
+                            now.plusMillis(round)
+                    );
+                    CountDownLatch ready = new CountDownLatch(2);
+                    CountDownLatch start = new CountDownLatch(1);
+                    Future<String> first = executor.submit(() -> acceptBidConcurrently(
+                            ready, start, firstBid, before.version()
+                    ));
+                    Future<String> second = executor.submit(() -> acceptBidConcurrently(
+                            ready, start, secondBid, before.version()
+                    ));
+
+                    assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                    start.countDown();
+                    assertThat(List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                            .containsExactlyInAnyOrder("SUCCESS", "CONFLICT");
+                }
+            }
+
+            AuctionSession settled = sessionRepository.findSessionById(auctionId).orElseThrow();
+            AuctionSessionRepository.BidPage history = sessionRepository.findBidsByAuction(auctionId, 0, 20);
+            assertThat(history.total()).isEqualTo(rounds);
+            assertThat(history.bids()).hasSize(rounds);
+            assertThat(history.bids())
+                    .extracting(BidRecord::sequenceNo)
+                    .containsExactly(5L, 4L, 3L, 2L, 1L);
+
+            BidRecord latestBid = history.bids().getFirst();
+            assertThat(settled.currentPrice()).isEqualByComparingTo(latestBid.amount());
+            assertThat(settled.currentBidderId()).isEqualTo(latestBid.bidderId());
+            assertThat(settled.bidCount()).isEqualTo(rounds);
+            assertThat(settled.version()).isEqualTo(opened.version() + rounds);
+
+            BigDecimal precedingAmount = null;
+            for (int index = history.bids().size() - 1; index >= 0; index--) {
+                BidRecord bid = history.bids().get(index);
+                assertThat(bid.sequenceNo()).isEqualTo(history.bids().size() - index);
+                if (precedingAmount == null) {
+                    assertThat(bid.previousPrice()).isNull();
+                } else {
+                    assertThat(bid.previousPrice()).isEqualByComparingTo(precedingAmount);
+                }
+                precedingAmount = bid.amount();
+            }
+        } finally {
+            bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
+                    .eq(BidRecordEntity::getAuctionId, auctionId));
+            sessionMapper.deleteById(auctionId);
+            itemMapper.deleteById(itemId);
+        }
+    }
+
+    @Test
     void bidServiceReturnsOnePersistedResultForIdempotentRetries() {
         long sellerId = IdWorker.getId();
         long bidderId = IdWorker.getId();
