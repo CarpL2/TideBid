@@ -50,6 +50,12 @@ async function logout(): Promise<void> {
       >
         我的拍品
       </RouterLink>
+      <RouterLink
+        :class="['app-nav__item', { 'app-nav__item--active': activeSection === 'buyer' }]"
+        :to="{ name: 'my-registrations' }"
+      >
+        我的报名
+      </RouterLink>
       <span class="app-nav__item app-nav__item--disabled">我的订单 <small>阶段 03</small></span>
       <RouterLink
         v-if="isAdmin"

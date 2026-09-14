@@ -58,6 +58,25 @@ export interface AuctionRegistrationSummary {
   registeredAt: string | null
 }
 
+export interface AuctionRegistrationRecord {
+  registrationId: string
+  auctionId: string
+  depositAmount: DecimalValue
+  status: AuctionRegistrationStatus
+  failureCode: string | null
+  registeredAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AuctionRegistrationPage {
+  page: number
+  size: number
+  total: number
+  totalPages: number
+  items: AuctionRegistrationRecord[]
+}
+
 export interface AuctionDetail {
   itemId: string
   auctionId: string

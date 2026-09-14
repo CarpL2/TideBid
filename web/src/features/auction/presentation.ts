@@ -54,6 +54,19 @@ export function registrationStatusLabel(status: AuctionRegistrationStatus): stri
   return REGISTRATION_LABELS[status]
 }
 
+const REGISTRATION_FAILURE_LABELS: Record<string, string> = {
+  ACCOUNT_DISABLED: '账户已被停用',
+  ACCOUNT_NOT_FOUND: '账户不存在',
+  ACCOUNT_WALLET_NOT_FOUND: '钱包不存在',
+  ACCOUNT_WALLET_INSUFFICIENT_BALANCE: '可用余额不足',
+  ACCOUNT_WALLET_HOLD_IDEMPOTENCY_CONFLICT: '保证金业务冲突',
+}
+
+export function registrationFailureLabel(code: string | null): string {
+  if (!code) return '报名未完成'
+  return REGISTRATION_FAILURE_LABELS[code] ?? '保证金冻结未完成'
+}
+
 export function reviewStatusLabel(status: AuctionReviewStatus): string {
   return REVIEW_LABELS[status]
 }

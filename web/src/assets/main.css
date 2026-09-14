@@ -1253,6 +1253,111 @@ a:hover {
   }
 }
 
+.registrations-main {
+  width: min(100% - 3rem, 78rem);
+}
+
+.registration-wallet {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(12rem, 16rem)) minmax(16rem, 1fr);
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--tide-border-strong);
+  border-radius: 0.8rem;
+  background: rgba(22, 76, 84, 0.18);
+}
+
+.registration-wallet > div,
+.registration-row > div {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.registration-wallet small,
+.registration-row small {
+  color: var(--tide-muted);
+  font-size: 0.72rem;
+}
+
+.registration-wallet strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 1.25rem;
+}
+
+.registration-wallet p {
+  margin: 0;
+  color: #a9c5ca;
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.registration-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.registration-row {
+  display: grid;
+  grid-template-columns: minmax(13rem, 1fr) minmax(13rem, 1fr) minmax(9rem, 0.65fr) minmax(11rem, 0.8fr);
+  gap: 1rem;
+  align-items: center;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--tide-border);
+  border-radius: 0.8rem;
+  background: rgba(9, 25, 37, 0.84);
+}
+
+.registration-row__status {
+  align-items: start;
+}
+
+.registration-row__status .el-tag {
+  width: fit-content;
+}
+
+.registration-row__auction a {
+  color: #82ded8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.registration-row strong,
+.registration-row span {
+  font-size: 0.88rem;
+}
+
+.registration-row__failure {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 143, 143, 0.18);
+  color: #ffb4b4;
+  font-size: 0.82rem;
+}
+
+@media (max-width: 900px) {
+  .registration-wallet {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .registration-wallet p {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+
+  .registration-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .registration-wallet,
+  .registration-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

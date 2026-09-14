@@ -8,6 +8,8 @@ import type {
   AuctionDetail,
   AuctionDraftResult,
   AuctionLobbyPage,
+  AuctionRegistrationPage,
+  AuctionRegistrationRecord,
   AdminPendingAssetPage,
   AdminReviewInput,
   AdminReviewResult,
@@ -148,5 +150,25 @@ export function reviewAuctionAsset(
     method: 'POST',
     url: `/admin/assets/${encodeURIComponent(assetId)}/reviews`,
     data: input,
+  })
+}
+
+export function getMyAuctionRegistrations(
+  page = 1,
+  size = 12,
+): Promise<ApiResult<AuctionRegistrationPage>> {
+  return requestData<AuctionRegistrationPage>({
+    method: 'GET',
+    url: '/registrations/mine',
+    params: { page, size },
+  })
+}
+
+export function getAuctionRegistration(
+  registrationId: string,
+): Promise<ApiResult<AuctionRegistrationRecord>> {
+  return requestData<AuctionRegistrationRecord>({
+    method: 'GET',
+    url: `/registrations/${encodeURIComponent(registrationId)}`,
   })
 }

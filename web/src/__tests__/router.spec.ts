@@ -53,4 +53,13 @@ describe('authentication route guard', () => {
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/admin/reviews')
   })
+
+  it('protects the buyer registration route', async () => {
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/registrations/mine')
+
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/registrations/mine')
+  })
 })

@@ -6,6 +6,7 @@ import { storeToRefs } from 'pinia'
 import { normalizeApiError, type ApiError } from '@/api/errors'
 import ApiErrorNotice from '@/components/ApiErrorNotice.vue'
 import AppHeader from '@/components/AppHeader.vue'
+import { formatMoney } from '@/features/auction/presentation'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -13,17 +14,6 @@ const { profile, wallet, dashboardLoading, lastTraceId } = storeToRefs(authStore
 const pageError = ref<ApiError | null>(null)
 
 const avatarText = computed(() => profile.value?.nickname.trim().slice(0, 1).toUpperCase() || 'T')
-
-function formatMoney(value: number | string | undefined): string {
-  const amount = Number(value)
-  if (!Number.isFinite(amount)) {
-    return '--'
-  }
-  return amount.toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-}
 
 async function refresh(): Promise<void> {
   pageError.value = null
@@ -89,12 +79,12 @@ onMounted(refresh)
         <section class="balance-grid" aria-label="虚拟钱包余额">
           <article class="balance-card balance-card--available">
             <p>可用余额</p>
-            <strong><small>¥</small>{{ formatMoney(wallet.availableBalance) }}</strong>
+            <strong>{{ formatMoney(wallet.availableBalance) }}</strong>
             <span>可用于竞价报名与保证金冻结</span>
           </article>
           <article class="balance-card">
             <p>冻结余额</p>
-            <strong><small>¥</small>{{ formatMoney(wallet.frozenBalance) }}</strong>
+            <strong>{{ formatMoney(wallet.frozenBalance) }}</strong>
             <span>已报名场次冻结的虚拟保证金</span>
           </article>
         </section>
