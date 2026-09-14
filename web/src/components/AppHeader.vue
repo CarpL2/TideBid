@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElButton } from 'element-plus'
 
@@ -11,6 +11,13 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const activeSection = computed(() => String(route.meta.section ?? ''))
+const isAdmin = computed(() => authStore.profile?.roles.includes('ADMIN') ?? false)
+
+onMounted(() => {
+  if (authStore.isAuthenticated && !authStore.profile) {
+    void authStore.loadProfile().catch(() => undefined)
+  }
+})
 
 async function logout(): Promise<void> {
   authStore.logout()
@@ -44,7 +51,13 @@ async function logout(): Promise<void> {
         我的拍品
       </RouterLink>
       <span class="app-nav__item app-nav__item--disabled">我的订单 <small>阶段 03</small></span>
-      <span class="app-nav__item app-nav__item--disabled">管理台 <small>建设中</small></span>
+      <RouterLink
+        v-if="isAdmin"
+        :class="['app-nav__item', { 'app-nav__item--active': activeSection === 'admin' }]"
+        :to="{ name: 'admin-reviews' }"
+      >
+        拍品审核
+      </RouterLink>
     </nav>
 
     <ElButton plain @click="logout">退出登录</ElButton>

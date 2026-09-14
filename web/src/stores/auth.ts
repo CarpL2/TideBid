@@ -25,6 +25,7 @@ import type {
 export const useAuthStore = defineStore('auth', () => {
   const session = ref<AuthSession | null>(readAuthSession())
   const profile = ref<CurrentAccount | null>(null)
+  const profileLoading = ref(false)
   const wallet = ref<CurrentWallet | null>(null)
   const dashboardLoading = ref(false)
   const lastTraceId = ref<string | null>(null)
@@ -32,6 +33,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(
     () => session.value !== null && session.value.expiresAt > Date.now(),
   )
+  let profileRequest: Promise<CurrentAccount> | null = null
 
   function restoreSession(): boolean {
     session.value = readAuthSession()
@@ -42,6 +44,28 @@ export const useAuthStore = defineStore('auth', () => {
     profile.value = null
     wallet.value = null
     lastTraceId.value = null
+  }
+
+  async function loadProfile(): Promise<CurrentAccount> {
+    if (profile.value) {
+      return profile.value
+    }
+    if (profileRequest) {
+      return profileRequest
+    }
+
+    profileLoading.value = true
+    profileRequest = getCurrentAccount()
+      .then((result) => {
+        profile.value = result.data
+        lastTraceId.value = result.traceId
+        return result.data
+      })
+      .finally(() => {
+        profileLoading.value = false
+        profileRequest = null
+      })
+    return profileRequest
   }
 
   function logout(): void {
@@ -65,23 +89,19 @@ export const useAuthStore = defineStore('auth', () => {
   async function loadDashboard(): Promise<void> {
     dashboardLoading.value = true
     try {
-      const [accountResult, walletResult] = await Promise.all([
-        getCurrentAccount(),
-        getCurrentWallet(),
-      ])
+      const [account, walletResult] = await Promise.all([loadProfile(), getCurrentWallet()])
 
-      if (accountResult.data.userId !== walletResult.data.userId) {
+      if (account.userId !== walletResult.data.userId) {
         throw new ApiError({
           code: 'CLIENT_INCONSISTENT_ACCOUNT',
           status: 0,
           userMessage: '账户资料与钱包数据不一致，请联系管理员。',
-          traceId: walletResult.traceId ?? accountResult.traceId,
+          traceId: walletResult.traceId ?? lastTraceId.value,
         })
       }
 
-      profile.value = accountResult.data
       wallet.value = walletResult.data
-      lastTraceId.value = walletResult.traceId ?? accountResult.traceId
+      lastTraceId.value = walletResult.traceId ?? lastTraceId.value
     } finally {
       dashboardLoading.value = false
     }
@@ -90,6 +110,7 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     session,
     profile,
+    profileLoading,
     wallet,
     dashboardLoading,
     lastTraceId,
@@ -98,6 +119,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     register,
     loadDashboard,
+    loadProfile,
     logout,
   }
 })

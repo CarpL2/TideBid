@@ -44,4 +44,13 @@ describe('authentication route guard', () => {
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/assets/new')
   })
+
+  it('protects the admin review route', async () => {
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/admin/reviews')
+
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/admin/reviews')
+  })
 })

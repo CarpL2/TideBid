@@ -219,3 +219,49 @@ export interface AuctionSubmissionResult {
   sessionVersion: number
   submittedAt: string
 }
+
+export interface AdminPendingAssetSummary {
+  itemId: string
+  auctionId: string
+  sellerId: string
+  title: string
+  category: AuctionCategory
+  itemCondition: AuctionItemCondition
+  reviewStatus: 'PENDING_REVIEW'
+  submissionVersion: number
+  startPrice: DecimalValue
+  bidIncrement: DecimalValue
+  depositAmount: DecimalValue
+  startAt: string
+  endAt: string
+  itemVersion: number
+  sessionVersion: number
+  submittedAt: string
+  coverImage: AuctionImage | null
+}
+
+export interface AdminPendingAssetPage {
+  page: number
+  size: number
+  total: number
+  totalPages: number
+  items: AdminPendingAssetSummary[]
+}
+
+export interface AdminReviewInput {
+  decision: 'APPROVE' | 'REJECT'
+  submissionVersion: number
+  comment: string | null
+}
+
+export interface AdminReviewResult {
+  itemId: string
+  auctionId: string
+  submissionVersion: number
+  decision: AuctionReviewDecision
+  itemStatus: 'APPROVED' | 'REJECTED'
+  sessionStatus: 'SCHEDULED' | 'DRAFT'
+  itemVersion: number
+  sessionVersion: number
+  reviewedAt: string
+}

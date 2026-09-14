@@ -8,6 +8,9 @@ import type {
   AuctionDetail,
   AuctionDraftResult,
   AuctionLobbyPage,
+  AdminPendingAssetPage,
+  AdminReviewInput,
+  AdminReviewResult,
   AuctionSubmissionResult,
   CreateAuctionDraftInput,
   UpdateAuctionDraftInput,
@@ -123,5 +126,27 @@ export function submitAuctionAsset(
     method: 'POST',
     url: `/assets/${encodeURIComponent(assetId)}/submit`,
     data: { itemVersion, sessionVersion },
+  })
+}
+
+export function getPendingAuctionAssets(
+  page = 1,
+  size = 12,
+): Promise<ApiResult<AdminPendingAssetPage>> {
+  return requestData<AdminPendingAssetPage>({
+    method: 'GET',
+    url: '/admin/assets/pending',
+    params: { page, size },
+  })
+}
+
+export function reviewAuctionAsset(
+  assetId: string,
+  input: AdminReviewInput,
+): Promise<ApiResult<AdminReviewResult>> {
+  return requestData<AdminReviewResult>({
+    method: 'POST',
+    url: `/admin/assets/${encodeURIComponent(assetId)}/reviews`,
+    data: input,
   })
 }

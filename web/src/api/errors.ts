@@ -23,6 +23,7 @@ const USER_MESSAGES: Record<string, string> = {
   AUCTION_IMAGE_INVALID: '图片不存在、已过期或不属于当前账号。',
   AUCTION_ASSET_ACCESS_DENIED: '你不能查看或修改该拍品。',
   AUCTION_ASSET_STATE_CONFLICT: '拍品状态或版本已经变化，请刷新后重试。',
+  AUCTION_SUBMISSION_VERSION_CONFLICT: '该拍品已被其他管理员处理，请刷新审核队列。',
 }
 
 export interface ApiErrorOptions {

@@ -67,6 +67,12 @@ export function createAppRouter(
         meta: { title: '编辑拍品 · TideBid', requiresAuth: true, section: 'seller' },
       },
       {
+        path: '/admin/reviews',
+        name: 'admin-reviews',
+        component: () => import('@/views/AdminReviewsView.vue'),
+        meta: { title: '拍品审核 · TideBid', requiresAuth: true, section: 'admin' },
+      },
+      {
         path: '/:pathMatch(.*)*',
         name: 'not-found',
         component: () => import('@/views/NotFoundView.vue'),
