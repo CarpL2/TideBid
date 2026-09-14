@@ -37,6 +37,12 @@ async function logout(): Promise<void> {
       >
         竞价大厅
       </RouterLink>
+      <RouterLink
+        :class="['app-nav__item', { 'app-nav__item--active': activeSection === 'seller' }]"
+        :to="{ name: 'my-assets' }"
+      >
+        我的拍品
+      </RouterLink>
       <span class="app-nav__item app-nav__item--disabled">我的订单 <small>阶段 03</small></span>
       <span class="app-nav__item app-nav__item--disabled">管理台 <small>建设中</small></span>
     </nav>

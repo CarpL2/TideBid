@@ -15,6 +15,14 @@ const USER_MESSAGES: Record<string, string> = {
   ACCOUNT_USERNAME_ALREADY_EXISTS: '该用户名已被注册。',
   ACCOUNT_INVALID_CREDENTIALS: '用户名或密码错误。',
   ACCOUNT_DISABLED: '该账号已被禁用。',
+  AUCTION_STORAGE_UNAVAILABLE: '对象存储尚未配置或暂时不可用。',
+  AUCTION_ASSET_INVALID: '拍品内容不符合上架要求。',
+  AUCTION_ASSET_NOT_FOUND: '拍品不存在或已经不可访问。',
+  AUCTION_AMOUNT_INVALID: '竞价金额必须为正数且最多保留两位小数。',
+  AUCTION_TIME_INVALID: '场次时间不符合要求，请检查开始时间和持续时长。',
+  AUCTION_IMAGE_INVALID: '图片不存在、已过期或不属于当前账号。',
+  AUCTION_ASSET_ACCESS_DENIED: '你不能查看或修改该拍品。',
+  AUCTION_ASSET_STATE_CONFLICT: '拍品状态或版本已经变化，请刷新后重试。',
 }
 
 export interface ApiErrorOptions {

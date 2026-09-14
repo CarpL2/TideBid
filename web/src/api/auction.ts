@@ -1,9 +1,18 @@
 import { requestData } from '@/api/http'
+import { ApiError } from '@/api/errors'
 import type { ApiResult } from '@/types/api'
 import type {
+  AuctionAssetDetail,
+  AuctionAssetPage,
   AuctionBidHistoryPage,
   AuctionDetail,
+  AuctionDraftResult,
   AuctionLobbyPage,
+  AuctionSubmissionResult,
+  CreateAuctionDraftInput,
+  UpdateAuctionDraftInput,
+  UploadIntent,
+  UploadIntentInput,
 } from '@/types/auction'
 
 export function getAuctionLobby(page = 1, size = 12): Promise<ApiResult<AuctionLobbyPage>> {
@@ -30,5 +39,89 @@ export function getAuctionBidHistory(
     method: 'GET',
     url: `/auctions/${encodeURIComponent(auctionId)}/bids`,
     params: { page, size },
+  })
+}
+
+export function getMyAuctionAssets(page = 1, size = 12): Promise<ApiResult<AuctionAssetPage>> {
+  return requestData<AuctionAssetPage>({
+    method: 'GET',
+    url: '/assets/mine',
+    params: { page, size },
+  })
+}
+
+export function getAuctionAsset(assetId: string): Promise<ApiResult<AuctionAssetDetail>> {
+  return requestData<AuctionAssetDetail>({
+    method: 'GET',
+    url: `/assets/${encodeURIComponent(assetId)}`,
+  })
+}
+
+export function createUploadIntent(input: UploadIntentInput): Promise<ApiResult<UploadIntent>> {
+  return requestData<UploadIntent>({
+    method: 'POST',
+    url: '/assets/upload-intents',
+    data: input,
+  })
+}
+
+export async function putObjectToSignedUrl(intent: UploadIntent, file: File): Promise<void> {
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(intent.requiredHeaders)) {
+    const normalized = name.toLowerCase()
+    if (normalized !== 'content-length' && normalized !== 'host') {
+      headers.set(name, value)
+    }
+  }
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', file.type)
+  }
+
+  let response: Response
+  try {
+    response = await fetch(intent.uploadUrl, { method: 'PUT', headers, body: file })
+  } catch (cause) {
+    throw new ApiError({
+      code: 'CLIENT_UPLOAD_NETWORK_ERROR',
+      status: 0,
+      userMessage: '图片直传失败，请检查 OSS 跨域配置和网络后重试。',
+      cause,
+    })
+  }
+  if (!response.ok) {
+    throw new ApiError({
+      code: 'CLIENT_UPLOAD_FAILED',
+      status: response.status,
+      userMessage: '图片直传未完成，请重新选择图片后再试。',
+    })
+  }
+}
+
+export function createAuctionDraft(
+  input: CreateAuctionDraftInput,
+): Promise<ApiResult<AuctionDraftResult>> {
+  return requestData<AuctionDraftResult>({ method: 'POST', url: '/assets', data: input })
+}
+
+export function updateAuctionDraft(
+  assetId: string,
+  input: UpdateAuctionDraftInput,
+): Promise<ApiResult<AuctionDraftResult>> {
+  return requestData<AuctionDraftResult>({
+    method: 'PUT',
+    url: `/assets/${encodeURIComponent(assetId)}`,
+    data: input,
+  })
+}
+
+export function submitAuctionAsset(
+  assetId: string,
+  itemVersion: number,
+  sessionVersion: number,
+): Promise<ApiResult<AuctionSubmissionResult>> {
+  return requestData<AuctionSubmissionResult>({
+    method: 'POST',
+    url: `/assets/${encodeURIComponent(assetId)}/submit`,
+    data: { itemVersion, sessionVersion },
   })
 }

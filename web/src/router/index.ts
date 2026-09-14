@@ -49,6 +49,24 @@ export function createAppRouter(
         meta: { title: '拍品详情 · TideBid', requiresAuth: true, section: 'auctions' },
       },
       {
+        path: '/assets/mine',
+        name: 'my-assets',
+        component: () => import('@/views/MyAssetsView.vue'),
+        meta: { title: '我的拍品 · TideBid', requiresAuth: true, section: 'seller' },
+      },
+      {
+        path: '/assets/new',
+        name: 'asset-create',
+        component: () => import('@/views/AuctionDraftView.vue'),
+        meta: { title: '创建拍品 · TideBid', requiresAuth: true, section: 'seller' },
+      },
+      {
+        path: '/assets/:assetId/edit',
+        name: 'asset-edit',
+        component: () => import('@/views/AuctionDraftView.vue'),
+        meta: { title: '编辑拍品 · TideBid', requiresAuth: true, section: 'seller' },
+      },
+      {
         path: '/:pathMatch(.*)*',
         name: 'not-found',
         component: () => import('@/views/NotFoundView.vue'),

@@ -35,4 +35,13 @@ describe('authentication route guard', () => {
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/auctions/2098215937757904897')
   })
+
+  it('protects seller draft routes', async () => {
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/assets/new')
+
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/assets/new')
+  })
 })

@@ -1,5 +1,6 @@
 import type {
   AuctionItemCondition,
+  AuctionReviewStatus,
   AuctionRegistrationStatus,
   AuctionSessionStatus,
   DecimalValue,
@@ -24,6 +25,23 @@ const REGISTRATION_LABELS: Record<AuctionRegistrationStatus, string> = {
   FAILED: '报名失败',
 }
 
+const REVIEW_LABELS: Record<AuctionReviewStatus, string> = {
+  DRAFT: '草稿',
+  PENDING_REVIEW: '审核中',
+  APPROVED: '已通过',
+  REJECTED: '已驳回',
+}
+
+export const AUCTION_CATEGORY_OPTIONS = [
+  { value: 'ELECTRONICS', label: '数码电子' },
+  { value: 'COLLECTIBLES', label: '收藏品' },
+  { value: 'ART', label: '艺术品' },
+  { value: 'FASHION', label: '服饰箱包' },
+  { value: 'HOME', label: '家居生活' },
+  { value: 'SPORTS', label: '运动户外' },
+  { value: 'OTHER', label: '其他' },
+] as const
+
 export function sessionStatusLabel(status: AuctionSessionStatus): string {
   return SESSION_LABELS[status]
 }
@@ -34,6 +52,10 @@ export function conditionLabel(condition: AuctionItemCondition): string {
 
 export function registrationStatusLabel(status: AuctionRegistrationStatus): string {
   return REGISTRATION_LABELS[status]
+}
+
+export function reviewStatusLabel(status: AuctionReviewStatus): string {
+  return REVIEW_LABELS[status]
 }
 
 export function formatMoney(value: DecimalValue | null | undefined): string {

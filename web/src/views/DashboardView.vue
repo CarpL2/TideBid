@@ -90,12 +90,12 @@ onMounted(refresh)
           <article class="balance-card balance-card--available">
             <p>可用余额</p>
             <strong><small>¥</small>{{ formatMoney(wallet.availableBalance) }}</strong>
-            <span>可用于后续竞价报名与出价</span>
+            <span>可用于竞价报名与保证金冻结</span>
           </article>
           <article class="balance-card">
             <p>冻结余额</p>
             <strong><small>¥</small>{{ formatMoney(wallet.frozenBalance) }}</strong>
-            <span>当前没有开放保证金操作</span>
+            <span>已报名场次冻结的虚拟保证金</span>
           </article>
         </section>
 
@@ -104,7 +104,7 @@ onMounted(refresh)
           :closable="false"
           type="info"
           show-icon
-          title="阶段 01 只展示真实账号与钱包数据；竞价、订单和管理功能尚未开放。"
+          title="阶段 02 已开放拍品浏览与卖家上架；订单和支付留到阶段 03。"
         />
 
         <p v-if="lastTraceId" class="trace-footer">最近请求追踪编号：{{ lastTraceId }}</p>
