@@ -59,8 +59,12 @@ function Get-HttpFailureDetails {
     param([Parameter(Mandatory = $true)]$Failure)
 
     $status = 'unavailable'
-    if ($null -ne $Failure.Exception.Response -and $null -ne $Failure.Exception.Response.StatusCode) {
-        $status = [string][int]($Failure.Exception.Response.StatusCode)
+    $responseProperty = $Failure.Exception.PSObject.Properties['Response']
+    if ($null -ne $responseProperty -and $null -ne $responseProperty.Value) {
+        $statusProperty = $responseProperty.Value.PSObject.Properties['StatusCode']
+        if ($null -ne $statusProperty -and $null -ne $statusProperty.Value) {
+            $status = [string][int]($statusProperty.Value)
+        }
     }
 
     $code = 'unavailable'
@@ -327,22 +331,58 @@ function Send-SmokeImageToOss {
         }
         $headers[$property.Name] = [string]$property.Value
     }
+
+    $curl = Get-Command 'curl.exe' -ErrorAction SilentlyContinue
+    if ($null -eq $curl) {
+        throw 'OSS PUT requires curl.exe on Windows; the signed URL was suppressed.'
+    }
+
+    $runtimeDirectory = Join-Path (Split-Path $PSScriptRoot -Parent) '.runtime\smoke'
+    New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
+    $uploadFile = Join-Path $runtimeDirectory "oss-upload-$([Guid]::NewGuid().ToString('N')).bin"
+    [System.IO.File]::WriteAllBytes($uploadFile, $Content)
+
+    function ConvertTo-CurlConfigValue {
+        param([Parameter(Mandatory = $true)][string]$Value)
+
+        if ($Value -match "[`r`n]") {
+            throw 'OSS signed request contains an invalid line break.'
+        }
+        return $Value.Replace('\', '\\').Replace('"', '\"')
+    }
+
+    $configLines = [System.Collections.Generic.List[string]]::new()
+    $configLines.Add("url = `"$(ConvertTo-CurlConfigValue -Value $UploadUrl)`"")
+    $configLines.Add('request = "PUT"')
+    $configLines.Add("upload-file = `"$(ConvertTo-CurlConfigValue -Value $uploadFile)`"")
+    $configLines.Add("header = `"Content-Type: $(ConvertTo-CurlConfigValue -Value $contentType)`"")
+    foreach ($entry in $headers.GetEnumerator()) {
+        $header = "$(ConvertTo-CurlConfigValue -Value ([string]$entry.Key)): $(ConvertTo-CurlConfigValue -Value ([string]$entry.Value))"
+        $configLines.Add("header = `"$header`"")
+    }
+
     try {
-        $response = Invoke-WebRequest `
-            -UseBasicParsing `
-            -Method Put `
-            -Uri $UploadUrl `
-            -Headers $headers `
-            -ContentType $contentType `
-            -Body $Content `
-            -TimeoutSec $RequestTimeoutSeconds
-    } catch {
-        throw 'OSS PUT failed; the signed URL and response body were suppressed.'
+        $curlConfig = ($configLines -join "`n") + "`n"
+        $statusText = $curlConfig | & $curl.Source `
+            --config - `
+            --silent `
+            --output NUL `
+            --max-time $RequestTimeoutSeconds `
+            --write-out '%{http_code}' 2>$null
+        $curlExitCode = $LASTEXITCODE
+        $statusCode = 0
+        if ([int]::TryParse(([string]$statusText).Trim(), [ref]$statusCode) -and
+            $curlExitCode -eq 0 -and $statusCode -in @(200, 201)) {
+            Write-Host "[PASS] oss-put traceId=$script:currentTraceId"
+            return
+        }
+        if ($statusCode -gt 0) {
+            throw "OSS PUT failed with HTTP status $statusCode (curlExitCode=$curlExitCode); the signed URL and response body were suppressed."
+        }
+        throw "OSS PUT failed before an HTTP status was received (curlExitCode=$curlExitCode); the signed URL and response body were suppressed."
+    } finally {
+        Remove-Item -LiteralPath $uploadFile -Force -ErrorAction SilentlyContinue
     }
-    if ([int]$response.StatusCode -notin @(200, 201)) {
-        throw "OSS PUT returned unexpected HTTP status $([int]$response.StatusCode); the signed URL was suppressed."
-    }
-    Write-Host "[PASS] oss-put traceId=$script:currentTraceId"
 }
 
 function Wait-RegistrationFinal {

@@ -118,7 +118,58 @@ function Assert-RequiredEnvironment {
         throw 'TIDEBID_INTERNAL_SERVICE_TOKEN must contain 32 to 512 characters; its value was not printed.'
     }
 
+    Assert-OptionalDevelopmentAdminEnvironment
     Assert-OptionalOssEnvironment
+}
+
+function Assert-OptionalDevelopmentAdminEnvironment {
+    $enabledText = [Environment]::GetEnvironmentVariable('TIDEBID_DEV_ADMIN_ENABLED', 'Process')
+    if ([string]::IsNullOrWhiteSpace($enabledText)) {
+        $enabledText = 'false'
+    }
+
+    $adminEnabled = $false
+    if (-not [bool]::TryParse($enabledText.Trim(), [ref]$adminEnabled)) {
+        throw 'TIDEBID_DEV_ADMIN_ENABLED must be true or false.'
+    }
+    if (-not $adminEnabled) {
+        return
+    }
+
+    $requiredAdminNames = @(
+        'TIDEBID_DEV_ADMIN_USERNAME',
+        'TIDEBID_DEV_ADMIN_PASSWORD',
+        'TIDEBID_DEV_ADMIN_NICKNAME'
+    )
+    $invalidNames = @()
+    foreach ($name in $requiredAdminNames) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ([string]::IsNullOrWhiteSpace($value) -or $value.StartsWith('change-me') -or
+            $value.StartsWith('REPLACE_WITH_')) {
+            $invalidNames += $name
+        }
+    }
+    if ($invalidNames.Count -gt 0) {
+        throw "Development administrator is enabled; set these values in .env or the current process environment: $($invalidNames -join ', ')."
+    }
+
+    $username = [Environment]::GetEnvironmentVariable('TIDEBID_DEV_ADMIN_USERNAME', 'Process')
+    if ($username -notmatch '^[A-Za-z0-9_]{4,32}$') {
+        throw 'TIDEBID_DEV_ADMIN_USERNAME must contain 4 to 32 letters, digits, or underscores; its value was not printed.'
+    }
+
+    $password = [Environment]::GetEnvironmentVariable('TIDEBID_DEV_ADMIN_PASSWORD', 'Process')
+    if ($password.Length -lt 8 -or $password.Length -gt 64) {
+        throw 'TIDEBID_DEV_ADMIN_PASSWORD must contain 8 to 64 characters; its value was not printed.'
+    }
+    if ([System.Text.Encoding]::UTF8.GetByteCount($password) -gt 72) {
+        throw 'TIDEBID_DEV_ADMIN_PASSWORD must not exceed 72 UTF-8 bytes; its value was not printed.'
+    }
+
+    $nickname = [Environment]::GetEnvironmentVariable('TIDEBID_DEV_ADMIN_NICKNAME', 'Process').Trim()
+    if ($nickname.Length -lt 1 -or $nickname.Length -gt 64) {
+        throw 'TIDEBID_DEV_ADMIN_NICKNAME must contain 1 to 64 characters; its value was not printed.'
+    }
 }
 
 function Assert-OptionalOssEnvironment {

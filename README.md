@@ -160,7 +160,10 @@ to approve it, registers both buyers, replays one registration, and verifies eac
 bids, replays the first bid with the same request ID, then checks the final MySQL-backed price,
 minimum next bid, bid count, ordering and bidder-relative identity in history. The generated users,
 auction and bound image intentionally remain as inspectable demonstration data. The script never
-prints administrator credentials, Access Tokens, OSS credentials, or complete presigned URLs.
+prints administrator credentials, Access Tokens, OSS credentials, or complete presigned URLs. On
+Windows the OSS PUT uses the bundled `curl.exe`/Schannel path; the signed URL and required headers
+are supplied through curl standard input rather than command-line arguments, and the temporary image
+body under ignored `.runtime/smoke/` is removed immediately after the request.
 
 Stop only the application processes recorded by this checkout, then optionally stop middleware:
 
