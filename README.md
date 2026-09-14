@@ -134,16 +134,33 @@ Verify the running account flow through Gateway with a fresh test account:
 .\scripts\smoke.ps1
 ```
 
-The smoke test first checks Gateway health, then uses a unique random username to register, log in,
-read the current profile, and read the current wallet. It verifies lowercase username normalization,
-identity consistency, the exact `USER` role, and balances of `10000.00` available and `0.00` frozen.
-Each step prints its trace ID, but the generated password and access token are never printed. Any
-HTTP or assertion failure throws with the failing step and trace ID, so `powershell -File` and CI
-receive a nonzero exit code. A different local Gateway can be selected explicitly:
+By default, the smoke test checks Gateway health, then uses a unique random username to register,
+log in, read the current profile, and read the current wallet. It verifies lowercase username
+normalization, identity consistency, the exact `USER` role, and balances of `10000.00` available and
+`0.00` frozen. Each step prints its trace ID, but generated passwords and access tokens are never
+printed. Any HTTP or assertion failure throws with the failing step and trace ID, so
+`powershell -File` and CI receive a nonzero exit code. A different local Gateway can be selected
+explicitly:
 
 ```powershell
 .\scripts\smoke.ps1 -GatewayBaseUri 'http://127.0.0.1:9000'
 ```
+
+Run the phase 02 auction-core flow after enabling a real private OSS Bucket and the local development
+administrator in `.env`, then restarting the applications so they receive those settings:
+
+```powershell
+.\scripts\smoke.ps1 -AuctionCore
+```
+
+This extended flow creates a unique seller and two unique buyers, uploads a generated one-pixel PNG
+through a presigned OSS PUT, creates and submits an auction, logs in as the configured administrator
+to approve it, registers both buyers, replays one registration, and verifies each wallet changed from
+`10000.00/0.00` to `9950.00/50.00` exactly once. It waits for the scheduled start, submits two buyer
+bids, replays the first bid with the same request ID, then checks the final MySQL-backed price,
+minimum next bid, bid count, ordering and bidder-relative identity in history. The generated users,
+auction and bound image intentionally remain as inspectable demonstration data. The script never
+prints administrator credentials, Access Tokens, OSS credentials, or complete presigned URLs.
 
 Stop only the application processes recorded by this checkout, then optionally stop middleware:
 
