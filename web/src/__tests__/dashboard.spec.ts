@@ -13,7 +13,7 @@ describe('account dashboard', () => {
     window.sessionStorage.clear()
   })
 
-  it('shows the signed-in identity, wallet and disabled future navigation', async () => {
+  it('shows the signed-in identity, wallet and auction navigation', async () => {
     saveAuthSession({ accessToken: 'signed-token', tokenType: 'Bearer', expiresIn: 60 })
     const pinia = createPinia()
     const router = createAppRouter(createMemoryHistory())
@@ -37,7 +37,7 @@ describe('account dashboard', () => {
     expect(wrapper.text()).toContain('2098215937757904897')
     expect(wrapper.text()).toContain('10,000.00')
     expect(wrapper.text()).toContain('trace-wallet')
-    expect(wrapper.findAll('nav button').every((button) => button.attributes('disabled') !== undefined))
-      .toBe(true)
+    expect(wrapper.get('.app-nav a[href="/auctions"]').text()).toContain('竞价大厅')
+    expect(wrapper.findAll('.app-nav__item--disabled')).toHaveLength(2)
   })
 })

@@ -1,16 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElAlert, ElButton, ElSkeleton, ElSkeletonItem, ElTag } from 'element-plus'
 import { storeToRefs } from 'pinia'
 
 import { normalizeApiError, type ApiError } from '@/api/errors'
 import ApiErrorNotice from '@/components/ApiErrorNotice.vue'
-import BrandLockup from '@/components/BrandLockup.vue'
+import AppHeader from '@/components/AppHeader.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
-const router = useRouter()
 const { profile, wallet, dashboardLoading, lastTraceId } = storeToRefs(authStore)
 const pageError = ref<ApiError | null>(null)
 
@@ -36,28 +34,12 @@ async function refresh(): Promise<void> {
   }
 }
 
-async function logout(): Promise<void> {
-  authStore.logout()
-  await router.replace({ name: 'login' })
-}
-
 onMounted(refresh)
 </script>
 
 <template>
   <div class="dashboard-page">
-    <header class="app-header">
-      <BrandLockup compact />
-
-      <nav class="app-nav" aria-label="主要导航">
-        <span class="app-nav__item app-nav__item--active">账户工作台</span>
-        <button disabled type="button">竞价大厅 <small>阶段 02</small></button>
-        <button disabled type="button">我的订单 <small>阶段 03</small></button>
-        <button disabled type="button">管理台 <small>待开放</small></button>
-      </nav>
-
-      <ElButton plain @click="logout">退出登录</ElButton>
-    </header>
+    <AppHeader />
 
     <main class="dashboard-main">
       <div class="dashboard-heading">

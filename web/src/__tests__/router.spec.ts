@@ -26,4 +26,13 @@ describe('authentication route guard', () => {
 
     expect(router.currentRoute.value.name).toBe('dashboard')
   })
+
+  it('protects the auction lobby and preserves its return path', async () => {
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/auctions/2098215937757904897')
+
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/auctions/2098215937757904897')
+  })
 })

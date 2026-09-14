@@ -34,7 +34,19 @@ export function createAppRouter(
         path: '/dashboard',
         name: 'dashboard',
         component: () => import('@/views/DashboardView.vue'),
-        meta: { title: '账户工作台 · TideBid', requiresAuth: true },
+        meta: { title: '账户工作台 · TideBid', requiresAuth: true, section: 'dashboard' },
+      },
+      {
+        path: '/auctions',
+        name: 'auctions',
+        component: () => import('@/views/AuctionLobbyView.vue'),
+        meta: { title: '竞价大厅 · TideBid', requiresAuth: true, section: 'auctions' },
+      },
+      {
+        path: '/auctions/:auctionId',
+        name: 'auction-detail',
+        component: () => import('@/views/AuctionDetailView.vue'),
+        meta: { title: '拍品详情 · TideBid', requiresAuth: true, section: 'auctions' },
       },
       {
         path: '/:pathMatch(.*)*',
