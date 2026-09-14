@@ -105,13 +105,22 @@ After creating `.env`, start the middleware and all host applications from the r
 ```
 
 `start-apps.ps1` validates Java 21, Maven 3.9+, Node 24, pnpm 11, required application values
-and all seven host ports. It packages the Java modules without rerunning tests, validates the JWT
-key pair, imports the seven managed Nacos Data IDs, and starts Account, Auction, Trade, Realtime,
-AI, Gateway, then Vue. Each process must pass its HTTP readiness check before the next dependency
-starts. If the JARs are already current, use the faster development path:
+and all seven host ports. Required values include the Account and Auction database passwords and a
+32-to-512-character internal service Token. When `TIDEBID_OSS_ENABLED=true`, the script also checks
+that the AccessKey ID/Secret, HTTP(S) Endpoint, region and Bucket are complete and structurally valid;
+when it is false, cloud credentials remain optional. It packages the Java modules without rerunning
+tests, validates the JWT key pair, imports the seven managed Nacos Data IDs, and starts Account,
+Auction, Trade, Realtime, AI, Gateway, then Vue. Each process must pass its HTTP readiness check
+before the next dependency starts. If the JARs are already current, use the faster development path:
 
 ```powershell
 .\scripts\start-apps.ps1 -SkipBuild
+```
+
+Validate the local application configuration and toolchain without building or starting processes:
+
+```powershell
+.\scripts\start-apps.ps1 -CheckOnly
 ```
 
 PIDs are stored in ignored `.runtime/apps/processes.json`; stdout and stderr are separated under

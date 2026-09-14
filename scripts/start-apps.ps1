@@ -11,7 +11,10 @@ param(
     [int]$StartupTimeoutSeconds = 180,
 
     [Parameter()]
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+
+    [Parameter()]
+    [switch]$CheckOnly
 )
 
 Set-StrictMode -Version Latest
@@ -91,11 +94,13 @@ function Read-DotEnvFile {
 function Assert-RequiredEnvironment {
     $requiredNames = @(
         'TIDEBID_ACCOUNT_DB_PASSWORD',
+        'TIDEBID_AUCTION_DB_PASSWORD',
         'TIDEBID_REDIS_PASSWORD',
         'TIDEBID_NACOS_USERNAME',
         'TIDEBID_NACOS_PASSWORD',
         'TIDEBID_JWT_PRIVATE_KEY_PATH',
-        'TIDEBID_JWT_PUBLIC_KEY_PATH'
+        'TIDEBID_JWT_PUBLIC_KEY_PATH',
+        'TIDEBID_INTERNAL_SERVICE_TOKEN'
     )
     $invalidNames = @()
     foreach ($name in $requiredNames) {
@@ -106,6 +111,63 @@ function Assert-RequiredEnvironment {
     }
     if ($invalidNames.Count -gt 0) {
         throw "Set these required application values in .env or the current process environment: $($invalidNames -join ', ')."
+    }
+
+    $internalToken = [Environment]::GetEnvironmentVariable('TIDEBID_INTERNAL_SERVICE_TOKEN', 'Process').Trim()
+    if ($internalToken.Length -lt 32 -or $internalToken.Length -gt 512) {
+        throw 'TIDEBID_INTERNAL_SERVICE_TOKEN must contain 32 to 512 characters; its value was not printed.'
+    }
+
+    Assert-OptionalOssEnvironment
+}
+
+function Assert-OptionalOssEnvironment {
+    $enabledText = [Environment]::GetEnvironmentVariable('TIDEBID_OSS_ENABLED', 'Process')
+    if ([string]::IsNullOrWhiteSpace($enabledText)) {
+        $enabledText = 'false'
+    }
+
+    $ossEnabled = $false
+    if (-not [bool]::TryParse($enabledText.Trim(), [ref]$ossEnabled)) {
+        throw 'TIDEBID_OSS_ENABLED must be true or false.'
+    }
+    if (-not $ossEnabled) {
+        return
+    }
+
+    $requiredOssNames = @(
+        'ALIBABA_CLOUD_ACCESS_KEY_ID',
+        'ALIBABA_CLOUD_ACCESS_KEY_SECRET',
+        'TIDEBID_OSS_ENDPOINT',
+        'TIDEBID_OSS_REGION',
+        'TIDEBID_OSS_BUCKET'
+    )
+    $invalidNames = @()
+    foreach ($name in $requiredOssNames) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ([string]::IsNullOrWhiteSpace($value) -or $value.StartsWith('change-me')) {
+            $invalidNames += $name
+        }
+    }
+    if ($invalidNames.Count -gt 0) {
+        throw "OSS is enabled; set these values in .env or the current process environment: $($invalidNames -join ', ')."
+    }
+
+    $endpointText = [Environment]::GetEnvironmentVariable('TIDEBID_OSS_ENDPOINT', 'Process').Trim()
+    $endpoint = $null
+    if (-not [Uri]::TryCreate($endpointText, [UriKind]::Absolute, [ref]$endpoint) -or
+        ($endpoint.Scheme -ne 'http' -and $endpoint.Scheme -ne 'https')) {
+        throw 'TIDEBID_OSS_ENDPOINT must be an absolute HTTP(S) URI; its value was not printed.'
+    }
+
+    $region = [Environment]::GetEnvironmentVariable('TIDEBID_OSS_REGION', 'Process').Trim()
+    if ($region -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') {
+        throw 'TIDEBID_OSS_REGION has an invalid format; its value was not printed.'
+    }
+
+    $bucket = [Environment]::GetEnvironmentVariable('TIDEBID_OSS_BUCKET', 'Process').Trim()
+    if ($bucket -notmatch '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$') {
+        throw 'TIDEBID_OSS_BUCKET has an invalid format; its value was not printed.'
     }
 }
 
@@ -292,34 +354,35 @@ function Stop-StartedRecords {
 }
 
 New-Item -ItemType Directory -Path $RuntimeDirectory -Force | Out-Null
-$existingActiveProcesses = @(Get-RecordedActiveProcesses)
-if ($existingActiveProcesses.Count -gt 0) {
-    if ($existingActiveProcesses.Count -eq 7) {
-        $allReady = $true
-        foreach ($record in $existingActiveProcesses) {
-            $endpoint = if ([string]$record.name -eq 'web') {
-                'http://127.0.0.1:5173/'
-            } else {
-                "http://127.0.0.1:$($record.port)/actuator/health"
-            }
-            if (-not (Test-HttpEndpoint -Uri $endpoint)) {
-                $allReady = $false
-                break
-            }
-        }
-        if ($allReady) {
-            Write-Host "TideBid applications are already running from recorded PIDs in $manifestPath."
-            return
-        }
-    }
-    throw "A partial or unhealthy TideBid application set is still recorded in $manifestPath. Run .\scripts\stop-apps.ps1 before starting again."
-}
-if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
-    Remove-Item -LiteralPath $manifestPath -Force
-}
-
 $allPortDefinitions = @($serviceDefinitions) + @([pscustomobject]@{ Name = 'web'; Port = 5173 })
-Assert-PortsAvailable -Definitions $allPortDefinitions
+if (-not $CheckOnly) {
+    $existingActiveProcesses = @(Get-RecordedActiveProcesses)
+    if ($existingActiveProcesses.Count -gt 0) {
+        if ($existingActiveProcesses.Count -eq 7) {
+            $allReady = $true
+            foreach ($record in $existingActiveProcesses) {
+                $endpoint = if ([string]$record.name -eq 'web') {
+                    'http://127.0.0.1:5173/'
+                } else {
+                    "http://127.0.0.1:$($record.port)/actuator/health"
+                }
+                if (-not (Test-HttpEndpoint -Uri $endpoint)) {
+                    $allReady = $false
+                    break
+                }
+            }
+            if ($allReady) {
+                Write-Host "TideBid applications are already running from recorded PIDs in $manifestPath."
+                return
+            }
+        }
+        throw "A partial or unhealthy TideBid application set is still recorded in $manifestPath. Run .\scripts\stop-apps.ps1 before starting again."
+    }
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        Remove-Item -LiteralPath $manifestPath -Force
+    }
+    Assert-PortsAvailable -Definitions $allPortDefinitions
+}
 
 $dotEnvValues = Read-DotEnvFile -Path $EnvFile
 $environmentRestore = @()
@@ -363,6 +426,11 @@ try {
         [System.IO.Path]::GetFileName($publicKeyPath) -ne 'jwt-public.pem' -or
         [System.IO.Path]::GetDirectoryName($privateKeyPath) -ne [System.IO.Path]::GetDirectoryName($publicKeyPath)) {
         throw 'JWT key paths must share one directory and use jwt-private.pem / jwt-public.pem filenames.'
+    }
+
+    if ($CheckOnly) {
+        Write-Host 'TideBid application configuration and required tool versions are valid.'
+        return
     }
 
     if (-not $SkipBuild) {
