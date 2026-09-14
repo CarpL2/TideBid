@@ -284,3 +284,21 @@ export interface AdminReviewResult {
   sessionVersion: number
   reviewedAt: string
 }
+
+export interface AuctionBidAccepted {
+  bidId: string
+  auctionId: string
+  amount: DecimalValue
+  previousPrice: DecimalValue | null
+  sequenceNo: number
+  createdAt: string
+}
+
+export interface AuctionBidConflict {
+  auctionId: string
+  currentPrice: DecimalValue | null
+  minimumNextBid: DecimalValue
+  bidCount: number
+  version: number
+  status: AuctionSessionStatus
+}

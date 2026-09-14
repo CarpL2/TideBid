@@ -24,6 +24,22 @@ const USER_MESSAGES: Record<string, string> = {
   AUCTION_ASSET_ACCESS_DENIED: '你不能查看或修改该拍品。',
   AUCTION_ASSET_STATE_CONFLICT: '拍品状态或版本已经变化，请刷新后重试。',
   AUCTION_SUBMISSION_VERSION_CONFLICT: '该拍品已被其他管理员处理，请刷新审核队列。',
+  AUCTION_INVALID: '竞价请求内容不符合要求。',
+  AUCTION_NOT_FOUND: '竞价场次不存在或不可访问。',
+  AUCTION_STATE_CONFLICT: '竞价场次状态已经变化，请刷新后重试。',
+  AUCTION_NOT_STARTED: '竞价尚未开始。',
+  AUCTION_ENDED: '本场竞价已经结束。',
+  AUCTION_SELLER_CANNOT_PARTICIPATE: '卖家不能报名或竞拍自己的拍品。',
+  AUCTION_REGISTRATION_NOT_FOUND: '报名记录不存在或不可访问。',
+  AUCTION_REGISTRATION_CLOSED: '本场竞价的报名已经截止。',
+  AUCTION_REGISTRATION_REQUIRED: '完成保证金报名后才能出价。',
+  AUCTION_REGISTRATION_PENDING: '保证金仍在处理中，请稍后再试。',
+  AUCTION_DEPOSIT_INSUFFICIENT: '可用余额不足，无法冻结本场保证金。',
+  AUCTION_BID_AMOUNT_INVALID: '报价必须为正数且最多保留两位小数。',
+  AUCTION_BID_TOO_LOW: '报价低于当前最低可接受价格。',
+  AUCTION_BID_CONFLICT: '价格刚刚发生变化，请按最新最低报价重试。',
+  AUCTION_IDEMPOTENCY_CONFLICT: '该请求编号已用于另一笔报价，请重新操作。',
+  AUCTION_ACCOUNT_SERVICE_UNAVAILABLE: '保证金服务暂时不可用，报名状态将在后台恢复。',
 }
 
 export interface ApiErrorOptions {
@@ -32,6 +48,7 @@ export interface ApiErrorOptions {
   userMessage: string
   traceId?: string | null
   cause?: unknown
+  data?: unknown
 }
 
 export class ApiError extends Error {
@@ -40,6 +57,7 @@ export class ApiError extends Error {
   readonly userMessage: string
   readonly traceId: string | null
   readonly originalError: unknown
+  readonly data: unknown
 
   constructor(options: ApiErrorOptions) {
     super(options.userMessage)
@@ -49,6 +67,7 @@ export class ApiError extends Error {
     this.userMessage = options.userMessage
     this.traceId = options.traceId?.trim() || null
     this.originalError = options.cause
+    this.data = options.data ?? null
   }
 }
 
@@ -91,5 +110,6 @@ export function normalizeApiError(error: unknown): ApiError {
     userMessage,
     traceId,
     cause: error,
+    data: body?.data,
   })
 }

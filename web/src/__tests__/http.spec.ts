@@ -89,4 +89,27 @@ describe('HTTP client', () => {
     })
     expect(unauthorizedHandler).not.toHaveBeenCalled()
   })
+
+  it('preserves structured conflict data for the caller to refresh its snapshot', async () => {
+    const adapter: AxiosAdapter = async (config) => {
+      const response = {
+        data: {
+          code: 'AUCTION_BID_CONFLICT',
+          message: 'conflict',
+          data: { auctionId: '9', minimumNextBid: '120.00', bidCount: 2 },
+          traceId: 'trace-conflict',
+        },
+        status: 409,
+        statusText: 'Conflict',
+        headers: new AxiosHeaders(),
+        config,
+      }
+      throw new AxiosError('Request failed', AxiosError.ERR_BAD_REQUEST, config, undefined, response)
+    }
+
+    await expect(requestData({ method: 'POST', url: '/bids', adapter })).rejects.toMatchObject({
+      code: 'AUCTION_BID_CONFLICT',
+      data: { auctionId: '9', minimumNextBid: '120.00', bidCount: 2 },
+    })
+  })
 })

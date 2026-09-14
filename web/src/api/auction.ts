@@ -4,6 +4,7 @@ import type { ApiResult } from '@/types/api'
 import type {
   AuctionAssetDetail,
   AuctionAssetPage,
+  AuctionBidAccepted,
   AuctionBidHistoryPage,
   AuctionDetail,
   AuctionDraftResult,
@@ -170,5 +171,28 @@ export function getAuctionRegistration(
   return requestData<AuctionRegistrationRecord>({
     method: 'GET',
     url: `/registrations/${encodeURIComponent(registrationId)}`,
+  })
+}
+
+export function registerForAuction(
+  auctionId: string,
+): Promise<ApiResult<AuctionRegistrationRecord>> {
+  return requestData<AuctionRegistrationRecord>({
+    method: 'POST',
+    url: '/registrations',
+    data: { auctionId },
+  })
+}
+
+export function placeAuctionBid(
+  auctionId: string,
+  amount: string,
+  requestId: string,
+): Promise<ApiResult<AuctionBidAccepted>> {
+  return requestData<AuctionBidAccepted>({
+    method: 'POST',
+    url: '/bids',
+    headers: { 'X-Request-Id': requestId },
+    data: { auctionId, amount },
   })
 }

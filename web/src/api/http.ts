@@ -12,7 +12,7 @@ let unauthorizedHandled = false
 const WRITE_METHODS = new Set(['post', 'put', 'patch', 'delete'])
 const ANONYMOUS_AUTH_PATHS = new Set(['/auth/login', '/auth/register'])
 
-function createRequestId(): string {
+export function createClientRequestId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `web-${crypto.randomUUID()}`
   }
@@ -43,7 +43,7 @@ http.interceptors.request.use(
 
     const method = config.method?.toLowerCase()
     if (method && WRITE_METHODS.has(method) && !config.headers.has('X-Request-Id')) {
-      config.headers.set('X-Request-Id', createRequestId())
+      config.headers.set('X-Request-Id', createClientRequestId())
     }
 
     return config
