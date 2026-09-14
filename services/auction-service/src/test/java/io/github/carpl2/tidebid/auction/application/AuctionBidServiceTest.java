@@ -253,6 +253,36 @@ class AuctionBidServiceTest {
         verify(idGenerator, never()).nextId();
     }
 
+    @Test
+    void rejectsWhenTheBidEntryCatchesAStaleOpenSessionUpAtTheExactEndInstant() {
+        AuctionSession staleOpen = session(
+                401L,
+                ACCEPTED_AT.minusSeconds(120),
+                ACCEPTED_AT,
+                AuctionSessionStatus.OPEN
+        );
+        AuctionSession awaitingClose = session(
+                401L,
+                ACCEPTED_AT.minusSeconds(120),
+                ACCEPTED_AT,
+                AuctionSessionStatus.AWAITING_CLOSE
+        );
+        when(sessionRepository.findBid(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.empty());
+        when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(staleOpen));
+        when(lifecycleService.advanceToCurrentState(staleOpen)).thenReturn(awaitingClose);
+        when(registrationRepository.findByAuctionAndBidder(AUCTION_ID, BIDDER_ID))
+                .thenReturn(Optional.of(registration()));
+
+        assertBusinessError(
+                () -> service.place(command(AUCTION_ID, new BigDecimal("100.00"))),
+                AuctionErrorCode.AUCTION_ENDED
+        );
+
+        verify(lifecycleService).advanceToCurrentState(staleOpen);
+        verify(bidTransaction, never()).accept(any(), anyLong());
+        verify(idGenerator, never()).nextId();
+    }
+
     private void assertRejectedBeforeTransaction(
             AuctionSession session,
             AuctionRegistration registration,
