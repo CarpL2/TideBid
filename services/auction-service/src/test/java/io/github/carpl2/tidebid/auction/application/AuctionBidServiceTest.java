@@ -193,6 +193,86 @@ class AuctionBidServiceTest {
         verify(sessionRepository, never()).findBid(anyLong(), any());
     }
 
+    @Test
+    void rejectsEveryEligibilityFailureBeforeEnteringTheBidTransaction() {
+        AuctionSession opened = session(null, 0L, 7L);
+        assertRejectedBeforeTransaction(opened, null, BIDDER_ID, AuctionErrorCode.REGISTRATION_REQUIRED);
+        assertRejectedBeforeTransaction(
+                opened,
+                registration(AuctionRegistrationStatus.PENDING_HOLD),
+                BIDDER_ID,
+                AuctionErrorCode.REGISTRATION_PENDING
+        );
+        assertRejectedBeforeTransaction(
+                opened,
+                registration(AuctionRegistrationStatus.FAILED),
+                BIDDER_ID,
+                AuctionErrorCode.REGISTRATION_REQUIRED
+        );
+
+        AuctionSession sellerOwned = session(
+                BIDDER_ID,
+                ACCEPTED_AT.minusSeconds(60),
+                ACCEPTED_AT.plusSeconds(60),
+                AuctionSessionStatus.OPEN
+        );
+        assertRejectedBeforeTransaction(
+                sellerOwned,
+                registration(AuctionRegistrationStatus.REGISTERED),
+                BIDDER_ID,
+                AuctionErrorCode.SELLER_CANNOT_PARTICIPATE
+        );
+
+        AuctionSession notStarted = session(
+                401L,
+                ACCEPTED_AT.plusSeconds(1),
+                ACCEPTED_AT.plusSeconds(120),
+                AuctionSessionStatus.SCHEDULED
+        );
+        assertRejectedBeforeTransaction(
+                notStarted,
+                registration(AuctionRegistrationStatus.REGISTERED),
+                BIDDER_ID,
+                AuctionErrorCode.AUCTION_NOT_STARTED
+        );
+
+        AuctionSession ended = session(
+                401L,
+                ACCEPTED_AT.minusSeconds(120),
+                ACCEPTED_AT,
+                AuctionSessionStatus.AWAITING_CLOSE
+        );
+        assertRejectedBeforeTransaction(
+                ended,
+                registration(AuctionRegistrationStatus.REGISTERED),
+                BIDDER_ID,
+                AuctionErrorCode.AUCTION_ENDED
+        );
+
+        verify(bidTransaction, never()).accept(any(), anyLong());
+        verify(idGenerator, never()).nextId();
+    }
+
+    private void assertRejectedBeforeTransaction(
+            AuctionSession session,
+            AuctionRegistration registration,
+            long bidderId,
+            AuctionErrorCode expected
+    ) {
+        when(sessionRepository.findBid(bidderId, REQUEST_ID)).thenReturn(Optional.empty());
+        when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(session));
+        when(lifecycleService.advanceToCurrentState(session)).thenReturn(session);
+        when(registrationRepository.findByAuctionAndBidder(AUCTION_ID, bidderId))
+                .thenReturn(Optional.ofNullable(registration));
+
+        assertBusinessError(
+                () -> service.place(new AuctionBidService.PlaceBidCommand(
+                        bidderId, AUCTION_ID, REQUEST_ID, new BigDecimal("100.00")
+                )),
+                expected
+        );
+    }
+
     private void arrangeNewBid(AuctionSession opened, AuctionRegistration registration) {
         when(sessionRepository.findBid(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.empty());
         when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(opened));
@@ -216,11 +296,35 @@ class AuctionBidServiceTest {
         );
     }
 
+    private static AuctionSession session(
+            long sellerId,
+            Instant startAt,
+            Instant endAt,
+            AuctionSessionStatus status
+    ) {
+        return new AuctionSession(
+                AUCTION_ID, 102L, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0L, startAt, endAt, status, 7L,
+                startAt.minusSeconds(60), ACCEPTED_AT.minusSeconds(1)
+        );
+    }
+
     private static AuctionRegistration registration() {
+        return registration(AuctionRegistrationStatus.REGISTERED);
+    }
+
+    private static AuctionRegistration registration(AuctionRegistrationStatus status) {
+        String failureCode = status == AuctionRegistrationStatus.FAILED
+                ? "ACCOUNT_WALLET_INSUFFICIENT_BALANCE"
+                : null;
+        Instant registeredAt = status == AuctionRegistrationStatus.REGISTERED
+                ? ACCEPTED_AT.minusSeconds(30)
+                : null;
         return new AuctionRegistration(
                 501L, "REGISTRATION:501", AUCTION_ID, BIDDER_ID, new BigDecimal("50.00"),
-                AuctionRegistrationStatus.REGISTERED, null, 1, null, ACCEPTED_AT.minusSeconds(30),
-                null, null, ACCEPTED_AT.minusSeconds(30), 1L,
+                status, failureCode, 1, null, ACCEPTED_AT.minusSeconds(30),
+                null, null, registeredAt, 1L,
                 ACCEPTED_AT.minusSeconds(60), ACCEPTED_AT.minusSeconds(30)
         );
     }
