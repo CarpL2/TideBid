@@ -69,13 +69,20 @@ class GatewayAuthenticationWebFilterTest {
     }
 
     @Test
-    void verifiedTokenReplacesForgedIdentityWithStableTrustedHeaders() {
+    void verifiedTokenReplacesForgedIdentityAndStripsPrivateBoundaryHeaders() {
         String token = issuer.issue("alice", 42L, Set.of(Role.USER, Role.ADMIN)).value();
         MockServerWebExchange input = exchange(
                 MockServerHttpRequest.get("/api/users/me")
                         .header(SecurityHeaders.AUTHORIZATION, SecurityHeaders.BEARER_PREFIX + token)
                         .header(SecurityHeaders.INTERNAL_USER_ID, "999")
                         .header(SecurityHeaders.INTERNAL_USER_ROLES, "ROOT")
+                        .header(SecurityHeaders.INTERNAL_SERVICE_TOKEN, "forged-service-token")
+                        .header("Forwarded", "for=attacker;proto=https")
+                        .header("X-Forwarded-For", "203.0.113.7")
+                        .header("X-Forwarded-Host", "attacker.example")
+                        .header("X-Forwarded-Port", "443")
+                        .header("X-Forwarded-Proto", "https")
+                        .header("X-Forwarded-Prefix", "/forged")
         );
 
         ServerWebExchange forwarded = forwardedExchange(input);
@@ -86,6 +93,14 @@ class GatewayAuthenticationWebFilterTest {
                 .isEqualTo("ADMIN,USER");
         assertThat(forwarded.getRequest().getHeaders().getFirst(SecurityHeaders.AUTHORIZATION))
                 .isEqualTo(SecurityHeaders.BEARER_PREFIX + token);
+        assertThat(forwarded.getRequest().getHeaders().containsKey(SecurityHeaders.INTERNAL_SERVICE_TOKEN))
+                .isFalse();
+        for (String header : new String[]{
+                "Forwarded", "X-Forwarded-For", "X-Forwarded-Host",
+                "X-Forwarded-Port", "X-Forwarded-Proto", "X-Forwarded-Prefix"
+        }) {
+            assertThat(forwarded.getRequest().getHeaders().containsKey(header)).isFalse();
+        }
     }
 
     @Test

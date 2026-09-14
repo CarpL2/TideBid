@@ -37,10 +37,14 @@ spring:
             locator:
               enabled: false
           routes:
+            - id: auction-admin-assets
+              uri: lb://tidebid-auction
+              predicates:
+                - Path=/api/admin/assets/**
             - id: account-service
               uri: lb://tidebid-account
               predicates:
-                - Path=/api/auth/**,/api/users/**,/api/wallets/**,/api/admin/**
+                - Path=/api/auth/**,/api/users/**,/api/wallets/**,/api/admin/access-check
             - id: auction-service
               uri: lb://tidebid-auction
               predicates:
@@ -72,4 +76,4 @@ logging:
 info:
   config:
     service-source: nacos:tidebid-gateway.yml
-    revision: foundation-01-gateway-controls
+    revision: auction-core-02-gateway-routes

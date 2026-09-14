@@ -26,6 +26,14 @@ import java.util.stream.Collectors;
 public final class GatewayAuthenticationWebFilter implements WebFilter, Ordered {
 
     private static final int ORDER_AFTER_TRACE = Ordered.HIGHEST_PRECEDENCE + 10;
+    private static final List<String> UNTRUSTED_FORWARDING_HEADERS = List.of(
+            "Forwarded",
+            "X-Forwarded-For",
+            "X-Forwarded-Host",
+            "X-Forwarded-Port",
+            "X-Forwarded-Proto",
+            "X-Forwarded-Prefix"
+    );
 
     private final JwtAccessTokenVerifier tokenVerifier;
 
@@ -40,7 +48,7 @@ public final class GatewayAuthenticationWebFilter implements WebFilter, Ordered 
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
-        ServerWebExchange sanitizedExchange = withoutUntrustedIdentityHeaders(exchange);
+        ServerWebExchange sanitizedExchange = withoutUntrustedBoundaryHeaders(exchange);
         if (isProtocolPreflight(sanitizedExchange) || isAnonymousEndpoint(sanitizedExchange)) {
             return chain.filter(sanitizedExchange);
         }
@@ -90,11 +98,13 @@ public final class GatewayAuthenticationWebFilter implements WebFilter, Ordered 
         return encodedToken;
     }
 
-    private static ServerWebExchange withoutUntrustedIdentityHeaders(ServerWebExchange exchange) {
+    private static ServerWebExchange withoutUntrustedBoundaryHeaders(ServerWebExchange exchange) {
         return exchange.mutate()
                 .request(request -> request.headers(headers -> {
                     headers.remove(SecurityHeaders.INTERNAL_USER_ID);
                     headers.remove(SecurityHeaders.INTERNAL_USER_ROLES);
+                    headers.remove(SecurityHeaders.INTERNAL_SERVICE_TOKEN);
+                    UNTRUSTED_FORWARDING_HEADERS.forEach(headers::remove);
                 }))
                 .build();
     }

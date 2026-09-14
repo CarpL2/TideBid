@@ -51,7 +51,10 @@ import static org.assertj.core.api.Assertions.assertThat;
         properties = {
                 "spring.cloud.gateway.server.webflux.routes[0].id=missing-service-test",
                 "spring.cloud.gateway.server.webflux.routes[0].uri=lb://tidebid-missing-test",
-                "spring.cloud.gateway.server.webflux.routes[0].predicates[0]=Path=/_test/missing-service"
+                "spring.cloud.gateway.server.webflux.routes[0].predicates[0]=Path=/_test/missing-service",
+                "spring.cloud.gateway.server.webflux.routes[1].id=missing-auction-service-test",
+                "spring.cloud.gateway.server.webflux.routes[1].uri=lb://tidebid-missing-auction-test",
+                "spring.cloud.gateway.server.webflux.routes[1].predicates[0]=Path=/api/assets/_test/unavailable"
         }
 )
 @ActiveProfiles("standalone")
@@ -158,6 +161,23 @@ class GatewayApplicationTest {
     }
 
     @Test
+    void mapsUnavailableAuctionRouteToTheSameJsonServiceUnavailableEnvelope() {
+        String token = tokenIssuer.issue("gateway-user", 42L, Set.of(Role.USER)).value();
+
+        client.get().uri("/api/assets/_test/unavailable")
+                .header(SecurityHeaders.AUTHORIZATION, SecurityHeaders.BEARER_PREFIX + token)
+                .header(SecurityHeaders.TRACE_ID, "gateway-auction-down-1234")
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+                .expectHeader().valueEquals(SecurityHeaders.TRACE_ID, "gateway-auction-down-1234")
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("COMMON_SERVICE_UNAVAILABLE")
+                .jsonPath("$.message").isEqualTo("Service is temporarily unavailable")
+                .jsonPath("$.traceId").isEqualTo("gateway-auction-down-1234");
+    }
+
+    @Test
     void mapsWrappedConnectionFailureWithoutExposingTransportDetails(CapturedOutput output) {
         client.get().uri("/_test/refused-downstream")
                 .header(SecurityHeaders.TRACE_ID, "gateway-connect-1234")
@@ -224,10 +244,35 @@ class GatewayApplicationTest {
     }
 
     @Test
+    void auctionBusinessRoutesRequireAnAccessToken() {
+        client.get().uri("/api/auctions")
+                .header(SecurityHeaders.INTERNAL_USER_ID, "999")
+                .header(SecurityHeaders.INTERNAL_USER_ROLES, "ADMIN")
+                .header(SecurityHeaders.INTERNAL_SERVICE_TOKEN, "forged-service-token")
+                .exchange()
+                .expectStatus().isUnauthorized()
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("COMMON_UNAUTHENTICATED");
+    }
+
+    @Test
     void adminPreAuthorizationRejectsAValidNormalUserToken() {
         String token = tokenIssuer.issue("gateway-user", 42L, Set.of(Role.USER)).value();
 
         client.get().uri("/api/admin/access-check")
+                .header(SecurityHeaders.AUTHORIZATION, SecurityHeaders.BEARER_PREFIX + token)
+                .exchange()
+                .expectStatus().isForbidden()
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+                .expectBody().jsonPath("$.code").isEqualTo("COMMON_FORBIDDEN");
+    }
+
+    @Test
+    void normalUserCannotEnterAuctionReviewRoute() {
+        String token = tokenIssuer.issue("gateway-user", 42L, Set.of(Role.USER)).value();
+
+        client.get().uri("/api/admin/assets/pending")
                 .header(SecurityHeaders.AUTHORIZATION, SecurityHeaders.BEARER_PREFIX + token)
                 .exchange()
                 .expectStatus().isForbidden()
