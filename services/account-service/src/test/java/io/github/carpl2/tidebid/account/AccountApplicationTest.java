@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.github.carpl2.tidebid.account.api.AccountAuthController;
 import io.github.carpl2.tidebid.account.application.AccountRegistrationService;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.mapper.UserAccountMapper;
+import io.github.carpl2.tidebid.account.infrastructure.config.AccountRocketMqProperties;
 import io.github.carpl2.tidebid.core.ApiResponse;
 import io.github.carpl2.tidebid.core.BusinessException;
 import io.github.carpl2.tidebid.core.CommonErrorCode;
@@ -37,6 +38,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import javax.sql.DataSource;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -52,6 +55,9 @@ class AccountApplicationTest {
 
     @Autowired
     private TestRestTemplate client;
+
+    @Autowired
+    private AccountRocketMqProperties rocketMqProperties;
 
     @Test
     void servesHealthAndIdentity() {
@@ -74,6 +80,15 @@ class AccountApplicationTest {
         assertThat(context.getBeansOfType(AccountRegistrationService.class)).isEmpty();
         assertThat(environment.getProperty("spring.cloud.nacos.discovery.enabled", Boolean.class)).isFalse();
         assertThat(environment.getProperty("spring.cloud.nacos.config.enabled", Boolean.class)).isFalse();
+        assertThat(rocketMqProperties.endpoints()).isEqualTo("127.0.0.1:8081");
+        assertThat(rocketMqProperties.requestTimeout()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(rocketMqProperties.producerRetryAttempts()).isEqualTo(2);
+        assertThat(rocketMqProperties.topics().accountEvents()).isEqualTo("tidebid-account-events");
+        assertThat(rocketMqProperties.topics().auctionEvents()).isEqualTo("tidebid-auction-events");
+        assertThat(rocketMqProperties.topics().tradeEvents()).isEqualTo("tidebid-trade-events");
+        assertThat(rocketMqProperties.consumerGroups().depositSettlement())
+                .isEqualTo("tidebid-account-deposit-v1");
+        assertThat(rocketMqProperties.consumerGroups().sellerCredit()).isEqualTo("tidebid-account-credit-v1");
     }
 
     @ParameterizedTest

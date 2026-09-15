@@ -3,6 +3,7 @@ package io.github.carpl2.tidebid.auction;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRegistrationRecoveryProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRocketMqProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.storage.UnconfiguredObjectStorageAdapter;
@@ -58,6 +59,9 @@ class AuctionApplicationTest {
 
     @Autowired
     private AuctionRegistrationRecoveryProperties recoveryProperties;
+
+    @Autowired
+    private AuctionRocketMqProperties rocketMqProperties;
 
     @Test
     void servesHealthAndIdentity() {
@@ -116,5 +120,12 @@ class AuctionApplicationTest {
         assertThat(recoveryProperties.maximumRetryDelay()).isEqualTo(Duration.ofMinutes(5));
         assertThat(recoveryProperties.leaseDuration()).isEqualTo(Duration.ofSeconds(30));
         assertThat(recoveryProperties.batchSize()).isEqualTo(50);
+
+        assertThat(rocketMqProperties.endpoints()).isEqualTo("127.0.0.1:8081");
+        assertThat(rocketMqProperties.requestTimeout()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(rocketMqProperties.producerRetryAttempts()).isEqualTo(2);
+        assertThat(rocketMqProperties.topics().auctionEvents()).isEqualTo("tidebid-auction-events");
+        assertThat(rocketMqProperties.topics().scheduledCommands()).isEqualTo("tidebid-scheduled-commands");
+        assertThat(rocketMqProperties.consumerGroups().closeAuction()).isEqualTo("tidebid-auction-close-v1");
     }
 }

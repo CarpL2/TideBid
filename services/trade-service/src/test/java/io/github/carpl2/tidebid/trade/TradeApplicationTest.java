@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.trade;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.github.carpl2.tidebid.trade.infrastructure.config.TradeRocketMqProperties;
 import io.github.carpl2.tidebid.web.GlobalExceptionHandler;
 import io.github.carpl2.tidebid.web.TraceIdFilter;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,8 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.core.env.Environment;
 import org.springframework.test.context.ActiveProfiles;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,6 +31,9 @@ class TradeApplicationTest {
 
     @Autowired
     private TestRestTemplate client;
+
+    @Autowired
+    private TradeRocketMqProperties rocketMqProperties;
 
     @Test
     void servesHealthAndIdentity() {
@@ -45,6 +51,16 @@ class TradeApplicationTest {
         assertThat(context.getBeansOfType(GlobalExceptionHandler.class)).hasSize(1);
         assertThat(environment.getProperty("spring.cloud.nacos.discovery.enabled", Boolean.class)).isFalse();
         assertThat(environment.getProperty("spring.cloud.nacos.config.enabled", Boolean.class)).isFalse();
+        assertThat(rocketMqProperties.endpoints()).isEqualTo("127.0.0.1:8081");
+        assertThat(rocketMqProperties.requestTimeout()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(rocketMqProperties.producerRetryAttempts()).isEqualTo(2);
+        assertThat(rocketMqProperties.topics().tradeEvents()).isEqualTo("tidebid-trade-events");
+        assertThat(rocketMqProperties.topics().auctionEvents()).isEqualTo("tidebid-auction-events");
+        assertThat(rocketMqProperties.topics().accountEvents()).isEqualTo("tidebid-account-events");
+        assertThat(rocketMqProperties.topics().scheduledCommands()).isEqualTo("tidebid-scheduled-commands");
+        assertThat(rocketMqProperties.consumerGroups().auctionResults()).isEqualTo("tidebid-trade-auction-v1");
+        assertThat(rocketMqProperties.consumerGroups().accountResults()).isEqualTo("tidebid-trade-account-v1");
+        assertThat(rocketMqProperties.consumerGroups().paymentTimeout()).isEqualTo("tidebid-trade-timeout-v1");
     }
 
     @ParameterizedTest
