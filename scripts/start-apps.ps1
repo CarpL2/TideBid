@@ -96,6 +96,7 @@ function Assert-RequiredEnvironment {
         'TIDEBID_ACCOUNT_DB_PASSWORD',
         'TIDEBID_AUCTION_DB_PASSWORD',
         'TIDEBID_REDIS_PASSWORD',
+        'TIDEBID_ROCKETMQ_ENDPOINTS',
         'TIDEBID_NACOS_USERNAME',
         'TIDEBID_NACOS_PASSWORD',
         'TIDEBID_JWT_PRIVATE_KEY_PATH',
@@ -120,6 +121,78 @@ function Assert-RequiredEnvironment {
 
     Assert-OptionalDevelopmentAdminEnvironment
     Assert-OptionalOssEnvironment
+    Assert-ManagedMessagingConfiguration
+}
+
+function Assert-ManagedMessagingConfiguration {
+    $endpoint = [Environment]::GetEnvironmentVariable('TIDEBID_ROCKETMQ_ENDPOINTS', 'Process').Trim()
+    if ($endpoint.Length -gt 255 -or $endpoint -match '://|/|\s' -or
+        $endpoint -notmatch '^[^:]+:([1-9][0-9]{0,4})$') {
+        throw 'TIDEBID_ROCKETMQ_ENDPOINTS must use host:port without a URI scheme or path; its value was not printed.'
+    }
+    $port = [int]$Matches[1]
+    if ($port -gt 65535) {
+        throw 'TIDEBID_ROCKETMQ_ENDPOINTS port must be between 1 and 65535; its value was not printed.'
+    }
+
+    $expectedFragments = [ordered]@{
+        'infra\rocketmq\broker.conf' = @(
+            'timerMaxDelaySec=259200'
+        )
+        'infra\nacos\configs\tidebid-common.yml' = @(
+            'endpoints: ${TIDEBID_ROCKETMQ_ENDPOINTS:127.0.0.1:8081}',
+            'request-timeout: 3s',
+            'producer-retry-attempts: 2',
+            'scan-interval: 1s',
+            'batch-size: 50',
+            'lease-duration: 30s',
+            'initial-backoff: 1s',
+            'maximum-backoff: 5m',
+            'maximum-attempts: 16',
+            'delay-safe-horizon: 48h'
+        )
+        'infra\nacos\configs\tidebid-account.yml' = @(
+            'account-events: tidebid-account-events',
+            'auction-events: tidebid-auction-events',
+            'trade-events: tidebid-trade-events',
+            'deposit-settlement: tidebid-account-deposit-v1',
+            'seller-credit: tidebid-account-credit-v1'
+        )
+        'infra\nacos\configs\tidebid-auction.yml' = @(
+            'auction-events: tidebid-auction-events',
+            'scheduled-commands: tidebid-scheduled-commands',
+            'close-auction: tidebid-auction-close-v1'
+        )
+        'infra\nacos\configs\tidebid-trade.yml' = @(
+            'trade-events: tidebid-trade-events',
+            'auction-events: tidebid-auction-events',
+            'account-events: tidebid-account-events',
+            'scheduled-commands: tidebid-scheduled-commands',
+            'auction-results: tidebid-trade-auction-v1',
+            'account-results: tidebid-trade-account-v1',
+            'payment-timeout: tidebid-trade-timeout-v1'
+        )
+    }
+
+    foreach ($relativePath in $expectedFragments.Keys) {
+        $path = Join-Path $repositoryRoot $relativePath
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Managed messaging configuration file is missing: $relativePath."
+        }
+        $content = [System.IO.File]::ReadAllText($path)
+        foreach ($fragment in $expectedFragments[$relativePath]) {
+            if (-not $content.Contains($fragment)) {
+                throw "Managed messaging configuration is incomplete in ${relativePath}; expected values were not printed."
+            }
+        }
+    }
+
+    $gatewayConfig = [System.IO.File]::ReadAllText(
+        (Join-Path $repositoryRoot 'infra\nacos\configs\tidebid-gateway.yml')
+    )
+    if ($gatewayConfig -match '(?m)^\s*(rocketmq|outbox):|tidebid-(auction-events|account-events|trade-events|scheduled-commands|.*-v1)') {
+        throw 'Gateway Nacos configuration must not expose RocketMQ or Outbox resources.'
+    }
 }
 
 function Assert-OptionalDevelopmentAdminEnvironment {

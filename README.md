@@ -518,6 +518,14 @@ Configuration ownership is deliberately split:
 | `infra/nacos/configs/*.yml` published to Nacos | shared operational settings and non-secret service settings |
 | Ignored `.env` / process environment | passwords, Nacos credentials, JWT key paths, OSS credentials, and model keys |
 
+Stage 03 keeps the RocketMQ Proxy endpoint, request timeout and Outbox scan/lease/backoff limits in
+`tidebid-common.yml`. Account, Auction and Trade service Data IDs contain only their own Topic and
+Consumer Group names. The local Broker permits at most 72 hours of delayed delivery, while the
+application uses a conservative 48-hour safe horizon; commands farther away remain in MySQL until
+they enter that window. `start-apps.ps1 -CheckOnly` validates these managed values and rejects URI
+schemes, invalid ports, missing topology entries or messaging configuration accidentally placed in
+the Gateway Data ID without printing the configured endpoint.
+
 Nacos files keep expressions such as `${TIDEBID_ACCOUNT_DB_PASSWORD}` as placeholders; the importer
 must never expand or upload their secret values. Java does not load `.env` automatically; the
 checked `start-apps.ps1` script loads it for its child processes without printing secrets. To run

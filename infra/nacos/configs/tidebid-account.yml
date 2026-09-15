@@ -25,7 +25,18 @@ logging:
   level:
     io.github.carpl2.tidebid.account: INFO
 
+tidebid:
+  messaging:
+    rocketmq:
+      topics:
+        account-events: tidebid-account-events
+        auction-events: tidebid-auction-events
+        trade-events: tidebid-trade-events
+      consumer-groups:
+        deposit-settlement: tidebid-account-deposit-v1
+        seller-credit: tidebid-account-credit-v1
+
 info:
   config:
     service-source: nacos:tidebid-account.yml
-    revision: foundation-01
+    revision: reliable-trade-03-messaging

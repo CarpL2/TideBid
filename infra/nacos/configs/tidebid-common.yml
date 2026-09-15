@@ -26,6 +26,21 @@ logging:
   pattern:
     level: "%5p [traceId=%X{traceId:-}]"
 
+tidebid:
+  messaging:
+    rocketmq:
+      endpoints: ${TIDEBID_ROCKETMQ_ENDPOINTS:127.0.0.1:8081}
+      request-timeout: 3s
+      producer-retry-attempts: 2
+    outbox:
+      scan-interval: 1s
+      batch-size: 50
+      lease-duration: 30s
+      initial-backoff: 1s
+      maximum-backoff: 5m
+      maximum-attempts: 16
+      delay-safe-horizon: 48h
+
 info:
   config:
     common-source: nacos:tidebid-common.yml

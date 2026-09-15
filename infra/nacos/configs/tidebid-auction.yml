@@ -25,7 +25,16 @@ logging:
   level:
     io.github.carpl2.tidebid.auction: INFO
 
+tidebid:
+  messaging:
+    rocketmq:
+      topics:
+        auction-events: tidebid-auction-events
+        scheduled-commands: tidebid-scheduled-commands
+      consumer-groups:
+        close-auction: tidebid-auction-close-v1
+
 info:
   config:
     service-source: nacos:tidebid-auction.yml
-    revision: auction-core-02
+    revision: reliable-trade-03-messaging
