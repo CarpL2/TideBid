@@ -39,6 +39,7 @@
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
         <nimbus-jose-jwt.version>9.37.3</nimbus-jose-jwt.version>
         <alibabacloud-oss-v2.version>0.5.1</alibabacloud-oss-v2.version>
+        <rocketmq-client-java.version>5.2.2</rocketmq-client-java.version>
 
         <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
         <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
@@ -86,6 +87,11 @@
                 <groupId>com.aliyun</groupId>
                 <artifactId>alibabacloud-oss-v2</artifactId>
                 <version>${alibabacloud-oss-v2.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.rocketmq</groupId>
+                <artifactId>rocketmq-client-java</artifactId>
+                <version>${rocketmq-client-java.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
