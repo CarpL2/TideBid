@@ -42,7 +42,7 @@ $longRunningServices = @(
     'rocketmq-proxy',
     'rocketmq-dashboard'
 )
-$completedServices = @('mysql-bootstrap', 'rocketmq-volume-init')
+$completedServices = @('mysql-bootstrap', 'rocketmq-volume-init', 'rocketmq-bootstrap')
 
 function Read-DotEnvFile {
     param([Parameter(Mandatory = $true)][string]$Path)

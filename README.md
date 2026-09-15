@@ -287,12 +287,14 @@ Windows MySQL installation on `localhost:3306`. In DataGrip, keep old projects o
 create a separate TideBid data source on port 13306. Containers still reach this database as
 `mysql:3306`; only access from the Windows host uses 13306.
 
-Compose runs two short-lived initialization jobs. `mysql-bootstrap` creates the four business
+Compose runs three short-lived initialization jobs. `mysql-bootstrap` creates the four business
 schemas and the four restricted service accounts after MySQL becomes healthy, then verifies that
 each account can write only its own schema. `rocketmq-volume-init` gives new named volumes to the
-non-root RocketMQ user before RocketMQ starts. Both jobs finish as `Exited (0)`; that status is
-expected. The standalone Proxy has a bounded restart policy because the Broker can open its TCP
-port shortly before it finishes registering with the NameServer.
+non-root RocketMQ user before RocketMQ starts. After the Broker is healthy, `rocketmq-bootstrap`
+idempotently creates the three normal event topics, the delay-command topic and six consumer
+groups before the Proxy accepts application traffic. All three jobs finish as `Exited (0)`; that
+status is expected. The standalone Proxy has a bounded restart policy because the Broker can open
+its TCP port shortly before it finishes registering with the NameServer.
 
 A DataGrip connection using local root credentials on port 13306 can inspect every TideBid schema.
 Application services will not use root: `tidebid_account_app`, `tidebid_auction_app`,
@@ -341,8 +343,13 @@ Start and validate the infrastructure from the repository root:
 
 The script checks Docker Desktop, validates required non-placeholder `.env` values and the Nacos
 Base64 token, runs Compose, and observes container state until all seven long-running services are
-healthy. `mysql-bootstrap` and `rocketmq-volume-init` must instead finish as `Exited (0)`. It never
-deletes containers or named volumes. Use `-TimeoutSeconds 600` on a slow first image pull.
+healthy. `mysql-bootstrap`, `rocketmq-volume-init` and `rocketmq-bootstrap` must instead finish as
+`Exited (0)`. It never deletes containers or named volumes. Use `-TimeoutSeconds 600` on a slow
+first image pull. Verify the persisted RocketMQ Topic types and Consumer Group settings at any time:
+
+```powershell
+.\scripts\check-rocketmq-topology.ps1
+```
 
 The first pull is large because Nacos and RocketMQ are Java images. Nacos is available at
 `http://127.0.0.1:8080`, and RocketMQ Dashboard at `http://127.0.0.1:8088`. Host Java applications

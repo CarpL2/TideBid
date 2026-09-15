@@ -193,6 +193,24 @@ services:
     networks:
       - tidebid-network
 
+  rocketmq-bootstrap:
+    image: apache/rocketmq:5.3.3
+    environment:
+      TZ: UTC
+      NAMESRV_ADDR: rocketmq-nameserver:9876
+      ROCKETMQ_CLUSTER_NAME: TideBidLocalCluster
+      JAVA_OPT_EXT: -server -Xms64m -Xmx192m -Xmn32m
+    entrypoint: ["/bin/sh", "/bootstrap/bootstrap-topology.sh"]
+    volumes:
+      - ./rocketmq/bootstrap/bootstrap-topology.sh:/bootstrap/bootstrap-topology.sh:ro
+    depends_on:
+      rocketmq-broker:
+        condition: service_healthy
+    restart: "no"
+    mem_limit: 256m
+    networks:
+      - tidebid-network
+
   rocketmq-proxy:
     image: apache/rocketmq:5.3.3
     environment:
@@ -208,6 +226,8 @@ services:
     depends_on:
       rocketmq-broker:
         condition: service_healthy
+      rocketmq-bootstrap:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "bash -ec ': >/dev/tcp/127.0.0.1/8081'"]
       interval: 5s
