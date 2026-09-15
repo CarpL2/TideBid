@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.auction;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
@@ -14,6 +15,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @EnabledIfEnvironmentVariable(named = "TIDEBID_MYSQL_ROOT_PASSWORD", matches = ".+")
 class AuctionMigrationIsolationTest {
@@ -60,6 +62,60 @@ class AuctionMigrationIsolationTest {
                 statement.executeUpdate("DROP DATABASE `" + schema + "`");
             }
         }
+    }
+
+    @Test
+    void diagnosesNonTransactionalDdlFailureAndRecoversWithFreshSchema() throws Exception {
+        String host = environmentOrDefault("TIDEBID_MYSQL_HOST", "127.0.0.1");
+        String port = environmentOrDefault("TIDEBID_MYSQL_PORT", "13306");
+        String rootPassword = System.getenv("TIDEBID_MYSQL_ROOT_PASSWORD");
+        String schema = "tidebid_auction_verify_"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toLowerCase(Locale.ROOT);
+        assertThat(schema).matches("tidebid_auction_verify_[0-9a-f]{12}");
+
+        String serverUrl = jdbcUrl(host, port, "");
+        String schemaUrl = jdbcUrl(host, port, schema);
+        try (Connection admin = DriverManager.getConnection(serverUrl, "root", rootPassword);
+             Statement statement = admin.createStatement()) {
+            createSchema(statement, schema);
+            try {
+                Flyway failingFlyway = Flyway.configure()
+                        .dataSource(schemaUrl, "root", rootPassword)
+                        .locations("classpath:db/failure-migration")
+                        .defaultSchema(schema)
+                        .cleanDisabled(true)
+                        .validateOnMigrate(true)
+                        .baselineOnMigrate(false)
+                        .load();
+
+                assertThatThrownBy(failingFlyway::migrate)
+                        .isInstanceOf(FlywayException.class)
+                        .hasMessageContaining("V1__intentional_failure.sql");
+                assertThat(readTables(schemaUrl, rootPassword)).contains("migration_probe");
+
+                statement.executeUpdate("DROP DATABASE `" + schema + "`");
+                createSchema(statement, schema);
+
+                Flyway recoveredFlyway = Flyway.configure()
+                        .dataSource(schemaUrl, "root", rootPassword)
+                        .locations("classpath:db/migration")
+                        .defaultSchema(schema)
+                        .cleanDisabled(true)
+                        .validateOnMigrate(true)
+                        .baselineOnMigrate(false)
+                        .load();
+
+                assertThat(recoveredFlyway.migrate().migrationsExecuted).isEqualTo(1);
+                assertThat(readTables(schemaUrl, rootPassword)).containsExactlyElementsOf(EXPECTED_TABLES);
+            } finally {
+                statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
+            }
+        }
+    }
+
+    private static void createSchema(Statement statement, String schema) throws Exception {
+        statement.executeUpdate("CREATE DATABASE `" + schema
+                + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
     }
 
     private static List<String> readTables(String schemaUrl, String rootPassword) throws Exception {
