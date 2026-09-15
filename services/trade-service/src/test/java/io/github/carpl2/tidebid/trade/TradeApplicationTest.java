@@ -2,6 +2,7 @@ package io.github.carpl2.tidebid.trade;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.carpl2.tidebid.trade.infrastructure.config.TradeRocketMqProperties;
+import io.github.carpl2.tidebid.trade.infrastructure.config.TradeOutboxProperties;
 import io.github.carpl2.tidebid.web.GlobalExceptionHandler;
 import io.github.carpl2.tidebid.web.TraceIdFilter;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,9 @@ class TradeApplicationTest {
     @Autowired
     private TradeRocketMqProperties rocketMqProperties;
 
+    @Autowired
+    private TradeOutboxProperties outboxProperties;
+
     @Test
     void servesHealthAndIdentity() {
         ResponseEntity<JsonNode> health = client.getForEntity("/actuator/health", JsonNode.class);
@@ -61,6 +65,13 @@ class TradeApplicationTest {
         assertThat(rocketMqProperties.consumerGroups().auctionResults()).isEqualTo("tidebid-trade-auction-v1");
         assertThat(rocketMqProperties.consumerGroups().accountResults()).isEqualTo("tidebid-trade-account-v1");
         assertThat(rocketMqProperties.consumerGroups().paymentTimeout()).isEqualTo("tidebid-trade-timeout-v1");
+        assertThat(outboxProperties.scanInterval()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(outboxProperties.batchSize()).isEqualTo(50);
+        assertThat(outboxProperties.leaseDuration()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(outboxProperties.initialBackoff()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(outboxProperties.maximumBackoff()).isEqualTo(Duration.ofMinutes(5));
+        assertThat(outboxProperties.maximumAttempts()).isEqualTo(16);
+        assertThat(outboxProperties.delaySafeHorizon()).isEqualTo(Duration.ofHours(48));
     }
 
     @ParameterizedTest

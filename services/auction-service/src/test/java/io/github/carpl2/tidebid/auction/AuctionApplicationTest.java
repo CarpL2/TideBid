@@ -2,6 +2,7 @@ package io.github.carpl2.tidebid.auction;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionOutboxProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRegistrationRecoveryProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionRocketMqProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
@@ -62,6 +63,9 @@ class AuctionApplicationTest {
 
     @Autowired
     private AuctionRocketMqProperties rocketMqProperties;
+
+    @Autowired
+    private AuctionOutboxProperties outboxProperties;
 
     @Test
     void servesHealthAndIdentity() {
@@ -127,5 +131,17 @@ class AuctionApplicationTest {
         assertThat(rocketMqProperties.topics().auctionEvents()).isEqualTo("tidebid-auction-events");
         assertThat(rocketMqProperties.topics().scheduledCommands()).isEqualTo("tidebid-scheduled-commands");
         assertThat(rocketMqProperties.consumerGroups().closeAuction()).isEqualTo("tidebid-auction-close-v1");
+
+        assertOutboxDefaults(outboxProperties);
+    }
+
+    private static void assertOutboxDefaults(AuctionOutboxProperties properties) {
+        assertThat(properties.scanInterval()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(properties.batchSize()).isEqualTo(50);
+        assertThat(properties.leaseDuration()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(properties.initialBackoff()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(properties.maximumBackoff()).isEqualTo(Duration.ofMinutes(5));
+        assertThat(properties.maximumAttempts()).isEqualTo(16);
+        assertThat(properties.delaySafeHorizon()).isEqualTo(Duration.ofHours(48));
     }
 }

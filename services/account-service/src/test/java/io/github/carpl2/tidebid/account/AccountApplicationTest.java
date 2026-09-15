@@ -5,6 +5,7 @@ import io.github.carpl2.tidebid.account.api.AccountAuthController;
 import io.github.carpl2.tidebid.account.application.AccountRegistrationService;
 import io.github.carpl2.tidebid.account.infrastructure.persistence.mapper.UserAccountMapper;
 import io.github.carpl2.tidebid.account.infrastructure.config.AccountRocketMqProperties;
+import io.github.carpl2.tidebid.account.infrastructure.config.AccountOutboxProperties;
 import io.github.carpl2.tidebid.core.ApiResponse;
 import io.github.carpl2.tidebid.core.BusinessException;
 import io.github.carpl2.tidebid.core.CommonErrorCode;
@@ -59,6 +60,9 @@ class AccountApplicationTest {
     @Autowired
     private AccountRocketMqProperties rocketMqProperties;
 
+    @Autowired
+    private AccountOutboxProperties outboxProperties;
+
     @Test
     void servesHealthAndIdentity() {
         ResponseEntity<JsonNode> health = client.getForEntity("/actuator/health", JsonNode.class);
@@ -89,6 +93,13 @@ class AccountApplicationTest {
         assertThat(rocketMqProperties.consumerGroups().depositSettlement())
                 .isEqualTo("tidebid-account-deposit-v1");
         assertThat(rocketMqProperties.consumerGroups().sellerCredit()).isEqualTo("tidebid-account-credit-v1");
+        assertThat(outboxProperties.scanInterval()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(outboxProperties.batchSize()).isEqualTo(50);
+        assertThat(outboxProperties.leaseDuration()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(outboxProperties.initialBackoff()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(outboxProperties.maximumBackoff()).isEqualTo(Duration.ofMinutes(5));
+        assertThat(outboxProperties.maximumAttempts()).isEqualTo(16);
+        assertThat(outboxProperties.delaySafeHorizon()).isEqualTo(Duration.ofHours(48));
     }
 
     @ParameterizedTest
