@@ -21,6 +21,14 @@ final class ContractRules {
     }
 
     static BigDecimal positiveMoney(BigDecimal value, String name) {
+        BigDecimal normalized = nonNegativeMoney(value, name);
+        if (normalized.signum() <= 0) {
+            throw new IllegalArgumentException(name + " must be positive");
+        }
+        return normalized;
+    }
+
+    static BigDecimal nonNegativeMoney(BigDecimal value, String name) {
         Objects.requireNonNull(value, name + " must not be null");
         BigDecimal normalized;
         try {
@@ -28,8 +36,8 @@ final class ContractRules {
         } catch (ArithmeticException exception) {
             throw new IllegalArgumentException(name + " must have at most two decimal places", exception);
         }
-        if (normalized.signum() <= 0) {
-            throw new IllegalArgumentException(name + " must be positive");
+        if (normalized.signum() < 0) {
+            throw new IllegalArgumentException(name + " must not be negative");
         }
         if (normalized.precision() > 19) {
             throw new IllegalArgumentException(name + " exceeds DECIMAL(19,2)");
