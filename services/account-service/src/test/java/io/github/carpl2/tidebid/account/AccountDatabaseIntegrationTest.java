@@ -72,5 +72,38 @@ class AccountDatabaseIntegrationTest {
                 Integer.class
         );
         assertThat(successfulVersionTwo).isEqualTo(1);
+
+        Integer successfulVersionThree = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '3' AND success = TRUE",
+                Integer.class
+        );
+        assertThat(successfulVersionThree).isEqualTo(1);
+
+        List<String> holdColumns = jdbcTemplate.queryForList(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wallet_hold'
+                ORDER BY ORDINAL_POSITION
+                """,
+                String.class
+        );
+        assertThat(holdColumns).contains(
+                "captured_amount",
+                "released_amount",
+                "settlement_event_id",
+                "settled_at"
+        );
+
+        List<String> holdIndexes = jdbcTemplate.queryForList(
+                """
+                SELECT DISTINCT INDEX_NAME
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'wallet_hold'
+                ORDER BY INDEX_NAME
+                """,
+                String.class
+        );
+        assertThat(holdIndexes).contains("uk_wallet_hold_settlement_event_id");
     }
 }
