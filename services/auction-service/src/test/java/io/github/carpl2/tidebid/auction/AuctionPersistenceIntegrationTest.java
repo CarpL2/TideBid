@@ -333,7 +333,7 @@ class AuctionPersistenceIntegrationTest {
         long itemId = IdWorker.getId();
         long sellerId = IdWorker.getId();
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
-        Instant oldCreatedAt = now.minus(Duration.ofHours(25));
+        Instant oldCreatedAt = Instant.parse("2000-01-01T00:00:00Z");
         Instant freshCreatedAt = now.minus(Duration.ofMinutes(1));
         AuctionItem item = draftItem(itemId, sellerId, oldCreatedAt);
         AuctionItemImage expiredPending = cleanupImage(
@@ -368,7 +368,7 @@ class AuctionPersistenceIntegrationTest {
                 itemRepository,
                 storage,
                 storageProperties,
-                new AuctionImageCleanupProperties(Duration.ofMinutes(1), 50),
+                new AuctionImageCleanupProperties(Duration.ofMinutes(1), 1),
                 clock
         );
 

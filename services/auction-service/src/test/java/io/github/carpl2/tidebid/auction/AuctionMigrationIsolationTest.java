@@ -22,8 +22,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AuctionMigrationIsolationTest {
 
     private static final List<String> EXPECTED_TABLES = List.of(
+            "auction_inbox",
             "auction_item",
             "auction_item_image",
+            "auction_outbox",
             "auction_registration",
             "auction_review",
             "auction_session",
@@ -56,7 +58,7 @@ class AuctionMigrationIsolationTest {
                         .baselineOnMigrate(false)
                         .load();
 
-                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
                 assertThat(flyway.migrate().migrationsExecuted).isZero();
                 assertThat(readTables(schemaUrl, rootPassword)).containsExactlyElementsOf(EXPECTED_TABLES);
                 assertThat(readColumns(schemaUrl, rootPassword, "auction_session"))
@@ -108,7 +110,7 @@ class AuctionMigrationIsolationTest {
                         .baselineOnMigrate(false)
                         .load();
 
-                assertThat(recoveredFlyway.migrate().migrationsExecuted).isEqualTo(2);
+                assertThat(recoveredFlyway.migrate().migrationsExecuted).isEqualTo(3);
                 assertThat(readTables(schemaUrl, rootPassword)).containsExactlyElementsOf(EXPECTED_TABLES);
             } finally {
                 statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
@@ -159,6 +161,7 @@ class AuctionMigrationIsolationTest {
                         .dataSource(schemaUrl, "root", rootPassword)
                         .locations("classpath:db/migration")
                         .defaultSchema(schema)
+                        .target("2")
                         .cleanDisabled(true)
                         .load();
                 assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
@@ -205,6 +208,119 @@ class AuctionMigrationIsolationTest {
         }
     }
 
+    @Test
+    void createsServiceLocalOutboxAndInboxWithRequiredConstraintsAndIndexes() throws Exception {
+        String host = environmentOrDefault("TIDEBID_MYSQL_HOST", "127.0.0.1");
+        String port = environmentOrDefault("TIDEBID_MYSQL_PORT", "13306");
+        String rootPassword = System.getenv("TIDEBID_MYSQL_ROOT_PASSWORD");
+        String schema = "tidebid_auction_verify_"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toLowerCase(Locale.ROOT);
+        String serverUrl = jdbcUrl(host, port, "");
+        String schemaUrl = jdbcUrl(host, port, schema);
+
+        try (Connection admin = DriverManager.getConnection(serverUrl, "root", rootPassword);
+             Statement adminStatement = admin.createStatement()) {
+            createSchema(adminStatement, schema);
+            try {
+                Flyway versionTwo = Flyway.configure()
+                        .dataSource(schemaUrl, "root", rootPassword)
+                        .locations("classpath:db/migration")
+                        .defaultSchema(schema)
+                        .target("2")
+                        .cleanDisabled(true)
+                        .load();
+                assertThat(versionTwo.migrate().migrationsExecuted).isEqualTo(2);
+
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", rootPassword);
+                     Statement statement = connection.createStatement()) {
+                    insertItem(statement, 103, 303);
+                    insertSession(statement, 203, 103, 303, null, null, 0);
+                }
+
+                Flyway latest = Flyway.configure()
+                        .dataSource(schemaUrl, "root", rootPassword)
+                        .locations("classpath:db/migration")
+                        .defaultSchema(schema)
+                        .cleanDisabled(true)
+                        .load();
+                assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+
+                assertThat(readIndexes(schemaUrl, rootPassword, "auction_outbox"))
+                        .contains(
+                                "PRIMARY",
+                                "uk_auction_outbox_event_id",
+                                "idx_auction_outbox_pending_scan",
+                                "idx_auction_outbox_lease_scan",
+                                "idx_auction_outbox_aggregate"
+                        );
+                assertThat(readIndexes(schemaUrl, rootPassword, "auction_inbox"))
+                        .contains(
+                                "PRIMARY",
+                                "uk_auction_inbox_consumer_event",
+                                "idx_auction_inbox_processed"
+                        );
+
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", rootPassword);
+                     Statement statement = connection.createStatement()) {
+                    try (ResultSet existing = statement.executeQuery("""
+                            SELECT COUNT(*)
+                            FROM auction_session
+                            WHERE id = 203 AND status = 'AWAITING_CLOSE'
+                            """)) {
+                        assertThat(existing.next()).isTrue();
+                        assertThat(existing.getInt(1)).isOne();
+                    }
+
+                    insertPendingOutbox(statement, 501, "019947e0-e9d4-7f21-8d7a-3c74b922e19a");
+                    assertThatThrownBy(() -> insertPendingOutbox(
+                            statement,
+                            502,
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e19a"
+                    )).isInstanceOf(SQLException.class);
+
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            INSERT INTO auction_outbox (
+                                id, event_id, aggregate_type, aggregate_id, event_type, schema_version,
+                                topic, tag, message_key, payload, payload_hash, deliver_at, status,
+                                attempt_count, next_attempt_at, lease_owner, lease_token, lease_until,
+                                created_at, updated_at
+                            ) VALUES (
+                                503, '019947e0-e9d4-7f21-8d7a-3c74b922e19b', 'AUCTION', '201',
+                                'auction.close', 1, 'tidebid-scheduled-commands', 'auction.close',
+                                '019947e0-e9d4-7f21-8d7a-3c74b922e19b', JSON_OBJECT('eventId', 'test'),
+                                REPEAT('b', 64), '2026-09-16 13:00:00.000000', 'PUBLISHING', 1,
+                                '2026-09-16 12:00:00.000000', 'worker-1', NULL,
+                                '2026-09-16 12:00:30.000000',
+                                '2026-09-16 12:00:00.000000', '2026-09-16 12:00:00.000000'
+                            )
+                            """)).isInstanceOf(SQLException.class);
+
+                    insertInbox(statement, 601, "tidebid-auction-close-v1",
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e19c", "c");
+                    assertThatThrownBy(() -> insertInbox(
+                            statement,
+                            602,
+                            "tidebid-auction-close-v1",
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e19c",
+                            "d"
+                    )).isInstanceOf(SQLException.class);
+                    insertInbox(statement, 603, "tidebid-auction-close-v2",
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e19c", "d");
+
+                    assertThatThrownBy(() -> insertInbox(
+                            statement,
+                            604,
+                            "tidebid-auction-close-v1",
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e19d",
+                            "not-hex"
+                    )).isInstanceOf(SQLException.class);
+                }
+            } finally {
+                adminStatement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
+            }
+        }
+    }
+
     private static void createSchema(Statement statement, String schema) throws Exception {
         statement.executeUpdate("CREATE DATABASE `" + schema
                 + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
@@ -244,6 +360,63 @@ class AuctionMigrationIsolationTest {
             }
         }
         return columns;
+    }
+
+    private static List<String> readIndexes(
+            String schemaUrl,
+            String rootPassword,
+            String tableName
+    ) throws Exception {
+        List<String> indexes = new ArrayList<>();
+        try (Connection connection = DriverManager.getConnection(schemaUrl, "root", rootPassword);
+             var statement = connection.prepareStatement(
+                     "SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS "
+                             + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME"
+             )) {
+            statement.setString(1, tableName);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    indexes.add(resultSet.getString(1));
+                }
+            }
+        }
+        return indexes;
+    }
+
+    private static void insertPendingOutbox(Statement statement, long id, String eventId) throws SQLException {
+        statement.executeUpdate("""
+                INSERT INTO auction_outbox (
+                    id, event_id, aggregate_type, aggregate_id, event_type, schema_version,
+                    topic, tag, message_key, payload, payload_hash, deliver_at, status,
+                    attempt_count, next_attempt_at, created_at, updated_at
+                ) VALUES (
+                    %d, '%s', 'AUCTION', '201', 'auction.close', 1,
+                    'tidebid-scheduled-commands', 'auction.close', '%s',
+                    JSON_OBJECT('eventId', '%s'), REPEAT('a', 64),
+                    '2026-09-16 13:00:00.000000', 'PENDING', 0,
+                    '2026-09-16 12:00:00.000000',
+                    '2026-09-16 12:00:00.000000', '2026-09-16 12:00:00.000000'
+                )
+                """.formatted(id, eventId, eventId, eventId));
+    }
+
+    private static void insertInbox(
+            Statement statement,
+            long id,
+            String consumerName,
+            String eventId,
+            String hashCharacter
+    ) throws SQLException {
+        String payloadHash = "not-hex".equals(hashCharacter)
+                ? hashCharacter
+                : hashCharacter.repeat(64);
+        statement.executeUpdate("""
+                INSERT INTO auction_inbox (
+                    id, consumer_name, event_id, event_type, schema_version, payload_hash, processed_at
+                ) VALUES (
+                    %d, '%s', '%s', 'auction.close', 1, '%s', '2026-09-16 12:01:00.000000'
+                )
+                """.formatted(id, consumerName, eventId, payloadHash));
     }
 
     private static void insertItem(Statement statement, long itemId, long sellerId) throws SQLException {

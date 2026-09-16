@@ -26,8 +26,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AuctionDatabaseIntegrationTest {
 
     private static final List<String> EXPECTED_BUSINESS_TABLES = List.of(
+            "auction_inbox",
             "auction_item",
             "auction_item_image",
+            "auction_outbox",
             "auction_registration",
             "auction_review",
             "auction_session",
@@ -85,7 +87,7 @@ class AuctionDatabaseIntegrationTest {
                 ORDER BY TABLE_NAME, ORDINAL_POSITION
                 """
         );
-        assertThat(moneyColumns).hasSize(7);
+        assertThat(moneyColumns).hasSize(8);
         assertThat(moneyColumns).allSatisfy(column -> {
             assertThat(((Number) column.get("NUMERIC_PRECISION")).intValue()).isEqualTo(19);
             assertThat(((Number) column.get("NUMERIC_SCALE")).intValue()).isEqualTo(2);
@@ -120,6 +122,8 @@ class AuctionDatabaseIntegrationTest {
         assertThat(uniqueIndexes).contains(
                 "uk_auction_item_image_object_key",
                 "uk_auction_item_image_item_sort",
+                "uk_auction_inbox_consumer_event",
+                "uk_auction_outbox_event_id",
                 "uk_auction_review_item_submission",
                 "uk_auction_session_item_id",
                 "uk_auction_registration_no",
@@ -139,6 +143,9 @@ class AuctionDatabaseIntegrationTest {
         );
         assertThat(indexes).contains(
                 "idx_auction_item_review_submitted",
+                "idx_auction_inbox_processed",
+                "idx_auction_outbox_pending_scan",
+                "idx_auction_outbox_lease_scan",
                 "idx_auction_session_lobby",
                 "idx_auction_registration_recovery",
                 "idx_bid_record_auction_created"
