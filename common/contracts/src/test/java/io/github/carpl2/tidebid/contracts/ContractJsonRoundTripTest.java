@@ -9,6 +9,8 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.lang.reflect.RecordComponent;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
@@ -22,6 +24,23 @@ class ContractJsonRoundTripTest {
     private static final long ID_5 = 9_007_199_254_740_997L;
     private static final Instant STARTED_AT = Instant.parse("2026-09-16T06:00:00.123456Z");
     private static final Instant FINISHED_AT = Instant.parse("2026-09-16T06:00:01.654321Z");
+    private static final Set<String> FORBIDDEN_FIELD_FRAGMENTS = Set.of(
+            "token",
+            "authorization",
+            "password",
+            "secret",
+            "accesskey",
+            "signedurl",
+            "presigned",
+            "nickname",
+            "username",
+            "mobile",
+            "phone",
+            "email",
+            "realname",
+            "idcard",
+            "address"
+    );
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
@@ -30,6 +49,14 @@ class ContractJsonRoundTripTest {
     @TestFactory
     Stream<DynamicTest> allStageThreePayloadsRoundTripWithoutPrecisionLoss() {
         return samples().map(sample -> DynamicTest.dynamicTest(sample.name(), () -> verifyRoundTrip(sample)));
+    }
+
+    @TestFactory
+    Stream<DynamicTest> allStageThreePayloadsExcludeSecretsUrlsAndPii() {
+        return samples().map(sample -> DynamicTest.dynamicTest(
+                sample.name() + " data minimization",
+                () -> verifySensitiveDataExcluded(sample)
+        ));
     }
 
     private void verifyRoundTrip(ContractSample sample) throws Exception {
@@ -55,6 +82,29 @@ class ContractJsonRoundTripTest {
                 assertThat(node.textValue()).isEqualTo(instant.toString()).endsWith("Z");
             }
         }
+    }
+
+    private void verifySensitiveDataExcluded(ContractSample sample) throws Exception {
+        String json = objectMapper.writeValueAsString(sample.payload());
+        String normalizedJson = normalize(json);
+
+        assertThat(normalizedJson)
+                .as(sample.name() + " serialized payload")
+                .doesNotContain("http://", "https://");
+        for (String forbidden : FORBIDDEN_FIELD_FRAGMENTS) {
+            assertThat(normalizedJson)
+                    .as(sample.name() + " must not contain " + forbidden)
+                    .doesNotContain(forbidden);
+        }
+        assertThat(Stream.of(sample.type().getRecordComponents())
+                .map(RecordComponent::getName)
+                .map(ContractJsonRoundTripTest::normalize))
+                .as(sample.name() + " record components")
+                .noneMatch(name -> FORBIDDEN_FIELD_FRAGMENTS.stream().anyMatch(name::contains));
+    }
+
+    private static String normalize(String value) {
+        return value.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "");
     }
 
     private static boolean isBusinessId(RecordComponent component) {
