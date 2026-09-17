@@ -33,7 +33,9 @@ public class AuctionDetailQueryService {
     private static final Set<AuctionSessionStatus> VISIBLE_STATUSES = Set.of(
             AuctionSessionStatus.SCHEDULED,
             AuctionSessionStatus.OPEN,
-            AuctionSessionStatus.AWAITING_CLOSE
+            AuctionSessionStatus.AWAITING_CLOSE,
+            AuctionSessionStatus.CLOSED_SOLD,
+            AuctionSessionStatus.CLOSED_UNSOLD
     );
 
     private final AuctionSessionRepository sessionRepository;
@@ -89,7 +91,9 @@ public class AuctionDetailQueryService {
                 item.id(), session.id(), item.title(), item.description(), item.category(), item.itemCondition(),
                 session.status(), session.startPrice(), session.bidIncrement(), session.depositAmount(),
                 session.currentPrice(), session.displayPrice(), session.minimumNextBid(), session.bidCount(), session.startAt(),
-                session.endAt(), item.sellerId() == requesterId, images, myRegistration
+                session.endAt(), session.finalPrice(), session.closedAt(),
+                session.status() == AuctionSessionStatus.CLOSED_SOLD && session.winnerId() == requesterId,
+                item.sellerId() == requesterId, images, myRegistration
         );
     }
 
@@ -146,12 +150,28 @@ public class AuctionDetailQueryService {
             long bidCount,
             Instant startAt,
             Instant endAt,
+            BigDecimal finalPrice,
+            Instant closedAt,
+            boolean wonByCurrentUser,
             boolean ownedByCurrentUser,
             List<ImageView> images,
             RegistrationView myRegistration
     ) {
         public AuctionDetail {
             images = List.copyOf(images);
+        }
+
+        public AuctionDetail(
+                long itemId, long auctionId, String title, String description, String category,
+                AuctionItemCondition itemCondition, AuctionSessionStatus sessionStatus,
+                BigDecimal startPrice, BigDecimal bidIncrement, BigDecimal depositAmount,
+                BigDecimal currentPrice, BigDecimal displayPrice, BigDecimal minimumNextBid,
+                long bidCount, Instant startAt, Instant endAt, boolean ownedByCurrentUser,
+                List<ImageView> images, RegistrationView myRegistration
+        ) {
+            this(itemId, auctionId, title, description, category, itemCondition, sessionStatus,
+                    startPrice, bidIncrement, depositAmount, currentPrice, displayPrice, minimumNextBid,
+                    bidCount, startAt, endAt, null, null, false, ownedByCurrentUser, images, myRegistration);
         }
     }
 

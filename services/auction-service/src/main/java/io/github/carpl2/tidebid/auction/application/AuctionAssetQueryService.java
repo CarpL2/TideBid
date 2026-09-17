@@ -207,6 +207,7 @@ public class AuctionAssetQueryService {
                 session.startPrice(), session.currentPrice(),
                 session.displayPrice(), session.minimumNextBid(),
                 session.bidCount(), session.startAt(), session.endAt(),
+                session.finalPrice(), session.closedAt(),
                 cover == null ? null : lobbyCover(item, cover, previewExpiresAt)
         );
     }
@@ -386,8 +387,20 @@ public class AuctionAssetQueryService {
             long bidCount,
             Instant startAt,
             Instant endAt,
+            BigDecimal finalPrice,
+            Instant closedAt,
             LobbyCover coverImage
     ) {
+        public LobbySummary(
+                long itemId, long auctionId, String title, String category,
+                AuctionItemCondition itemCondition, AuctionSessionStatus sessionStatus,
+                BigDecimal startPrice, BigDecimal currentPrice, BigDecimal displayPrice,
+                BigDecimal minimumNextBid, long bidCount, Instant startAt, Instant endAt,
+                LobbyCover coverImage
+        ) {
+            this(itemId, auctionId, title, category, itemCondition, sessionStatus, startPrice, currentPrice,
+                    displayPrice, minimumNextBid, bidCount, startAt, endAt, null, null, coverImage);
+        }
     }
 
     public record LobbyCover(

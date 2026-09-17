@@ -26,6 +26,9 @@ public record AuctionDetailResponse(
         long bidCount,
         Instant startAt,
         Instant endAt,
+        BigDecimal finalPrice,
+        Instant closedAt,
+        boolean wonByCurrentUser,
         boolean ownedByCurrentUser,
         List<Image> images,
         Registration myRegistration
@@ -37,7 +40,8 @@ public record AuctionDetailResponse(
                 source.description(), source.category(), source.itemCondition(), source.sessionStatus(),
                 source.startPrice(), source.bidIncrement(), source.depositAmount(), source.currentPrice(),
                 source.displayPrice(), source.minimumNextBid(), source.bidCount(), source.startAt(), source.endAt(),
-                source.ownedByCurrentUser(), source.images().stream().map(Image::from).toList(),
+                source.finalPrice(), source.closedAt(), source.wonByCurrentUser(), source.ownedByCurrentUser(),
+                source.images().stream().map(Image::from).toList(),
                 Registration.from(source.myRegistration())
         );
     }

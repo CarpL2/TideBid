@@ -42,6 +42,8 @@ public final class AuctionLobbyResponse {
             long bidCount,
             Instant startAt,
             Instant endAt,
+            BigDecimal finalPrice,
+            Instant closedAt,
             CoverImage coverImage
     ) {
         static Summary from(AuctionAssetQueryService.LobbySummary source) {
@@ -49,7 +51,7 @@ public final class AuctionLobbyResponse {
                     Long.toString(source.itemId()), Long.toString(source.auctionId()), source.title(),
                     source.category(), source.itemCondition(), source.sessionStatus(), source.startPrice(),
                     source.currentPrice(), source.displayPrice(), source.minimumNextBid(), source.bidCount(),
-                    source.startAt(), source.endAt(),
+                    source.startAt(), source.endAt(), source.finalPrice(), source.closedAt(),
                     CoverImage.from(source.coverImage())
             );
         }

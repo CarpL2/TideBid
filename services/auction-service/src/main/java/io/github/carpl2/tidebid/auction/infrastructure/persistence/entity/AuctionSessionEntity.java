@@ -23,6 +23,10 @@ public class AuctionSessionEntity extends VersionedAuditEntity {
     private Instant startAt;
     private Instant endAt;
     private String status;
+    private Long winnerId;
+    private Long winningBidId;
+    private BigDecimal finalPrice;
+    private Instant closedAt;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -48,4 +52,12 @@ public class AuctionSessionEntity extends VersionedAuditEntity {
     public void setEndAt(Instant endAt) { this.endAt = endAt; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public Long getWinnerId() { return winnerId; }
+    public void setWinnerId(Long winnerId) { this.winnerId = winnerId; }
+    public Long getWinningBidId() { return winningBidId; }
+    public void setWinningBidId(Long winningBidId) { this.winningBidId = winningBidId; }
+    public BigDecimal getFinalPrice() { return finalPrice; }
+    public void setFinalPrice(BigDecimal finalPrice) { this.finalPrice = finalPrice; }
+    public Instant getClosedAt() { return closedAt; }
+    public void setClosedAt(Instant closedAt) { this.closedAt = closedAt; }
 }

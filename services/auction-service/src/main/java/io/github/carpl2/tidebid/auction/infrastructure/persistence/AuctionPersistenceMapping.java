@@ -112,6 +112,10 @@ final class AuctionPersistenceMapping {
         target.setStartAt(source.startAt());
         target.setEndAt(source.endAt());
         target.setStatus(source.status().name());
+        target.setWinnerId(source.winnerId());
+        target.setWinningBidId(source.winningBidId());
+        target.setFinalPrice(source.finalPrice());
+        target.setClosedAt(source.closedAt());
         target.setVersion(source.version());
         target.setCreatedAt(source.createdAt());
         target.setUpdatedAt(source.updatedAt());
@@ -123,7 +127,8 @@ final class AuctionPersistenceMapping {
                 source.getId(), source.getItemId(), source.getSellerId(), source.getStartPrice(),
                 source.getBidIncrement(), source.getDepositAmount(), source.getCurrentPrice(),
                 source.getCurrentBidderId(), source.getBidCount(), source.getStartAt(), source.getEndAt(),
-                AuctionSessionStatus.valueOf(source.getStatus()), source.getVersion(), source.getCreatedAt(),
+                AuctionSessionStatus.valueOf(source.getStatus()), source.getWinnerId(), source.getWinningBidId(),
+                source.getFinalPrice(), source.getClosedAt(), source.getVersion(), source.getCreatedAt(),
                 source.getUpdatedAt()
         );
     }

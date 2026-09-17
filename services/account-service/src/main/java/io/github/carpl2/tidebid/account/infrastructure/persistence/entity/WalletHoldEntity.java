@@ -19,7 +19,11 @@ public class WalletHoldEntity {
     private Long userId;
     private String businessType;
     private BigDecimal amount;
+    private BigDecimal capturedAmount;
+    private BigDecimal releasedAmount;
     private String status;
+    private String settlementEventId;
+    private Instant settledAt;
     @Version
     @TableField(fill = FieldFill.INSERT)
     private Long version;
@@ -68,6 +72,11 @@ public class WalletHoldEntity {
         this.amount = amount;
     }
 
+    public BigDecimal getCapturedAmount() { return capturedAmount; }
+    public void setCapturedAmount(BigDecimal capturedAmount) { this.capturedAmount = capturedAmount; }
+    public BigDecimal getReleasedAmount() { return releasedAmount; }
+    public void setReleasedAmount(BigDecimal releasedAmount) { this.releasedAmount = releasedAmount; }
+
     public String getStatus() {
         return status;
     }
@@ -75,6 +84,11 @@ public class WalletHoldEntity {
     public void setStatus(String status) {
         this.status = status;
     }
+
+    public String getSettlementEventId() { return settlementEventId; }
+    public void setSettlementEventId(String settlementEventId) { this.settlementEventId = settlementEventId; }
+    public Instant getSettledAt() { return settledAt; }
+    public void setSettledAt(Instant settledAt) { this.settledAt = settledAt; }
 
     public Long getVersion() {
         return version;

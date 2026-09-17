@@ -19,6 +19,8 @@ import java.util.Optional;
 import static io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus.AWAITING_CLOSE;
 import static io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus.OPEN;
 import static io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus.SCHEDULED;
+import static io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus.CLOSED_SOLD;
+import static io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus.CLOSED_UNSOLD;
 
 @Repository
 @Profile({"local-db", "nacos"})
@@ -91,7 +93,8 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
     @Override
     public LobbySessionPage findLobbySessions(int offset, int limit) {
         requirePageWindow(offset, limit);
-        List<String> visibleStatuses = List.of(SCHEDULED.name(), OPEN.name(), AWAITING_CLOSE.name());
+        List<String> visibleStatuses = List.of(
+                SCHEDULED.name(), OPEN.name(), AWAITING_CLOSE.name(), CLOSED_SOLD.name(), CLOSED_UNSOLD.name());
         long total = sessionMapper.selectCount(new LambdaQueryWrapper<AuctionSessionEntity>()
                 .in(AuctionSessionEntity::getStatus, visibleStatuses));
         List<AuctionSession> sessions = sessionMapper.selectList(new LambdaQueryWrapper<AuctionSessionEntity>()
