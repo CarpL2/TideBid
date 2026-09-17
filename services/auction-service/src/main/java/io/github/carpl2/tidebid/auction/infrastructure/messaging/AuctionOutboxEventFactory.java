@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
 import io.github.carpl2.tidebid.contracts.BidAcceptedEvent;
+import io.github.carpl2.tidebid.contracts.AuctionClosedSoldEvent;
+import io.github.carpl2.tidebid.contracts.AuctionClosedUnsoldEvent;
 import io.github.carpl2.tidebid.contracts.CloseAuctionCommand;
+import io.github.carpl2.tidebid.contracts.DepositSettlementRequestedEvent;
 import io.github.carpl2.tidebid.contracts.EventEnvelope;
 import io.github.carpl2.tidebid.contracts.RocketMqTopology;
 import org.springframework.context.annotation.Profile;
@@ -78,6 +81,66 @@ public class AuctionOutboxEventFactory {
     public static UUID deterministicCloseEventId(long auctionId, Instant expectedEndAt) {
         String key = "tidebid:auction-close:v1:" + auctionId + ":" + expectedEndAt;
         return UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public JdbcAuctionOutboxRepository.NewOutboxEvent closeAuctionRetry(
+            long auctionId,
+            Instant expectedEndAt,
+            Instant scheduledAt,
+            UUID sourceEventId
+    ) {
+        UUID eventId = UUID.nameUUIDFromBytes(("tidebid:auction-close-retry:v1:" + sourceEventId + ":"
+                + expectedEndAt).getBytes(StandardCharsets.UTF_8));
+        return encode(new EventEnvelope<>(
+                        eventId,
+                        CloseAuctionCommand.EVENT_TYPE,
+                        CloseAuctionCommand.SCHEMA_VERSION,
+                        scheduledAt,
+                        PRODUCER,
+                        new CloseAuctionCommand(auctionId, expectedEndAt)),
+                Long.toString(auctionId), RocketMqTopology.SCHEDULED_COMMANDS_TOPIC, expectedEndAt);
+    }
+
+    public JdbcAuctionOutboxRepository.NewOutboxEvent auctionClosedSold(
+            AuctionClosedSoldEvent payload,
+            Instant occurredAt,
+            String traceId
+    ) {
+        return businessEvent(UUID.randomUUID(), payload.auctionId(), payload, AuctionClosedSoldEvent.EVENT_TYPE,
+                AuctionClosedSoldEvent.SCHEMA_VERSION, occurredAt, traceId);
+    }
+
+    public JdbcAuctionOutboxRepository.NewOutboxEvent auctionClosedUnsold(
+            AuctionClosedUnsoldEvent payload,
+            Instant occurredAt,
+            String traceId
+    ) {
+        return businessEvent(UUID.randomUUID(), payload.auctionId(), payload, AuctionClosedUnsoldEvent.EVENT_TYPE,
+                AuctionClosedUnsoldEvent.SCHEMA_VERSION, occurredAt, traceId);
+    }
+
+    public JdbcAuctionOutboxRepository.NewOutboxEvent depositRelease(
+            DepositSettlementRequestedEvent payload,
+            Instant occurredAt,
+            String traceId
+    ) {
+        UUID eventId = UUID.nameUUIDFromBytes(("tidebid:deposit-release:v1:" + payload.auctionId() + ":"
+                + payload.holdNo()).getBytes(StandardCharsets.UTF_8));
+        return businessEvent(eventId, payload.auctionId(), payload, DepositSettlementRequestedEvent.EVENT_TYPE,
+                DepositSettlementRequestedEvent.SCHEMA_VERSION, occurredAt, traceId);
+    }
+
+    private JdbcAuctionOutboxRepository.NewOutboxEvent businessEvent(
+            UUID eventId,
+            long auctionId,
+            Object payload,
+            String eventType,
+            int schemaVersion,
+            Instant occurredAt,
+            String traceId
+    ) {
+        return encode(new EventEnvelope<>(eventId, eventType, schemaVersion, occurredAt, PRODUCER, traceId, payload),
+                Long.toString(auctionId), RocketMqTopology.AUCTION_EVENTS_TOPIC, occurredAt);
     }
 
     private JdbcAuctionOutboxRepository.NewOutboxEvent encode(
