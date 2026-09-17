@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.trade;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
@@ -23,6 +24,52 @@ class TradeMigrationIsolationTest {
     private static final List<String> EXPECTED_TABLES = List.of(
             "flyway_schema_history", "payment_attempt", "trade_inbox", "trade_order", "trade_outbox"
     );
+
+    @Test
+    void diagnosesNonTransactionalDdlFailureAndRecoversWithFreshSchema() throws Exception {
+        DatabaseTarget target = databaseTarget();
+        String schema = "tidebid_trade_verify_"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toLowerCase(Locale.ROOT);
+        String schemaUrl = jdbcUrl(target.host(), target.port(), schema);
+
+        try (Connection admin = DriverManager.getConnection(target.serverUrl(), "root", target.rootPassword());
+             Statement statement = admin.createStatement()) {
+            statement.executeUpdate("CREATE DATABASE `" + schema
+                    + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
+            try {
+                Flyway failingFlyway = Flyway.configure()
+                        .dataSource(schemaUrl, "root", target.rootPassword())
+                        .locations("classpath:db/failure-migration")
+                        .defaultSchema(schema)
+                        .cleanDisabled(true)
+                        .validateOnMigrate(true)
+                        .baselineOnMigrate(false)
+                        .load();
+
+                assertThatThrownBy(failingFlyway::migrate)
+                        .isInstanceOf(FlywayException.class)
+                        .hasMessageContaining("V1__intentional_failure.sql");
+                assertThat(readTables(schemaUrl, target.rootPassword())).contains("migration_probe");
+
+                statement.executeUpdate("DROP DATABASE `" + schema + "`");
+                statement.executeUpdate("CREATE DATABASE `" + schema
+                        + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
+
+                Flyway recovered = Flyway.configure()
+                        .dataSource(schemaUrl, "root", target.rootPassword())
+                        .locations("classpath:db/migration")
+                        .defaultSchema(schema)
+                        .cleanDisabled(true)
+                        .validateOnMigrate(true)
+                        .baselineOnMigrate(false)
+                        .load();
+                assertThat(recovered.migrate().migrationsExecuted).isOne();
+                assertThat(readTables(schemaUrl, target.rootPassword())).containsExactlyElementsOf(EXPECTED_TABLES);
+            } finally {
+                statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
+            }
+        }
+    }
 
     @Test
     void migratesEmptySchemaRepeatablyAndEnforcesCoreConstraints() throws Exception {

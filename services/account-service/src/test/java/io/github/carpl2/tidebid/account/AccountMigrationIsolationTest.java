@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.account;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
@@ -32,6 +33,43 @@ class AccountMigrationIsolationTest {
             "wallet_hold",
             "wallet_ledger"
     );
+
+    @Test
+    void diagnosesNonTransactionalDdlFailureAndRecoversWithFreshSchema() throws Exception {
+        DatabaseTarget target = databaseTarget();
+        String schema = randomSchema();
+        String schemaUrl = jdbcUrl(target.host(), target.port(), schema);
+
+        try (Connection admin = DriverManager.getConnection(target.serverUrl(), "root", target.rootPassword());
+             Statement statement = admin.createStatement()) {
+            createSchema(statement, schema);
+            try {
+                Flyway failingFlyway = Flyway.configure()
+                        .dataSource(schemaUrl, "root", target.rootPassword())
+                        .locations("classpath:db/failure-migration")
+                        .defaultSchema(schema)
+                        .cleanDisabled(true)
+                        .validateOnMigrate(true)
+                        .baselineOnMigrate(false)
+                        .load();
+
+                assertThatThrownBy(failingFlyway::migrate)
+                        .isInstanceOf(FlywayException.class)
+                        .hasMessageContaining("V1__intentional_failure.sql");
+                assertThat(readTables(schemaUrl, target.rootPassword())).contains("migration_probe");
+
+                statement.executeUpdate("DROP DATABASE `" + schema + "`");
+                createSchema(statement, schema);
+
+                assertThat(flyway(schemaUrl, target.rootPassword(), schema, null).migrate().migrationsExecuted)
+                        .isEqualTo(4);
+                assertThat(readTables(schemaUrl, target.rootPassword()))
+                        .containsExactlyElementsOf(EXPECTED_TABLES);
+            } finally {
+                statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
+            }
+        }
+    }
 
     @Test
     void migratesAnIsolatedEmptySchemaAndIsRepeatable() throws Exception {
