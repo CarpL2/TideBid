@@ -21,10 +21,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AccountMigrationIsolationTest {
 
     private static final List<String> EXPECTED_TABLES = List.of(
+            "account_inbox",
+            "account_outbox",
             "flyway_schema_history",
             "user_account",
             "user_role",
             "wallet_account",
+            "wallet_credit",
+            "wallet_debit",
             "wallet_hold",
             "wallet_ledger"
     );
@@ -41,7 +45,7 @@ class AccountMigrationIsolationTest {
             try {
                 Flyway flyway = flyway(schemaUrl, target.rootPassword(), schema, null);
 
-                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
                 assertThat(flyway.migrate().migrationsExecuted).isZero();
                 assertThat(readTables(schemaUrl, target.rootPassword()))
                         .containsExactlyElementsOf(EXPECTED_TABLES);
@@ -52,8 +56,91 @@ class AccountMigrationIsolationTest {
                                 "settlement_event_id",
                                 "settled_at"
                         );
+                assertThat(readIndexes(schemaUrl, target.rootPassword(), "wallet_debit"))
+                        .contains("uk_wallet_debit_payment_no", "idx_wallet_debit_order_created");
+                assertThat(readIndexes(schemaUrl, target.rootPassword(), "wallet_credit"))
+                        .contains("uk_wallet_credit_credit_no", "uk_wallet_credit_order_id");
+                assertThat(readIndexes(schemaUrl, target.rootPassword(), "account_outbox"))
+                        .contains("uk_account_outbox_event_id", "idx_account_outbox_pending_scan");
+                assertThat(readIndexes(schemaUrl, target.rootPassword(), "account_inbox"))
+                        .contains("uk_account_inbox_consumer_event", "idx_account_inbox_processed");
             } finally {
                 statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
+            }
+        }
+    }
+
+    @Test
+    void upgradesVersionThreeDataAndEnforcesSettlementAndMessagingConstraints() throws Exception {
+        DatabaseTarget target = databaseTarget();
+        String schema = randomSchema();
+        String schemaUrl = jdbcUrl(target.host(), target.port(), schema);
+
+        try (Connection admin = DriverManager.getConnection(target.serverUrl(), "root", target.rootPassword());
+             Statement adminStatement = admin.createStatement()) {
+            createSchema(adminStatement, schema);
+            try {
+                assertThat(flyway(schemaUrl, target.rootPassword(), schema, "3").migrate().migrationsExecuted)
+                        .isEqualTo(3);
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", target.rootPassword());
+                     Statement statement = connection.createStatement()) {
+                    insertAccount(statement);
+                }
+
+                assertThat(flyway(schemaUrl, target.rootPassword(), schema, null).migrate().migrationsExecuted)
+                        .isOne();
+
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", target.rootPassword());
+                     Statement statement = connection.createStatement()) {
+                    assertThat(statement.executeUpdate("""
+                            INSERT INTO wallet_debit (
+                                id, payment_no, user_id, order_id, amount, status, failure_code,
+                                decided_at, created_at
+                            ) VALUES (
+                                301, 'PAY:301', 101, 501, 20.00, 'REJECTED', 'INSUFFICIENT_BALANCE',
+                                '2026-09-17 03:00:00.123456', '2026-09-17 03:00:00.000001'
+                            )
+                            """)).isOne();
+                    assertThat(statement.executeUpdate("""
+                            INSERT INTO wallet_credit (
+                                id, credit_no, seller_id, order_id, auction_id, credit_reason,
+                                amount, completed_at, created_at
+                            ) VALUES (
+                                401, 'CREDIT:401', 101, 501, 601, 'SALE_PROCEEDS',
+                                100.00, '2026-09-17 04:00:00.654321', '2026-09-17 04:00:00.000001'
+                            )
+                            """)).isOne();
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            INSERT INTO wallet_debit (
+                                id, payment_no, user_id, order_id, amount, status, failure_code,
+                                decided_at, created_at
+                            ) VALUES (
+                                302, 'PAY:302', 101, 502, 20.00, 'SUCCEEDED', 'SHOULD_BE_NULL',
+                                '2026-09-17 03:00:00.000001', '2026-09-17 03:00:00.000001'
+                            )
+                            """)).isInstanceOf(SQLException.class);
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            INSERT INTO wallet_credit (
+                                id, credit_no, seller_id, order_id, auction_id, credit_reason,
+                                amount, completed_at, created_at
+                            ) VALUES (
+                                402, 'CREDIT:402', 101, 501, 602, 'DEFAULT_COMPENSATION',
+                                10.00, '2026-09-17 04:00:00.000001', '2026-09-17 04:00:00.000001'
+                            )
+                            """)).isInstanceOf(SQLException.class);
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            INSERT INTO account_inbox (
+                                id, consumer_name, event_id, event_type, schema_version,
+                                payload_hash, processed_at
+                            ) VALUES (
+                                701, 'tidebid-account-credit-v1',
+                                '01994cfd-e548-78e2-98f3-adb673d563a7', 'seller.credit-requested', 1,
+                                'NOT_A_SHA256', '2026-09-17 05:00:00.123456'
+                            )
+                            """)).isInstanceOf(SQLException.class);
+                }
+            } finally {
+                adminStatement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
             }
         }
     }
@@ -79,7 +166,7 @@ class AccountMigrationIsolationTest {
                 }
 
                 Flyway latest = flyway(schemaUrl, target.rootPassword(), schema, null);
-                assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+                assertThat(latest.migrate().migrationsExecuted).isEqualTo(2);
 
                 assertThat(readIndexes(schemaUrl, target.rootPassword(), "wallet_hold"))
                         .contains(

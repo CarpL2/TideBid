@@ -22,10 +22,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AccountDatabaseIntegrationTest {
 
     private static final List<String> EXPECTED_TABLES = List.of(
+            "account_inbox",
+            "account_outbox",
             "flyway_schema_history",
             "user_account",
             "user_role",
             "wallet_account",
+            "wallet_credit",
+            "wallet_debit",
             "wallet_hold",
             "wallet_ledger"
     );
@@ -78,6 +82,12 @@ class AccountDatabaseIntegrationTest {
                 Integer.class
         );
         assertThat(successfulVersionThree).isEqualTo(1);
+
+        Integer successfulVersionFour = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '4' AND success = TRUE",
+                Integer.class
+        );
+        assertThat(successfulVersionFour).isEqualTo(1);
 
         List<String> holdColumns = jdbcTemplate.queryForList(
                 """

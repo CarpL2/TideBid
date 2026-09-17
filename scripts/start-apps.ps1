@@ -95,6 +95,7 @@ function Assert-RequiredEnvironment {
     $requiredNames = @(
         'TIDEBID_ACCOUNT_DB_PASSWORD',
         'TIDEBID_AUCTION_DB_PASSWORD',
+        'TIDEBID_TRADE_DB_PASSWORD',
         'TIDEBID_REDIS_PASSWORD',
         'TIDEBID_ROCKETMQ_ENDPOINTS',
         'TIDEBID_NACOS_USERNAME',
@@ -164,6 +165,10 @@ function Assert-ManagedMessagingConfiguration {
             'close-auction: tidebid-auction-close-v1'
         )
         'infra\nacos\configs\tidebid-trade.yml' = @(
+            '/tidebid_trade?useUnicode=true',
+            'username: tidebid_trade_app',
+            'password: ${TIDEBID_TRADE_DB_PASSWORD}',
+            'default-schema: tidebid_trade',
             'trade-events: tidebid-trade-events',
             'auction-events: tidebid-auction-events',
             'account-events: tidebid-account-events',

@@ -1,4 +1,16 @@
+# Local database mode: MySQL runs in Docker while the Java service runs on the host.
 spring:
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+      config:
+        enabled: false
+        import-check:
+          enabled: false
+    service-registry:
+      auto-registration:
+        enabled: false
   datasource:
     url: "jdbc:mysql://${TIDEBID_MYSQL_HOST:127.0.0.1}:${TIDEBID_MYSQL_PORT:13306}/tidebid_trade?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true"
     username: tidebid_trade_app
@@ -20,25 +32,3 @@ spring:
   sql:
     init:
       mode: never
-
-logging:
-  level:
-    io.github.carpl2.tidebid.trade: INFO
-
-tidebid:
-  messaging:
-    rocketmq:
-      topics:
-        trade-events: tidebid-trade-events
-        auction-events: tidebid-auction-events
-        account-events: tidebid-account-events
-        scheduled-commands: tidebid-scheduled-commands
-      consumer-groups:
-        auction-results: tidebid-trade-auction-v1
-        account-results: tidebid-trade-account-v1
-        payment-timeout: tidebid-trade-timeout-v1
-
-info:
-  config:
-    service-source: nacos:tidebid-trade.yml
-    revision: reliable-trade-03-messaging
