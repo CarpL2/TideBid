@@ -195,6 +195,22 @@ public class JdbcAccountOutboxRepository {
                 """.formatted(TABLE), this::mapRow, eventId).stream().findFirst();
     }
 
+    public OutboxDiagnostics diagnostics(Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        return jdbc.queryForObject("""
+                SELECT SUM(status IN ('PENDING', 'PUBLISHING')) AS backlog,
+                       SUM(status = 'DEAD') AS dead_messages,
+                       MIN(CASE
+                           WHEN status IN ('PENDING', 'PUBLISHING') AND deliver_at <= ? THEN deliver_at
+                       END) AS oldest_due_at
+                FROM %s
+                """.formatted(TABLE), (row, rowNumber) -> {
+            Timestamp oldest = row.getTimestamp("oldest_due_at");
+            long age = oldest == null ? 0 : Math.max(0, Duration.between(oldest.toInstant(), now).toSeconds());
+            return new OutboxDiagnostics(row.getLong("backlog"), row.getLong("dead_messages"), age);
+        }, timestamp(now));
+    }
+
     private Optional<OutboxEntity> findByLeaseToken(String leaseToken) {
         return jdbc.query("""
                 SELECT *
@@ -272,6 +288,8 @@ public class JdbcAccountOutboxRepository {
             String payloadHash,
             Instant deliverAt
     ) { }
+
+    public record OutboxDiagnostics(long backlog, long deadMessages, long oldestDueAgeSeconds) { }
 
     public record OutboxEntity(
             long id,

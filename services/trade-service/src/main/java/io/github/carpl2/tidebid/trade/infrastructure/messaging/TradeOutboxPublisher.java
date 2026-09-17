@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.trade.infrastructure.messaging;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +14,7 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 @Profile({"local-db", "nacos"})
@@ -26,6 +28,9 @@ public class TradeOutboxPublisher {
     private final Counter published;
     private final Counter failed;
     private final Counter staleLease;
+    private final AtomicLong backlog = new AtomicLong();
+    private final AtomicLong deadMessages = new AtomicLong();
+    private final AtomicLong oldestDueAgeSeconds = new AtomicLong();
 
     @Autowired
     public TradeOutboxPublisher(JdbcTradeOutboxRepository repository,
@@ -42,6 +47,10 @@ public class TradeOutboxPublisher {
         this.published = meters.counter("tidebid.outbox.publish", "service", "trade", "outcome", "published");
         this.failed = meters.counter("tidebid.outbox.publish", "service", "trade", "outcome", "failed");
         this.staleLease = meters.counter("tidebid.outbox.publish", "service", "trade", "outcome", "stale_lease");
+        Gauge.builder("tidebid.outbox.backlog", backlog, AtomicLong::get).tag("service", "trade").register(meters);
+        Gauge.builder("tidebid.outbox.dead", deadMessages, AtomicLong::get).tag("service", "trade").register(meters);
+        Gauge.builder("tidebid.outbox.oldest.due.age", oldestDueAgeSeconds, AtomicLong::get)
+                .tag("service", "trade").baseUnit("seconds").register(meters);
     }
 
     @Scheduled(initialDelayString = "${tidebid.messaging.outbox.scan-interval:1s}",
@@ -66,7 +75,19 @@ public class TradeOutboxPublisher {
                 markFailed(outbox, exception);
             }
         }
+        observeBacklog();
         return acknowledgements;
+    }
+
+    private void observeBacklog() {
+        JdbcTradeOutboxRepository.OutboxDiagnostics diagnostics = repository.diagnostics(clock.instant());
+        backlog.set(diagnostics.backlog());
+        deadMessages.set(diagnostics.deadMessages());
+        oldestDueAgeSeconds.set(diagnostics.oldestDueAgeSeconds());
+        if (diagnostics.deadMessages() > 0 || diagnostics.oldestDueAgeSeconds() > 0) {
+            LOGGER.debug("Outbox backlog observed: service=trade, backlog={}, deadMessages={}, oldestDueAgeSeconds={}",
+                    diagnostics.backlog(), diagnostics.deadMessages(), diagnostics.oldestDueAgeSeconds());
+        }
     }
 
     private void markFailed(JdbcTradeOutboxRepository.OutboxEntity outbox, RuntimeException exception) {

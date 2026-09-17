@@ -40,16 +40,28 @@ public class JdbcAuctionOutboxRepository {
     }
 
     public long enqueue(NewOutboxEvent event, Instant now) {
+        return insert(event, now, false).id();
+    }
+
+    /** Inserts deterministic commands once; a concurrent reconciliation of the same command is harmless. */
+    public boolean enqueueIfAbsent(NewOutboxEvent event, Instant now) {
+        return insert(event, now, true).inserted();
+    }
+
+    private InsertResult insert(NewOutboxEvent event, Instant now, boolean ignoreDuplicateEventId) {
         Objects.requireNonNull(event, "event must not be null");
         Objects.requireNonNull(now, "now must not be null");
         long id = IdWorker.getId();
-        jdbc.update("""
+        int changed = jdbc.update("""
                 INSERT INTO %s (
                     id, event_id, aggregate_type, aggregate_id, event_type, schema_version,
                     topic, tag, message_key, payload, payload_hash, deliver_at, status,
                     attempt_count, next_attempt_at, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, 'PENDING', 0, ?, ?, ?)
-                """.formatted(TABLE),
+                %s
+                """.formatted(
+                        TABLE,
+                        ignoreDuplicateEventId ? "ON DUPLICATE KEY UPDATE event_id = VALUES(event_id)" : ""),
                 id,
                 event.eventId(),
                 event.aggregateType(),
@@ -65,7 +77,7 @@ public class JdbcAuctionOutboxRepository {
                 timestamp(now),
                 timestamp(now),
                 timestamp(now));
-        return id;
+        return new InsertResult(id, changed == 1);
     }
 
     public List<OutboxEntity> claimBatch(String leaseOwner, Instant now) {
@@ -195,6 +207,22 @@ public class JdbcAuctionOutboxRepository {
                 """.formatted(TABLE), this::mapRow, eventId).stream().findFirst();
     }
 
+    public OutboxDiagnostics diagnostics(Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        return jdbc.queryForObject("""
+                SELECT SUM(status IN ('PENDING', 'PUBLISHING')) AS backlog,
+                       SUM(status = 'DEAD') AS dead_messages,
+                       MIN(CASE
+                           WHEN status IN ('PENDING', 'PUBLISHING') AND deliver_at <= ? THEN deliver_at
+                       END) AS oldest_due_at
+                FROM %s
+                """.formatted(TABLE), (row, rowNumber) -> {
+            Timestamp oldest = row.getTimestamp("oldest_due_at");
+            long age = oldest == null ? 0 : Math.max(0, Duration.between(oldest.toInstant(), now).toSeconds());
+            return new OutboxDiagnostics(row.getLong("backlog"), row.getLong("dead_messages"), age);
+        }, timestamp(now));
+    }
+
     private Optional<OutboxEntity> findByLeaseToken(String leaseToken) {
         return jdbc.query("""
                 SELECT *
@@ -272,6 +300,10 @@ public class JdbcAuctionOutboxRepository {
             String payloadHash,
             Instant deliverAt
     ) { }
+
+    private record InsertResult(long id, boolean inserted) { }
+
+    public record OutboxDiagnostics(long backlog, long deadMessages, long oldestDueAgeSeconds) { }
 
     public record OutboxEntity(
             long id,

@@ -54,12 +54,18 @@ import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageProper
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionImageCleanupProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionStorageProperties;
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionTimingProperties;
+import io.github.carpl2.tidebid.auction.infrastructure.messaging.AuctionOutboxEventFactory;
+import io.github.carpl2.tidebid.auction.infrastructure.messaging.JdbcAuctionOutboxRepository;
+import io.github.carpl2.tidebid.auction.infrastructure.scheduling.AuctionCloseCommandReconciler;
 import io.github.carpl2.tidebid.auction.support.FakeObjectStorageAdapter;
+import io.github.carpl2.tidebid.contracts.BidAcceptedEvent;
+import io.github.carpl2.tidebid.contracts.CloseAuctionCommand;
 import io.github.carpl2.tidebid.core.BusinessException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -84,7 +90,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
                 "tidebid.auction.account-client.internal-token=test-internal-token-with-at-least-32-characters",
                 "tidebid.auction.storage.enabled=false",
                 "tidebid.auction.timing.opening-scan-enabled=false",
-                "tidebid.auction.registration-recovery.enabled=false"
+                "tidebid.auction.registration-recovery.enabled=false",
+                "tidebid.auction.close-scheduling.scan-interval=5m",
+                "tidebid.scheduling.enabled=false"
         }
 )
 @ActiveProfiles("local-db")
@@ -118,6 +126,9 @@ class AuctionPersistenceIntegrationTest {
     @Autowired private AuctionSessionOpeningService sessionOpeningService;
     @Autowired private IdGenerator idGenerator;
     @Autowired private Clock clock;
+    @Autowired private JdbcTemplate jdbc;
+    @Autowired private JdbcAuctionOutboxRepository outboxRepository;
+    @Autowired private AuctionCloseCommandReconciler closeCommandReconciler;
 
     @Test
     void uploadIntentServicePersistsAPendingImageInMySql() {
@@ -773,6 +784,20 @@ class AuctionPersistenceIntegrationTest {
             assertThat(approved.review().reviewerId()).isEqualTo(reviewerId);
             assertThat(approved.review().comment()).isEqualTo("Approved for auction");
             assertThat(itemRepository.findReview(itemId, 1)).contains(approved.review());
+            String closeEventId = AuctionOutboxEventFactory
+                    .deterministicCloseEventId(auctionId, session.endAt())
+                    .toString();
+            assertThat(outboxRepository.findByEventId(closeEventId)).get().satisfies(outbox -> {
+                assertThat(outbox.eventType()).isEqualTo(CloseAuctionCommand.EVENT_TYPE);
+                assertThat(outbox.aggregateId()).isEqualTo(Long.toString(auctionId));
+                assertThat(outbox.deliverAt()).isEqualTo(session.endAt());
+                assertThat(outbox.payload()).contains("\"expectedEndAt\"");
+            });
+
+            jdbc.update("DELETE FROM auction_outbox WHERE event_id = ?", closeEventId);
+            assertThat(closeCommandReconciler.reconcile()).isPositive();
+            assertThat(closeCommandReconciler.reconcile()).isZero();
+            assertThat(countAuctionOutbox(auctionId, CloseAuctionCommand.EVENT_TYPE)).isOne();
 
             assertThatThrownBy(() -> reviewService.review(
                     new AuctionReviewService.ReviewCommand(
@@ -782,6 +807,7 @@ class AuctionPersistenceIntegrationTest {
                     assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.ASSET_STATE_CONFLICT));
             assertThat(itemRepository.findReview(itemId, 1)).contains(approved.review());
         } finally {
+            deleteAuctionOutbox(auctionId);
             itemRepository.findReview(itemId, 1).ifPresent(review -> reviewMapper.deleteById(review.id()));
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
@@ -821,7 +847,9 @@ class AuctionPersistenceIntegrationTest {
             assertThat(sessionRepository.findSessionById(auctionId).orElseThrow().status())
                     .isEqualTo(AuctionSessionStatus.DRAFT);
             assertThat(itemRepository.findReview(itemId, 1)).isEmpty();
+            assertThat(countAuctionOutbox(auctionId, CloseAuctionCommand.EVENT_TYPE)).isZero();
         } finally {
+            deleteAuctionOutbox(auctionId);
             reviewMapper.deleteById(reviewId);
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
@@ -1293,6 +1321,7 @@ class AuctionPersistenceIntegrationTest {
             AuctionSession settled = sessionRepository.findSessionById(auctionId).orElseThrow();
             AuctionSessionRepository.BidPage history = sessionRepository.findBidsByAuction(auctionId, 0, 20);
             assertThat(history.total()).isEqualTo(rounds);
+            assertThat(countAuctionOutbox(auctionId, BidAcceptedEvent.EVENT_TYPE)).isEqualTo(rounds);
             assertThat(history.bids()).hasSize(rounds);
             assertThat(history.bids())
                     .extracting(BidRecord::sequenceNo)
@@ -1316,6 +1345,7 @@ class AuctionPersistenceIntegrationTest {
                 precedingAmount = bid.amount();
             }
         } finally {
+            deleteAuctionOutbox(auctionId);
             bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
                     .eq(BidRecordEntity::getAuctionId, auctionId));
             sessionMapper.deleteById(auctionId);
@@ -1348,6 +1378,12 @@ class AuctionPersistenceIntegrationTest {
             sessionRepository.insertSession(opened);
             registrationRepository.insert(registered);
 
+            assertThatThrownBy(() -> bidService.place(new AuctionBidService.PlaceBidCommand(
+                    bidderId, auctionId, "too-low-" + bidderId, new BigDecimal("99.99")
+            ))).isInstanceOfSatisfying(BusinessException.class, exception ->
+                    assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.BID_TOO_LOW));
+            assertThat(countAuctionOutbox(auctionId, BidAcceptedEvent.EVENT_TYPE)).isZero();
+
             BidRecord first = bidService.place(new AuctionBidService.PlaceBidCommand(
                     bidderId, auctionId, requestId, new BigDecimal("100")
             ));
@@ -1370,7 +1406,9 @@ class AuctionPersistenceIntegrationTest {
                     assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.IDEMPOTENCY_CONFLICT)
             );
             assertThat(sessionRepository.findSessionById(auctionId)).contains(stored);
+            assertThat(countAuctionOutbox(auctionId, BidAcceptedEvent.EVENT_TYPE)).isOne();
         } finally {
+            deleteAuctionOutbox(auctionId);
             bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
                     .eq(BidRecordEntity::getAuctionId, auctionId));
             registrationMapper.deleteById(registrationId);
@@ -1423,12 +1461,29 @@ class AuctionPersistenceIntegrationTest {
             assertThat(stored.bidCount()).isEqualTo(1L);
             assertThat(stored.version()).isEqualTo(opened.version() + 1);
         } finally {
+            deleteAuctionOutbox(auctionId);
             bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
                     .eq(BidRecordEntity::getAuctionId, auctionId));
             registrationMapper.deleteById(registrationId);
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
         }
+    }
+
+    private long countAuctionOutbox(long auctionId, String eventType) {
+        Long count = jdbc.queryForObject("""
+                SELECT COUNT(*)
+                FROM auction_outbox
+                WHERE aggregate_type = 'AUCTION'
+                  AND aggregate_id = ?
+                  AND event_type = ?
+                """, Long.class, Long.toString(auctionId), eventType);
+        return count == null ? 0 : count;
+    }
+
+    private void deleteAuctionOutbox(long auctionId) {
+        jdbc.update("DELETE FROM auction_outbox WHERE aggregate_type = 'AUCTION' AND aggregate_id = ?",
+                Long.toString(auctionId));
     }
 
     @Test

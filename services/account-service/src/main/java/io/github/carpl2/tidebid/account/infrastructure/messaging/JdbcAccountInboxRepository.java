@@ -1,6 +1,8 @@
 package io.github.carpl2.tidebid.account.infrastructure.messaging;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -29,9 +31,15 @@ public class JdbcAccountInboxRepository {
     private static final String TABLE = "account_inbox";
 
     private final JdbcTemplate jdbc;
+    private final Counter inserted;
+    private final Counter duplicate;
+    private final Counter conflict;
 
-    public JdbcAccountInboxRepository(DataSource dataSource) {
+    public JdbcAccountInboxRepository(DataSource dataSource, MeterRegistry meters) {
         this.jdbc = new JdbcTemplate(dataSource);
+        this.inserted = counter(meters, "inserted");
+        this.duplicate = counter(meters, "duplicate");
+        this.conflict = counter(meters, "conflict");
     }
 
     public InboxDecision recordProcessed(InboxEntity incoming) {
@@ -50,6 +58,7 @@ public class JdbcAccountInboxRepository {
                     incoming.schemaVersion(),
                     incoming.payloadHash(),
                     Timestamp.from(incoming.processedAt()));
+            inserted.increment();
             return InboxDecision.INSERTED;
         } catch (DuplicateKeyException duplicate) {
             List<InboxEntity> existing = jdbc.query("""
@@ -67,12 +76,20 @@ public class JdbcAccountInboxRepository {
                     incoming.consumerName(),
                     incoming.eventId());
             if (existing.size() == 1 && existing.getFirst().sameEnvelopeAs(incoming)) {
+                this.duplicate.increment();
+                LOGGER.info("Duplicate inbox event absorbed: service=account, consumerName={}, eventId={}",
+                        incoming.consumerName(), incoming.eventId());
                 return InboxDecision.DUPLICATE;
             }
+            conflict.increment();
             LOGGER.warn("Rejected conflicting inbox replay: consumerName={}, eventId={}",
                     incoming.consumerName(), incoming.eventId());
             throw new InboxReplayConflictException(incoming.consumerName(), incoming.eventId(), duplicate);
         }
+    }
+
+    private static Counter counter(MeterRegistry meters, String outcome) {
+        return meters.counter("tidebid.inbox.consume", "service", "account", "outcome", outcome);
     }
 
     public record InboxEntity(

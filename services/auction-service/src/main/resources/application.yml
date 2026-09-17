@@ -87,3 +87,7 @@ tidebid:
       scan-interval: 2s
       batch-size: 50
       maximum-attempts: 8
+    close-scheduling:
+      enabled: true
+      scan-interval: 10s
+      batch-size: 100

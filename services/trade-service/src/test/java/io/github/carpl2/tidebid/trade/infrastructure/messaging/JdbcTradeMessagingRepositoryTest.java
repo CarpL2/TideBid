@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.trade.infrastructure.messaging;
 
 import io.github.carpl2.tidebid.trade.infrastructure.config.TradeOutboxProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -56,7 +57,8 @@ class JdbcTradeMessagingRepositoryTest {
                         Duration.ofHours(48));
                 JdbcTradeOutboxRepository outbox =
                         new JdbcTradeOutboxRepository(dataSource, properties);
-                JdbcTradeInboxRepository inbox = new JdbcTradeInboxRepository(dataSource);
+                SimpleMeterRegistry meters = new SimpleMeterRegistry();
+                JdbcTradeInboxRepository inbox = new JdbcTradeInboxRepository(dataSource, meters);
                 Instant now = Instant.parse("2026-09-17T00:00:00Z");
 
                 String retryEventId = UUID.randomUUID().toString();
@@ -134,6 +136,8 @@ class JdbcTradeMessagingRepositoryTest {
                                 "b".repeat(64),
                                 now.plusSeconds(2))))
                         .isInstanceOf(JdbcTradeInboxRepository.InboxReplayConflictException.class);
+                assertThat(outbox.diagnostics(now.plus(Duration.ofHours(2))))
+                        .isEqualTo(new JdbcTradeOutboxRepository.OutboxDiagnostics(1, 1, 0));
             } finally {
                 statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
             }
@@ -176,4 +180,3 @@ class JdbcTradeMessagingRepositoryTest {
 
     private record DatabaseTarget(String host, String port, String rootPassword, String serverUrl) { }
 }
-

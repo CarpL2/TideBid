@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.auction.infrastructure.messaging;
 
 import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionOutboxProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -56,7 +57,8 @@ class JdbcAuctionMessagingRepositoryTest {
                         Duration.ofHours(48));
                 JdbcAuctionOutboxRepository outbox =
                         new JdbcAuctionOutboxRepository(dataSource, properties);
-                JdbcAuctionInboxRepository inbox = new JdbcAuctionInboxRepository(dataSource);
+                SimpleMeterRegistry meters = new SimpleMeterRegistry();
+                JdbcAuctionInboxRepository inbox = new JdbcAuctionInboxRepository(dataSource, meters);
                 Instant now = Instant.parse("2026-09-17T00:00:00Z");
 
                 String retryEventId = UUID.randomUUID().toString();
@@ -92,6 +94,16 @@ class JdbcAuctionMessagingRepositoryTest {
                             assertThat(message.attemptCount()).isEqualTo(2);
                             assertThat(message.lastErrorCode()).isEqualTo("BROKER_UNAVAILABLE");
                         });
+
+                // The publisher does not hand a delay to RocketMQ outside its safe horizon.
+                var entersSafeHorizon = outbox.claimBatch("publisher-b", now.plus(Duration.ofHours(1)));
+                assertThat(entersSafeHorizon).singleElement()
+                        .extracting(JdbcAuctionOutboxRepository.OutboxEntity::eventId)
+                        .isEqualTo(farFutureEventId);
+                assertThat(outbox.markPublished(
+                        farFutureEventId,
+                        entersSafeHorizon.getFirst().leaseToken(),
+                        now.plus(Duration.ofHours(1)))).isTrue();
 
                 String reclaimedEventId = UUID.randomUUID().toString();
                 outbox.enqueue(event(reclaimedEventId, now), now);
@@ -156,6 +168,14 @@ class JdbcAuctionMessagingRepositoryTest {
                                 "b".repeat(64),
                                 now.plusSeconds(2))))
                         .isInstanceOf(JdbcAuctionInboxRepository.InboxReplayConflictException.class);
+                assertThat(meters.counter("tidebid.inbox.consume", "service", "auction", "outcome", "inserted")
+                        .count()).isEqualTo(2);
+                assertThat(meters.counter("tidebid.inbox.consume", "service", "auction", "outcome", "duplicate")
+                        .count()).isEqualTo(2);
+                assertThat(meters.counter("tidebid.inbox.consume", "service", "auction", "outcome", "conflict")
+                        .count()).isOne();
+                assertThat(outbox.diagnostics(now.plus(Duration.ofHours(2))))
+                        .isEqualTo(new JdbcAuctionOutboxRepository.OutboxDiagnostics(0, 1, 0));
             } finally {
                 statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
             }

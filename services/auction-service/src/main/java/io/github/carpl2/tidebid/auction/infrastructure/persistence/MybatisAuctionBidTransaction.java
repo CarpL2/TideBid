@@ -4,6 +4,8 @@ import io.github.carpl2.tidebid.auction.application.port.AuctionBidTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionSessionMapper;
+import io.github.carpl2.tidebid.auction.infrastructure.messaging.AuctionOutboxEventFactory;
+import io.github.carpl2.tidebid.auction.infrastructure.messaging.JdbcAuctionOutboxRepository;
 import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
@@ -15,13 +17,19 @@ public class MybatisAuctionBidTransaction implements AuctionBidTransaction {
 
     private final AuctionSessionMapper sessionMapper;
     private final AuctionSessionRepository sessionRepository;
+    private final JdbcAuctionOutboxRepository outboxRepository;
+    private final AuctionOutboxEventFactory eventFactory;
 
     public MybatisAuctionBidTransaction(
             AuctionSessionMapper sessionMapper,
-            AuctionSessionRepository sessionRepository
+            AuctionSessionRepository sessionRepository,
+            JdbcAuctionOutboxRepository outboxRepository,
+            AuctionOutboxEventFactory eventFactory
     ) {
         this.sessionMapper = sessionMapper;
         this.sessionRepository = sessionRepository;
+        this.outboxRepository = outboxRepository;
+        this.eventFactory = eventFactory;
     }
 
     @Override
@@ -44,6 +52,7 @@ public class MybatisAuctionBidTransaction implements AuctionBidTransaction {
         }
         try {
             BidRecord storedBid = sessionRepository.insertBid(bid);
+            outboxRepository.enqueue(eventFactory.bidAccepted(storedBid), storedBid.createdAt());
             return new AcceptedBid(
                     sessionRepository.findSessionById(bid.auctionId())
                             .orElseThrow(() -> new IllegalStateException(

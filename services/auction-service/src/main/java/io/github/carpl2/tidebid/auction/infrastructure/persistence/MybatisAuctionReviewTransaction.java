@@ -7,6 +7,8 @@ import io.github.carpl2.tidebid.auction.domain.AuctionItem;
 import io.github.carpl2.tidebid.auction.domain.AuctionReview;
 import io.github.carpl2.tidebid.auction.domain.AuctionReviewDecision;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
+import io.github.carpl2.tidebid.auction.infrastructure.messaging.AuctionOutboxEventFactory;
+import io.github.carpl2.tidebid.auction.infrastructure.messaging.JdbcAuctionOutboxRepository;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,13 +19,19 @@ public class MybatisAuctionReviewTransaction implements AuctionReviewTransaction
 
     private final AuctionItemRepository itemRepository;
     private final AuctionSessionRepository sessionRepository;
+    private final JdbcAuctionOutboxRepository outboxRepository;
+    private final AuctionOutboxEventFactory eventFactory;
 
     public MybatisAuctionReviewTransaction(
             AuctionItemRepository itemRepository,
-            AuctionSessionRepository sessionRepository
+            AuctionSessionRepository sessionRepository,
+            JdbcAuctionOutboxRepository outboxRepository,
+            AuctionOutboxEventFactory eventFactory
     ) {
         this.itemRepository = itemRepository;
         this.sessionRepository = sessionRepository;
+        this.outboxRepository = outboxRepository;
+        this.eventFactory = eventFactory;
     }
 
     @Override
@@ -49,6 +57,9 @@ public class MybatisAuctionReviewTransaction implements AuctionReviewTransaction
             throw new ReviewConflictException("Auction session changed or its start time is no longer valid");
         }
         AuctionReview storedReview = itemRepository.insertReview(review);
+        outboxRepository.enqueueIfAbsent(
+                eventFactory.closeAuction(session, review.reviewedAt()),
+                review.reviewedAt());
         AuctionItem storedItem = itemRepository.findItemById(review.itemId())
                 .orElseThrow(() -> new IllegalStateException("Approved auction item could not be reloaded"));
         AuctionSession storedSession = sessionRepository.findSessionByItemId(review.itemId())

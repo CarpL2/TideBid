@@ -24,6 +24,8 @@ class AuctionOutboxPublisherTest {
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
         var message = message("lease-1");
         when(repository.claimBatch("auction-test", NOW)).thenReturn(List.of(message));
+        when(repository.diagnostics(NOW)).thenReturn(
+                new JdbcAuctionOutboxRepository.OutboxDiagnostics(0, 0, 0));
         when(transport.send(message)).thenReturn("broker-message-1");
         when(repository.markPublished(message.eventId(), message.leaseToken(), NOW)).thenReturn(true);
         var publisher = new AuctionOutboxPublisher(repository, transport, meters,
@@ -42,6 +44,8 @@ class AuctionOutboxPublisherTest {
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
         var message = message("lease-2");
         when(repository.claimBatch("auction-test", NOW)).thenReturn(List.of(message));
+        when(repository.diagnostics(NOW)).thenReturn(
+                new JdbcAuctionOutboxRepository.OutboxDiagnostics(1, 0, 1));
         when(transport.send(message)).thenThrow(new IllegalStateException("broker unavailable"));
         when(repository.markFailed(message.eventId(), message.leaseToken(), "ILLEGALSTATEEXCEPTION", NOW))
                 .thenReturn(JdbcAuctionOutboxRepository.FailureResult.RETRY_SCHEDULED);
