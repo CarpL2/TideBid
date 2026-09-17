@@ -109,6 +109,28 @@ class JdbcAuctionMessagingRepositoryTest {
                             assertThat(message.publishedAt()).isEqualTo(now.plusSeconds(31));
                         });
 
+                // Broker ACK happened, then this publisher crashed before markPublished.
+                String ackCrashEventId = UUID.randomUUID().toString();
+                outbox.enqueue(event(ackCrashEventId, now), now);
+                var acknowledgedButUnmarked = outbox.claimBatch("publisher-a", now).getFirst();
+                var redelivered = outbox.claimBatch("publisher-b", now.plusSeconds(31)).getFirst();
+                assertThat(redelivered.eventId()).isEqualTo(acknowledgedButUnmarked.eventId());
+                assertThat(redelivered.leaseToken()).isNotEqualTo(acknowledgedButUnmarked.leaseToken());
+
+                var replay = new JdbcAuctionInboxRepository.InboxEntity(
+                        "consumer-v1",
+                        ackCrashEventId,
+                        "auction.closed",
+                        1,
+                        "a".repeat(64),
+                        now.plusSeconds(31));
+                assertThat(inbox.recordProcessed(replay)).isEqualTo(INSERTED);
+                assertThat(inbox.recordProcessed(new JdbcAuctionInboxRepository.InboxEntity(
+                        replay.consumerName(), replay.eventId(), replay.eventType(), replay.schemaVersion(),
+                        replay.payloadHash(), now.plusSeconds(32)))).isEqualTo(DUPLICATE);
+                assertThat(outbox.markPublished(
+                        ackCrashEventId, redelivered.leaseToken(), now.plusSeconds(32))).isTrue();
+
                 String consumedEventId = UUID.randomUUID().toString();
                 var consumed = new JdbcAuctionInboxRepository.InboxEntity(
                         "consumer-v1",
@@ -176,4 +198,3 @@ class JdbcAuctionMessagingRepositoryTest {
 
     private record DatabaseTarget(String host, String port, String rootPassword, String serverUrl) { }
 }
-
