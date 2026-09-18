@@ -7,11 +7,14 @@ import io.github.carpl2.tidebid.contracts.DepositSettlementType;
 import io.github.carpl2.tidebid.contracts.EventEnvelope;
 import io.github.carpl2.tidebid.contracts.OrderPaidEvent;
 import io.github.carpl2.tidebid.contracts.OrderPaymentTimeoutCommand;
+import io.github.carpl2.tidebid.contracts.SellerCreditReason;
+import io.github.carpl2.tidebid.contracts.SellerCreditedEvent;
 import io.github.carpl2.tidebid.contracts.RocketMqTopology;
 import io.github.carpl2.tidebid.contracts.SellerCreditRequestedEvent;
 import io.github.carpl2.tidebid.contracts.WalletHoldSettledEvent;
 import io.github.carpl2.tidebid.contracts.WalletHoldSettlementStatus;
 import io.github.carpl2.tidebid.trade.application.TradeDepositSettlementService;
+import io.github.carpl2.tidebid.trade.application.TradeSellerSettlementService;
 import io.github.carpl2.tidebid.trade.application.TradeOrderCreationService;
 import io.github.carpl2.tidebid.trade.infrastructure.config.TradeOrderProperties;
 import io.github.carpl2.tidebid.trade.infrastructure.config.TradeOutboxProperties;
@@ -57,6 +60,45 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TradeDepositSettlementIntegrationTest {
 
     private static final Instant NOW = Instant.parse("2026-09-18T09:00:00Z");
+
+    @Test
+    void sellerCreditCompletionIsIdempotentAndRejectsMismatchedResults() throws Exception {
+        withDatabase(fixture -> {
+            long auctionId = 90020L;
+            long orderId = fixture.createOrder(auctionId, "1000.00", "1000.00");
+            fixture.handleAccount(fixture.settlementMessage(
+                    UUID.randomUUID(), orderId, auctionId,
+                    "1000.00", "1000.00", "1000.00", "0.00"));
+            Map<String, Object> pending = fixture.order(orderId);
+            String creditNo = (String) pending.get("seller_credit_no");
+            String orderNo = (String) pending.get("order_no");
+            UUID eventId = UUID.randomUUID();
+            SellerCreditedEvent credited = new SellerCreditedEvent(
+                    SellerCreditReason.SALE_PROCEEDS, creditNo, orderId, orderNo,
+                    auctionId, 1101L, money("1000.00"), NOW.minusSeconds(1));
+            byte[] body = fixture.message(
+                    eventId, credited, SellerCreditedEvent.EVENT_TYPE, "tidebid-account-service");
+
+            fixture.handleAccount(body, SellerCreditedEvent.EVENT_TYPE);
+            fixture.handleAccount(body, SellerCreditedEvent.EVENT_TYPE);
+
+            Map<String, Object> completed = fixture.order(orderId);
+            assertThat(completed.get("seller_settlement_status")).isEqualTo("COMPLETED");
+            assertThat(completed.get("seller_credited_at")).isNotNull();
+            assertThat(fixture.accountInboxCount()).isEqualTo(2);
+
+            UUID conflictId = UUID.randomUUID();
+            SellerCreditedEvent conflict = new SellerCreditedEvent(
+                    SellerCreditReason.SALE_PROCEEDS, creditNo, orderId, orderNo,
+                    auctionId, 1101L, money("999.00"), NOW.minusSeconds(1));
+            byte[] conflictingBody = fixture.message(
+                    conflictId, conflict, SellerCreditedEvent.EVENT_TYPE, "tidebid-account-service");
+            assertThatThrownBy(() -> fixture.handleAccount(
+                    conflictingBody, SellerCreditedEvent.EVENT_TYPE))
+                    .hasMessageContaining("does not match");
+            assertThat(fixture.inboxCount(conflictId)).isZero();
+        });
+    }
 
     @Test
     void movesToPendingPaymentOrDirectlyPaidAndAbsorbsReplays() throws Exception {
@@ -184,7 +226,9 @@ class TradeDepositSettlementIntegrationTest {
             var settlement = new TradeDepositSettlementService(
                     dataSource, new TradeOrderProperties(Duration.ofMinutes(30)), outbox, eventFactory, clock);
             auctionHandler = new TradeAuctionResultHandler(messaging, creation, inbox, mapper, clock);
-            accountHandler = new TradeAccountResultHandler(messaging, settlement, inbox, mapper, clock);
+            var sellerSettlement = new TradeSellerSettlementService(dataSource, clock);
+            accountHandler = new TradeAccountResultHandler(
+                    messaging, settlement, sellerSettlement, inbox, mapper, clock);
             transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
         }
 
@@ -229,8 +273,11 @@ class TradeDepositSettlementIntegrationTest {
         }
 
         private void handleAccount(byte[] body) {
-            handle(accountHandler, body, RocketMqTopology.ACCOUNT_EVENTS_TOPIC,
-                    WalletHoldSettledEvent.EVENT_TYPE);
+            handleAccount(body, WalletHoldSettledEvent.EVENT_TYPE);
+        }
+
+        private void handleAccount(byte[] body, String eventType) {
+            handle(accountHandler, body, RocketMqTopology.ACCOUNT_EVENTS_TOPIC, eventType);
         }
 
         private void handle(
@@ -264,6 +311,12 @@ class TradeDepositSettlementIntegrationTest {
             return jdbc.queryForObject(
                     "SELECT COUNT(*) FROM trade_inbox WHERE consumer_name = ?", Long.class,
                     messaging.consumerGroups().accountResults());
+        }
+
+        private long inboxCount(UUID eventId) {
+            return jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM trade_inbox WHERE consumer_name = ? AND event_id = ?
+                    """, Long.class, messaging.consumerGroups().accountResults(), eventId.toString());
         }
 
         private void seedOutbox(String eventId) {

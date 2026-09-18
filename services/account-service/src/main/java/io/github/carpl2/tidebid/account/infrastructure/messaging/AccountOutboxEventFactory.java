@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.contracts.EventEnvelope;
 import io.github.carpl2.tidebid.contracts.RocketMqTopology;
+import io.github.carpl2.tidebid.contracts.SellerCreditedEvent;
 import io.github.carpl2.tidebid.contracts.WalletHoldSettledEvent;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -45,8 +46,32 @@ public class AccountOutboxEventFactory {
         }
     }
 
+    public JdbcAccountOutboxRepository.NewOutboxEvent sellerCredited(
+            SellerCreditedEvent payload,
+            String traceId
+    ) {
+        UUID eventId = deterministicSellerCreditedEventId(payload.creditNo());
+        EventEnvelope<SellerCreditedEvent> envelope = new EventEnvelope<>(
+                eventId, SellerCreditedEvent.EVENT_TYPE, SellerCreditedEvent.SCHEMA_VERSION,
+                payload.creditedAt(), PRODUCER, traceId, payload);
+        try {
+            String json = objectMapper.writeValueAsString(envelope);
+            return new JdbcAccountOutboxRepository.NewOutboxEvent(
+                    eventId.toString(), "WALLET_CREDIT", payload.creditNo(),
+                    SellerCreditedEvent.EVENT_TYPE, SellerCreditedEvent.SCHEMA_VERSION,
+                    RocketMqTopology.ACCOUNT_EVENTS_TOPIC, json, sha256(json), payload.creditedAt());
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Seller credit result could not be encoded", exception);
+        }
+    }
+
     public static UUID deterministicSettlementResultEventId(String holdNo, String settlementType) {
         return UUID.nameUUIDFromBytes(("tidebid:wallet-hold-settled:v1:" + holdNo + ":" + settlementType)
+                .getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static UUID deterministicSellerCreditedEventId(String creditNo) {
+        return UUID.nameUUIDFromBytes(("tidebid:seller-credited:v1:" + creditNo)
                 .getBytes(StandardCharsets.UTF_8));
     }
 

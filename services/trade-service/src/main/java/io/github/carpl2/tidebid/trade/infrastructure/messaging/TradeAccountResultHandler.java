@@ -3,8 +3,10 @@ package io.github.carpl2.tidebid.trade.infrastructure.messaging;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.contracts.EventEnvelope;
 import io.github.carpl2.tidebid.contracts.EventMessageDecoder;
+import io.github.carpl2.tidebid.contracts.SellerCreditedEvent;
 import io.github.carpl2.tidebid.contracts.WalletHoldSettledEvent;
 import io.github.carpl2.tidebid.trade.application.TradeDepositSettlementService;
+import io.github.carpl2.tidebid.trade.application.TradeSellerSettlementService;
 import io.github.carpl2.tidebid.trade.infrastructure.config.TradeRocketMqProperties;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -22,6 +24,7 @@ public class TradeAccountResultHandler implements TradeRocketMqTransport.Inbound
 
     private final TradeRocketMqProperties properties;
     private final TradeDepositSettlementService settlements;
+    private final TradeSellerSettlementService sellerSettlements;
     private final JdbcTradeInboxRepository inbox;
     private final EventMessageDecoder decoder;
     private final Clock clock;
@@ -29,12 +32,14 @@ public class TradeAccountResultHandler implements TradeRocketMqTransport.Inbound
     public TradeAccountResultHandler(
             TradeRocketMqProperties properties,
             TradeDepositSettlementService settlements,
+            TradeSellerSettlementService sellerSettlements,
             JdbcTradeInboxRepository inbox,
             ObjectMapper objectMapper,
             Clock clock
     ) {
         this.properties = properties;
         this.settlements = settlements;
+        this.sellerSettlements = sellerSettlements;
         this.inbox = inbox;
         this.decoder = new EventMessageDecoder(objectMapper);
         this.clock = clock;
@@ -44,15 +49,17 @@ public class TradeAccountResultHandler implements TradeRocketMqTransport.Inbound
     public TradeRocketMqTransport.ConsumerBinding binding() {
         return new TradeRocketMqTransport.ConsumerBinding(
                 properties.consumerGroups().accountResults(),
-                Map.of(properties.topics().accountEvents(), WalletHoldSettledEvent.EVENT_TYPE));
+                Map.of(properties.topics().accountEvents(),
+                        WalletHoldSettledEvent.EVENT_TYPE + "||" + SellerCreditedEvent.EVENT_TYPE));
     }
 
     @Override
     @Transactional
     public void handle(TradeRocketMqTransport.InboundMessage message) {
         EventEnvelope<?> envelope = decoder.decode(message.body());
-        if (!(envelope.payload() instanceof WalletHoldSettledEvent result)) {
-            throw new IllegalArgumentException("message is not a wallet-hold settlement result");
+        if (!(envelope.payload() instanceof WalletHoldSettledEvent)
+                && !(envelope.payload() instanceof SellerCreditedEvent)) {
+            throw new IllegalArgumentException("message is not a supported account result");
         }
         validateTransportMetadata(message, envelope);
         JdbcTradeInboxRepository.InboxDecision decision = inbox.recordProcessed(
@@ -62,14 +69,20 @@ public class TradeAccountResultHandler implements TradeRocketMqTransport.Inbound
         if (decision == JdbcTradeInboxRepository.InboxDecision.DUPLICATE) {
             return;
         }
-        settlements.apply(result, envelope.traceId());
+        if (envelope.payload() instanceof WalletHoldSettledEvent result) {
+            settlements.apply(result, envelope.traceId());
+        } else {
+            sellerSettlements.apply((SellerCreditedEvent) envelope.payload());
+        }
     }
 
     private void validateTransportMetadata(
             TradeRocketMqTransport.InboundMessage message, EventEnvelope<?> envelope
     ) {
         if (!properties.topics().accountEvents().equals(message.topic())
-                || !WalletHoldSettledEvent.EVENT_TYPE.equals(message.tag())
+                || (!WalletHoldSettledEvent.EVENT_TYPE.equals(message.tag())
+                    && !SellerCreditedEvent.EVENT_TYPE.equals(message.tag()))
+                || !envelope.eventType().equals(message.tag())
                 || !message.keys().contains(envelope.eventId().toString())
                 || !envelope.eventId().toString().equals(message.properties().get("eventId"))
                 || !envelope.eventType().equals(message.properties().get("eventType"))
