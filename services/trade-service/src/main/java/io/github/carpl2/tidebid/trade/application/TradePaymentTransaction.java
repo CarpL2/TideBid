@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.trade.application;
 
 import io.github.carpl2.tidebid.contracts.OrderPaidEvent;
+import io.github.carpl2.tidebid.contracts.OrderPaymentTimedOutEvent;
 import io.github.carpl2.tidebid.contracts.SellerCreditReason;
 import io.github.carpl2.tidebid.contracts.SellerCreditRequestedEvent;
 import io.github.carpl2.tidebid.core.BusinessException;
@@ -193,7 +194,7 @@ public class TradePaymentTransaction {
         }
         AccountDebitPort.Rejected rejected = (AccountDebitPort.Rejected) result;
         requireMatching(attempt, rejected.paymentNo(), rejected.buyerId(), rejected.orderId(), rejected.amount());
-        return reject(attempt, order, rejected.failureCode(), now, recovered);
+        return reject(attempt, order, rejected.failureCode(), traceId, now, recovered);
     }
 
     private PaymentAttemptSnapshot succeed(
@@ -233,16 +234,10 @@ public class TradePaymentTransaction {
     }
 
     private PaymentAttemptSnapshot reject(
-            PaymentAttemptSnapshot attempt, OrderRow order, String failureCode, Instant now, boolean recovered
+            PaymentAttemptSnapshot attempt, OrderRow order, String failureCode, String traceId,
+            Instant now, boolean recovered
     ) {
         String safeCode = safeFailureCode(failureCode);
-        int orderChanged = jdbc.update("""
-                UPDATE trade_order SET status = 'PENDING_PAYMENT', version = version + 1, updated_at = ?
-                WHERE id = ? AND status = 'PAYMENT_PROCESSING' AND version = ?
-                """, Timestamp.from(now), order.id(), order.version());
-        if (orderChanged != 1) {
-            throw new BusinessException(TradeErrorCode.PAYMENT_CONCURRENT_CONFLICT);
-        }
         jdbc.update("""
                 UPDATE payment_attempt
                 SET status = 'REJECTED', failure_code = ?, next_recovery_at = NULL,
@@ -252,7 +247,44 @@ public class TradePaymentTransaction {
                 WHERE id = ? AND status IN ('PROCESSING', 'UNKNOWN')
                 """, safeCode, recovered ? 1 : 0,
                 Timestamp.from(now), Timestamp.from(now), attempt.id());
+        if (order.paymentDeadline() != null && !now.isBefore(order.paymentDeadline())) {
+            timeoutAfterRejected(order, traceId, now);
+        } else {
+            int orderChanged = jdbc.update("""
+                    UPDATE trade_order SET status = 'PENDING_PAYMENT', version = version + 1, updated_at = ?
+                    WHERE id = ? AND status = 'PAYMENT_PROCESSING' AND version = ?
+                    """, Timestamp.from(now), order.id(), order.version());
+            if (orderChanged != 1) {
+                throw new BusinessException(TradeErrorCode.PAYMENT_CONCURRENT_CONFLICT);
+            }
+        }
         return findById(attempt.id(), false);
+    }
+
+    private void timeoutAfterRejected(OrderRow order, String traceId, Instant now) {
+        String creditNo = "SC:" + order.id() + ":DEFAULT";
+        int orderChanged = jdbc.update("""
+                UPDATE trade_order
+                SET status = 'PAYMENT_TIMEOUT', timed_out_at = ?,
+                    seller_settlement_status = 'PENDING', seller_credit_no = ?,
+                    seller_receivable_amount = captured_deposit_amount,
+                    version = version + 1, updated_at = ?
+                WHERE id = ? AND status = 'PAYMENT_PROCESSING' AND version = ?
+                """, Timestamp.from(now), creditNo, Timestamp.from(now), order.id(), order.version());
+        if (orderChanged != 1) {
+            throw new BusinessException(TradeErrorCode.PAYMENT_CONCURRENT_CONFLICT);
+        }
+
+        OrderPaymentTimedOutEvent timedOut = new OrderPaymentTimedOutEvent(
+                order.id(), order.orderNo(), order.auctionId(), order.sellerId(), order.buyerId(),
+                order.finalPrice(), order.capturedDepositAmount(), order.payableAmount(),
+                order.paymentDeadline(), now);
+        SellerCreditRequestedEvent credit = new SellerCreditRequestedEvent(
+                SellerCreditReason.DEFAULT_COMPENSATION, creditNo, order.id(), order.orderNo(),
+                order.auctionId(), order.sellerId(), order.finalPrice(), order.capturedDepositAmount(),
+                order.capturedDepositAmount(), now, now);
+        outbox.enqueue(events.orderPaymentTimedOut(timedOut, traceId, now), now);
+        outbox.enqueue(events.sellerCreditRequested(credit, traceId, now), now);
     }
 
     private PaymentAttemptSnapshot markUnknown(PaymentAttemptSnapshot attempt) {

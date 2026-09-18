@@ -2,18 +2,23 @@ package io.github.carpl2.tidebid.trade;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.contracts.OrderPaidEvent;
+import io.github.carpl2.tidebid.contracts.OrderPaymentTimedOutEvent;
 import io.github.carpl2.tidebid.contracts.SellerCreditRequestedEvent;
 import io.github.carpl2.tidebid.core.BusinessException;
 import io.github.carpl2.tidebid.trade.application.PaymentAttemptSnapshot;
 import io.github.carpl2.tidebid.trade.application.TradeOrderQueryService;
 import io.github.carpl2.tidebid.trade.application.TradePaymentTransaction;
+import io.github.carpl2.tidebid.trade.application.TradePaymentTimeoutTransaction;
 import io.github.carpl2.tidebid.trade.application.port.AccountDebitPort;
 import io.github.carpl2.tidebid.trade.domain.TradeErrorCode;
 import io.github.carpl2.tidebid.trade.infrastructure.config.TradeOutboxProperties;
 import io.github.carpl2.tidebid.trade.infrastructure.config.TradePaymentProperties;
+import io.github.carpl2.tidebid.trade.infrastructure.config.TradePaymentTimeoutProperties;
+import io.github.carpl2.tidebid.trade.infrastructure.messaging.JdbcTradeInboxRepository;
 import io.github.carpl2.tidebid.trade.infrastructure.messaging.JdbcTradeOutboxRepository;
 import io.github.carpl2.tidebid.trade.infrastructure.messaging.TradeOutboxEventFactory;
 import org.flywaydb.core.Flyway;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -219,6 +224,112 @@ class TradePaymentIntegrationTest {
         });
     }
 
+    @Test
+    void databaseScanTimesOutPendingOrderExactlyOnceAndCreditsCapturedDeposit() throws Exception {
+        withDatabase(fixture -> {
+            long orderId = fixture.seedOrder(9701L);
+            fixture.advance(Duration.ofMinutes(30));
+
+            assertThat(fixture.timeout(orderId))
+                    .isEqualTo(TradePaymentTimeoutTransaction.TimeoutResult.TIMED_OUT);
+            assertThat(fixture.orderStatus(orderId)).isEqualTo("PAYMENT_TIMEOUT");
+            assertThat(fixture.orderMoney(orderId, "seller_receivable_amount"))
+                    .isEqualByComparingTo("50.00");
+            assertThat(fixture.outboxCount(orderId, OrderPaymentTimedOutEvent.EVENT_TYPE)).isOne();
+            assertThat(fixture.outboxCount(orderId, SellerCreditRequestedEvent.EVENT_TYPE)).isOne();
+
+            assertThat(fixture.timeout(orderId))
+                    .isEqualTo(TradePaymentTimeoutTransaction.TimeoutResult.ALREADY_TIMED_OUT);
+            assertThat(fixture.outboxCount(orderId, OrderPaymentTimedOutEvent.EVENT_TYPE)).isOne();
+            assertThat(fixture.outboxCount(orderId, SellerCreditRequestedEvent.EVENT_TYPE)).isOne();
+        });
+    }
+
+    @Test
+    void processingOrderIsNeverTimedOutBeforeStableDebitResultIsResolved() throws Exception {
+        withDatabase(fixture -> {
+            long successfulOrder = fixture.seedOrder(9702L);
+            var successful = fixture.begin(BUYER, successfulOrder, "pay_req_0012");
+            fixture.advance(Duration.ofMinutes(30));
+            assertThat(fixture.timeout(successfulOrder))
+                    .isEqualTo(TradePaymentTimeoutTransaction.TimeoutResult.PROCESSING);
+            fixture.apply(successful.attempt().id(), new AccountDebitPort.Succeeded(
+                    successful.attempt().paymentNo(), BUYER, successfulOrder,
+                    money("100.00"), fixture.clock.instant()));
+            assertThat(fixture.orderStatus(successfulOrder)).isEqualTo("PAID");
+            assertThat(fixture.timeout(successfulOrder))
+                    .isEqualTo(TradePaymentTimeoutTransaction.TimeoutResult.ALREADY_PAID);
+            assertThat(fixture.outboxCount(successfulOrder, OrderPaymentTimedOutEvent.EVENT_TYPE)).isZero();
+
+            long unknownOrder = fixture.seedOrder(9703L);
+            var unknown = fixture.begin(BUYER, unknownOrder, "pay_req_0013");
+            fixture.apply(unknown.attempt().id(), new AccountDebitPort.Unknown());
+            fixture.advance(Duration.ofMinutes(30));
+            assertThat(fixture.timeout(unknownOrder))
+                    .isEqualTo(TradePaymentTimeoutTransaction.TimeoutResult.PROCESSING);
+            assertThat(fixture.orderStatus(unknownOrder)).isEqualTo("PAYMENT_PROCESSING");
+        });
+    }
+
+    @Test
+    void rejectionAfterDeadlineTimesOutAndConcurrentDefiniteResultsChooseOneTerminalState() throws Exception {
+        withDatabase(fixture -> {
+            long rejectedOrder = fixture.seedOrder(9704L);
+            var rejected = fixture.begin(BUYER, rejectedOrder, "pay_req_0014");
+            fixture.advance(Duration.ofMinutes(30));
+            fixture.apply(rejected.attempt().id(), new AccountDebitPort.Rejected(
+                    rejected.attempt().paymentNo(), BUYER, rejectedOrder,
+                    money("100.00"), "INSUFFICIENT_BALANCE", fixture.clock.instant()));
+            assertThat(fixture.orderStatus(rejectedOrder)).isEqualTo("PAYMENT_TIMEOUT");
+            assertThat(fixture.outboxCount(rejectedOrder, OrderPaymentTimedOutEvent.EVENT_TYPE)).isOne();
+
+            long racingOrder = fixture.seedOrder(9705L);
+            var racing = fixture.begin(BUYER, racingOrder, "pay_req_0015");
+            fixture.advance(Duration.ofMinutes(30));
+            CountDownLatch start = new CountDownLatch(1);
+            try (var executor = Executors.newFixedThreadPool(2)) {
+                var success = executor.submit(() -> fixture.tryApply(start, racing.attempt().id(),
+                        new AccountDebitPort.Succeeded(racing.attempt().paymentNo(), BUYER, racingOrder,
+                                money("100.00"), fixture.clock.instant())));
+                var rejection = executor.submit(() -> fixture.tryApply(start, racing.attempt().id(),
+                        new AccountDebitPort.Rejected(racing.attempt().paymentNo(), BUYER, racingOrder,
+                                money("100.00"), "INSUFFICIENT_BALANCE", fixture.clock.instant())));
+                start.countDown();
+                success.get(10, TimeUnit.SECONDS);
+                rejection.get(10, TimeUnit.SECONDS);
+            }
+            assertThat(fixture.orderStatus(racingOrder)).isIn("PAID", "PAYMENT_TIMEOUT");
+            long terminalEvents = fixture.outboxCount(racingOrder, OrderPaidEvent.EVENT_TYPE)
+                    + fixture.outboxCount(racingOrder, OrderPaymentTimedOutEvent.EVENT_TYPE);
+            assertThat(terminalEvents).isOne();
+            assertThat(fixture.outboxCount(racingOrder, SellerCreditRequestedEvent.EVENT_TYPE)).isOne();
+        });
+    }
+
+    @Test
+    void timeoutMessageCommitsInboxWithTerminalChangeAndEarlyDeliveryRollsBack() throws Exception {
+        withDatabase(fixture -> {
+            long orderId = fixture.seedOrder(9706L);
+            Instant deadline = fixture.paymentDeadline(orderId);
+            UUID eventId = UUID.randomUUID();
+            var command = new TradePaymentTimeoutTransaction.MessageCommand(
+                    "tidebid-trade-timeout-v1", eventId, "order.payment-timeout", 1,
+                    "a".repeat(64), orderId, deadline, "trace-timeout-message-123");
+
+            assertThatThrownBy(() -> fixture.timeoutMessage(command))
+                    .isInstanceOf(TradePaymentTimeoutTransaction.TimeoutDeferredException.class);
+            assertThat(fixture.inboxCount(eventId)).isZero();
+
+            fixture.advance(Duration.ofMinutes(30));
+            assertThat(fixture.timeoutMessage(command))
+                    .isEqualTo(TradePaymentTimeoutTransaction.TimeoutResult.TIMED_OUT);
+            assertThat(fixture.timeoutMessage(command))
+                    .isEqualTo(TradePaymentTimeoutTransaction.TimeoutResult.DUPLICATE);
+            assertThat(fixture.inboxCount(eventId)).isOne();
+            assertThat(fixture.outboxCount(orderId, OrderPaymentTimedOutEvent.EVENT_TYPE)).isOne();
+        });
+    }
+
     private static void withDatabase(ThrowingConsumer<Fixture> test) throws Exception {
         String host = environmentOrDefault("TIDEBID_MYSQL_HOST", "127.0.0.1");
         String port = environmentOrDefault("TIDEBID_MYSQL_PORT", "13306");
@@ -244,6 +355,7 @@ class TradePaymentIntegrationTest {
     private static final class Fixture {
         private final JdbcTemplate jdbc;
         private final TradePaymentTransaction payments;
+        private final TradePaymentTimeoutTransaction timeouts;
         private final TransactionTemplate transactions;
         private final TradeOrderQueryService queries;
         private final MutableClock clock = new MutableClock(NOW);
@@ -255,17 +367,22 @@ class TradePaymentIntegrationTest {
             var outbox = new JdbcTradeOutboxRepository(dataSource, new TradeOutboxProperties(
                     Duration.ofSeconds(1), 10, Duration.ofSeconds(30), Duration.ofSeconds(1),
                     Duration.ofSeconds(8), 5, Duration.ofHours(48)));
+            var eventFactory = new TradeOutboxEventFactory(new ObjectMapper().findAndRegisterModules());
             payments = new TradePaymentTransaction(dataSource, ids::incrementAndGet, outbox,
-                    new TradeOutboxEventFactory(new ObjectMapper().findAndRegisterModules()),
+                    eventFactory,
                     new TradePaymentProperties(true, Duration.ofSeconds(5), Duration.ofSeconds(2),
                             Duration.ofSeconds(8), Duration.ofSeconds(3), Duration.ofSeconds(1), 20, 3),
                     clock);
+            timeouts = new TradePaymentTimeoutTransaction(dataSource,
+                    new JdbcTradeInboxRepository(dataSource, new SimpleMeterRegistry()), outbox,
+                    eventFactory, new TradePaymentTimeoutProperties(true, Duration.ofSeconds(1), 20), clock);
             transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
             queries = new TradeOrderQueryService(dataSource, clock);
         }
 
         private long seedOrder(long auctionId) {
             long id = ids.incrementAndGet();
+            Instant now = clock.instant();
             jdbc.update("""
                     INSERT INTO trade_order (
                         id, order_no, auction_id, item_id, winning_bid_id, seller_id, buyer_id,
@@ -276,8 +393,8 @@ class TradePaymentIntegrationTest {
                               'PENDING_PAYMENT', ?, 'NOT_REQUIRED', 1, ?, ?, ?)
                     """, id, "TB-" + auctionId, auctionId, auctionId + 1000, auctionId + 2000,
                     SELLER, BUYER, "拍品-" + auctionId, "hold-" + auctionId,
-                    Timestamp.from(NOW.plusSeconds(1800)), Timestamp.from(NOW.minusSeconds(120)),
-                    Timestamp.from(NOW.minusSeconds(60)), Timestamp.from(NOW.minusSeconds(60)));
+                    Timestamp.from(now.plusSeconds(1800)), Timestamp.from(now.minusSeconds(120)),
+                    Timestamp.from(now.minusSeconds(60)), Timestamp.from(now.minusSeconds(60)));
             return id;
         }
 
@@ -313,8 +430,52 @@ class TradePaymentIntegrationTest {
             }
         }
 
+        private Object tryApply(
+                CountDownLatch start, long attemptId, AccountDebitPort.DebitResult result
+        ) throws InterruptedException {
+            start.await();
+            try {
+                return apply(attemptId, result);
+            } catch (RuntimeException exception) {
+                return exception;
+            }
+        }
+
+        private TradePaymentTimeoutTransaction.TimeoutResult timeout(long orderId) {
+            Instant deadline = paymentDeadline(orderId);
+            return transactions.execute(status -> timeouts.fromDatabaseScan(
+                    orderId, deadline, "trace-timeout-123"));
+        }
+
+        private TradePaymentTimeoutTransaction.TimeoutResult timeoutMessage(
+                TradePaymentTimeoutTransaction.MessageCommand command
+        ) {
+            return transactions.execute(status -> timeouts.fromMessage(command));
+        }
+
+        private Instant paymentDeadline(long orderId) {
+            return jdbc.queryForObject(
+                    "SELECT payment_deadline FROM trade_order WHERE id = ?",
+                    (row, number) -> row.getTimestamp(1).toInstant(), orderId);
+        }
+
+        private long inboxCount(UUID eventId) {
+            return jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM trade_inbox WHERE event_id = ?",
+                    Long.class, eventId.toString());
+        }
+
         private String orderStatus(long orderId) {
             return jdbc.queryForObject("SELECT status FROM trade_order WHERE id = ?", String.class, orderId);
+        }
+
+        private BigDecimal orderMoney(long orderId, String column) {
+            if (!"seller_receivable_amount".equals(column)) {
+                throw new IllegalArgumentException("unsupported money column");
+            }
+            return jdbc.queryForObject(
+                    "SELECT seller_receivable_amount FROM trade_order WHERE id = ?",
+                    BigDecimal.class, orderId);
         }
 
         private long attemptCount() {

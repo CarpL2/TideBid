@@ -8,6 +8,7 @@ import io.github.carpl2.tidebid.contracts.DepositSettlementType;
 import io.github.carpl2.tidebid.contracts.EventEnvelope;
 import io.github.carpl2.tidebid.contracts.OrderPaidEvent;
 import io.github.carpl2.tidebid.contracts.OrderPaymentTimeoutCommand;
+import io.github.carpl2.tidebid.contracts.OrderPaymentTimedOutEvent;
 import io.github.carpl2.tidebid.contracts.RocketMqTopology;
 import io.github.carpl2.tidebid.contracts.SellerCreditRequestedEvent;
 import io.github.carpl2.tidebid.trade.domain.TradeOrder;
@@ -94,6 +95,16 @@ public class TradeOutboxEventFactory {
                 deterministicEventId("order-paid", payload.orderId()),
                 payload.orderId(), payload, OrderPaidEvent.EVENT_TYPE, OrderPaidEvent.SCHEMA_VERSION,
                 RocketMqTopology.TRADE_EVENTS_TOPIC, traceId, occurredAt, occurredAt);
+    }
+
+    public JdbcTradeOutboxRepository.NewOutboxEvent orderPaymentTimedOut(
+            OrderPaymentTimedOutEvent payload, String traceId, Instant occurredAt
+    ) {
+        return event(
+                deterministicEventId("order-payment-timed-out", payload.orderId()),
+                payload.orderId(), payload, OrderPaymentTimedOutEvent.EVENT_TYPE,
+                OrderPaymentTimedOutEvent.SCHEMA_VERSION, RocketMqTopology.TRADE_EVENTS_TOPIC,
+                traceId, occurredAt, occurredAt);
     }
 
     public JdbcTradeOutboxRepository.NewOutboxEvent sellerCreditRequested(

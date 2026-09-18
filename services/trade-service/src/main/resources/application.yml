@@ -55,3 +55,7 @@ tidebid:
       scan-interval: 5s
       batch-size: 20
       maximum-attempts: 12
+    payment-timeout:
+      enabled: true
+      scan-interval: 5s
+      batch-size: 50
