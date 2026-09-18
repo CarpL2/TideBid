@@ -23,6 +23,16 @@ public enum AccountErrorCode implements ErrorCode {
             "ACCOUNT_WALLET_HOLD_NOT_FOUND",
             "Wallet hold does not exist",
             404
+    ),
+    WALLET_DEBIT_IDEMPOTENCY_CONFLICT(
+            "ACCOUNT_WALLET_DEBIT_IDEMPOTENCY_CONFLICT",
+            "Payment number was already used with a different payload",
+            409
+    ),
+    WALLET_DEBIT_NOT_FOUND(
+            "ACCOUNT_WALLET_DEBIT_NOT_FOUND",
+            "Wallet debit does not exist",
+            404
     );
 
     private final String code;
