@@ -38,6 +38,17 @@ public class TradeOrderController {
                 TradeOrderResponse.Page.from(queryService.findMine(identity.userId(), page, size)), traceId(request));
     }
 
+    @GetMapping("/sales")
+    public ApiResponse<TradeOrderResponse.Page> findSales(
+            @AuthenticationPrincipal AuthenticatedUser identity,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size,
+            HttpServletRequest request
+    ) {
+        return ApiResponse.success(
+                TradeOrderResponse.Page.from(queryService.findSales(identity.userId(), page, size)), traceId(request));
+    }
+
     @GetMapping("/{orderId}")
     public ApiResponse<TradeOrderResponse.Detail> findOne(
             @AuthenticationPrincipal AuthenticatedUser identity,

@@ -145,8 +145,14 @@ class TradePaymentIntegrationTest {
             fixture.seedOrder(9402L);
             var page = fixture.queries.findMine(BUYER, 1, 1);
             assertThat(page.total()).isEqualTo(2);
+            assertThat(page.totalPages()).isEqualTo(2);
             assertThat(page.items()).hasSize(1);
             assertThat(page.items().getFirst().paymentEligible()).isTrue();
+            var sales = fixture.queries.findSales(SELLER, 1, 10);
+            assertThat(sales.total()).isEqualTo(2);
+            assertThat(sales.totalPages()).isOne();
+            assertThat(sales.items()).allMatch(order -> order.sellerId() == SELLER);
+            assertThat(fixture.queries.findSales(BUYER, 1, 10).items()).isEmpty();
             assertThat(fixture.queries.findAccessible(SELLER, first).id()).isEqualTo(first);
             assertThatThrownBy(() -> fixture.queries.findAccessible(9999L, first))
                     .isInstanceOfSatisfying(BusinessException.class,

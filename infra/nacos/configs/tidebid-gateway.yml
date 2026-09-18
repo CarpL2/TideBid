@@ -76,4 +76,4 @@ logging:
 info:
   config:
     service-source: nacos:tidebid-gateway.yml
-    revision: auction-core-02-gateway-routes
+    revision: reliable-trade-03-order-routes

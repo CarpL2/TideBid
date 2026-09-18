@@ -32,7 +32,7 @@ public class TradeOrderQueryService {
         long total = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM trade_order WHERE buyer_id = ?", Long.class, buyerId);
         if (total == 0) {
-            return new OrderPage(page, size, 0, List.of());
+            return new OrderPage(page, size, 0, 0, List.of());
         }
         Instant now = clock.instant();
         List<TradeOrderSnapshot> items = jdbc.query("""
@@ -45,8 +45,31 @@ public class TradeOrderQueryService {
                 WHERE buyer_id = ?
                 ORDER BY created_at DESC, id DESC
                 LIMIT ? OFFSET ?
-                """, (row, number) -> map(row, now), buyerId, size, (page - 1) * size);
-        return new OrderPage(page, size, total, items);
+                """, (row, number) -> map(row, now), buyerId, size, offset(page, size));
+        return new OrderPage(page, size, total, totalPages(total, size), items);
+    }
+
+    public OrderPage findSales(long sellerId, int page, int size) {
+        requireUserId(sellerId);
+        validatePage(page, size);
+        long total = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM trade_order WHERE seller_id = ?", Long.class, sellerId);
+        if (total == 0) {
+            return new OrderPage(page, size, 0, 0, List.of());
+        }
+        Instant now = clock.instant();
+        List<TradeOrderSnapshot> items = jdbc.query("""
+                SELECT id, order_no, auction_id, item_id, seller_id, buyer_id, item_title,
+                       final_price, captured_deposit_amount, payable_amount, status,
+                       payment_deadline, paid_at, timed_out_at, seller_settlement_status,
+                       seller_receivable_amount, seller_credited_at, auction_closed_at,
+                       created_at, updated_at
+                FROM trade_order
+                WHERE seller_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """, (row, number) -> map(row, now), sellerId, size, offset(page, size));
+        return new OrderPage(page, size, total, totalPages(total, size), items);
     }
 
     public TradeOrderSnapshot findAccessible(long userId, long orderId) {
@@ -99,13 +122,27 @@ public class TradeOrderQueryService {
         }
     }
 
+    private static long offset(int page, int size) {
+        return Math.multiplyExact((long) page - 1L, size);
+    }
+
+    private static long totalPages(long total, int size) {
+        return total == 0 ? 0 : ((total - 1) / size) + 1;
+    }
+
     private static void requireUserId(long userId) {
         if (userId <= 0) {
             throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
         }
     }
 
-    public record OrderPage(int page, int size, long total, List<TradeOrderSnapshot> items) {
+    public record OrderPage(
+            int page,
+            int size,
+            long total,
+            long totalPages,
+            List<TradeOrderSnapshot> items
+    ) {
         public OrderPage {
             items = List.copyOf(items);
         }

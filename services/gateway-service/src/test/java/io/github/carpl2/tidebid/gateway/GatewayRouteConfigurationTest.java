@@ -37,6 +37,11 @@ class GatewayRouteConfigurationTest {
         assertThat(property(sources, ROUTES + "[2].uri")).isEqualTo("lb://tidebid-auction");
         assertThat(property(sources, ROUTES + "[2].predicates[0]"))
                 .isEqualTo("Path=/api/assets/**,/api/auctions/**,/api/bids/**,/api/registrations/**");
+
+        assertThat(property(sources, ROUTES + "[3].id")).isEqualTo("trade-service");
+        assertThat(property(sources, ROUTES + "[3].uri")).isEqualTo("lb://tidebid-trade");
+        assertThat(property(sources, ROUTES + "[3].predicates[0]"))
+                .isEqualTo("Path=/api/orders/**,/api/payments/**");
     }
 
     private static Object property(List<PropertySource<?>> sources, String name) {
