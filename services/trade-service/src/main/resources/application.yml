@@ -34,7 +34,7 @@ management:
 info:
   app:
     name: ${spring.application.name}
-    stage: foundation
+    stage: reliable-trade
 
 logging:
   pattern:
@@ -42,5 +42,9 @@ logging:
 
 tidebid:
   trade:
+    account-client:
+      internal-token: ${TIDEBID_INTERNAL_SERVICE_TOKEN:}
     order:
       payment-window: 30m
+    payment:
+      initial-recovery-delay: 5s

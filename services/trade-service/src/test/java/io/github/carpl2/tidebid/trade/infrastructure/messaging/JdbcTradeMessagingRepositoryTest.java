@@ -43,7 +43,7 @@ class JdbcTradeMessagingRepositoryTest {
                         .defaultSchema(schema)
                         .cleanDisabled(true)
                         .load();
-                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
+                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
 
                 DriverManagerDataSource dataSource =
                         new DriverManagerDataSource(schemaUrl, "root", target.rootPassword());
