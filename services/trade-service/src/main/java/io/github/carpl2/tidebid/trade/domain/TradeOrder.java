@@ -17,6 +17,7 @@ public record TradeOrder(
         long buyerId,
         String itemTitle,
         String winnerHoldNo,
+        BigDecimal winnerHoldAmount,
         BigDecimal finalPrice,
         TradeOrderStatus status,
         SellerSettlementStatus sellerSettlementStatus,
@@ -36,14 +37,13 @@ public record TradeOrder(
         orderNo = requireText(orderNo, 64, "orderNo");
         itemTitle = requireText(itemTitle, 80, "itemTitle");
         winnerHoldNo = requireText(winnerHoldNo, 64, "winnerHoldNo");
+        winnerHoldAmount = requirePositiveMoney(winnerHoldAmount, "winnerHoldAmount");
         finalPrice = requirePositiveMoney(finalPrice);
         status = Objects.requireNonNull(status, "status must not be null");
         sellerSettlementStatus = Objects.requireNonNull(
                 sellerSettlementStatus, "sellerSettlementStatus must not be null");
-        if (status != TradeOrderStatus.PENDING_DEPOSIT
-                || sellerSettlementStatus != SellerSettlementStatus.NOT_REQUIRED
-                || version != 0) {
-            throw new IllegalArgumentException("a newly created order must be pending its deposit settlement");
+        if (version < 0) {
+            throw new IllegalArgumentException("version must not be negative");
         }
         auctionClosedAt = Objects.requireNonNull(auctionClosedAt, "auctionClosedAt must not be null");
         createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
@@ -64,6 +64,7 @@ public record TradeOrder(
                 source.winnerId(),
                 source.itemTitle(),
                 source.winnerHoldNo(),
+                source.depositAmount(),
                 source.finalPrice(),
                 TradeOrderStatus.PENDING_DEPOSIT,
                 SellerSettlementStatus.NOT_REQUIRED,
@@ -81,6 +82,7 @@ public record TradeOrder(
                 && buyerId == source.winnerId()
                 && itemTitle.equals(source.itemTitle())
                 && winnerHoldNo.equals(source.winnerHoldNo())
+                && winnerHoldAmount.compareTo(source.depositAmount()) == 0
                 && finalPrice.compareTo(source.finalPrice()) == 0
                 && auctionClosedAt.equals(source.closedAt());
     }
@@ -94,15 +96,19 @@ public record TradeOrder(
     }
 
     private static BigDecimal requirePositiveMoney(BigDecimal value) {
-        Objects.requireNonNull(value, "finalPrice must not be null");
+        return requirePositiveMoney(value, "finalPrice");
+    }
+
+    private static BigDecimal requirePositiveMoney(BigDecimal value, String name) {
+        Objects.requireNonNull(value, name + " must not be null");
         BigDecimal normalized;
         try {
             normalized = value.setScale(2, java.math.RoundingMode.UNNECESSARY);
         } catch (ArithmeticException exception) {
-            throw new IllegalArgumentException("finalPrice must have at most two decimal places", exception);
+            throw new IllegalArgumentException(name + " must have at most two decimal places", exception);
         }
         if (normalized.signum() <= 0 || normalized.precision() > 19) {
-            throw new IllegalArgumentException("finalPrice is outside DECIMAL(19,2)");
+            throw new IllegalArgumentException(name + " is outside DECIMAL(19,2)");
         }
         return normalized;
     }

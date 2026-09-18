@@ -2,6 +2,7 @@ package io.github.carpl2.tidebid.trade;
 
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
+import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
@@ -63,7 +64,7 @@ class TradeMigrationIsolationTest {
                         .validateOnMigrate(true)
                         .baselineOnMigrate(false)
                         .load();
-                assertThat(recovered.migrate().migrationsExecuted).isOne();
+                assertThat(recovered.migrate().migrationsExecuted).isEqualTo(2);
                 assertThat(readTables(schemaUrl, target.rootPassword())).containsExactlyElementsOf(EXPECTED_TABLES);
             } finally {
                 statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
@@ -91,7 +92,7 @@ class TradeMigrationIsolationTest {
                         .validateOnMigrate(true)
                         .baselineOnMigrate(false)
                         .load();
-                assertThat(flyway.migrate().migrationsExecuted).isOne();
+                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
                 assertThat(flyway.migrate().migrationsExecuted).isZero();
                 assertThat(readTables(schemaUrl, target.rootPassword())).containsExactlyElementsOf(EXPECTED_TABLES);
 
@@ -100,11 +101,11 @@ class TradeMigrationIsolationTest {
                     assertThat(statement.executeUpdate("""
                             INSERT INTO trade_order (
                                 id, order_no, auction_id, item_id, winning_bid_id, seller_id, buyer_id,
-                                item_title, winner_hold_no, final_price, status, seller_settlement_status,
+                                item_title, winner_hold_no, winner_hold_amount, final_price, status, seller_settlement_status,
                                 version, auction_closed_at, created_at, updated_at
                             ) VALUES (
                                 101, 'ORDER:101', 201, 301, 401, 501, 502, 'Migration item',
-                                'HOLD:101', 500.00, 'PENDING_DEPOSIT', 'NOT_REQUIRED', 0,
+                                'HOLD:101', 100.00, 500.00, 'PENDING_DEPOSIT', 'NOT_REQUIRED', 0,
                                 '2026-09-17 01:00:00.123456', '2026-09-17 01:00:01.123456',
                                 '2026-09-17 01:00:01.123456'
                             )
@@ -122,11 +123,11 @@ class TradeMigrationIsolationTest {
                     assertThatThrownBy(() -> statement.executeUpdate("""
                             INSERT INTO trade_order (
                                 id, order_no, auction_id, item_id, winning_bid_id, seller_id, buyer_id,
-                                item_title, winner_hold_no, final_price, status, seller_settlement_status,
+                                item_title, winner_hold_no, winner_hold_amount, final_price, status, seller_settlement_status,
                                 version, auction_closed_at, created_at, updated_at
                             ) VALUES (
                                 102, 'ORDER:102', 201, 302, 402, 503, 504, 'Duplicate auction',
-                                'HOLD:102', 100.00, 'PENDING_DEPOSIT', 'NOT_REQUIRED', 0,
+                                'HOLD:102', 100.00, 100.00, 'PENDING_DEPOSIT', 'NOT_REQUIRED', 0,
                                 '2026-09-17 01:00:00.000001', '2026-09-17 01:00:01.000001',
                                 '2026-09-17 01:00:01.000001'
                             )
@@ -155,6 +156,65 @@ class TradeMigrationIsolationTest {
                         .contains("uk_payment_attempt_payment_no", "uk_payment_attempt_buyer_request", "idx_payment_attempt_recovery_scan");
                 assertThat(readIndexes(schemaUrl, target.rootPassword(), "trade_outbox"))
                         .contains("uk_trade_outbox_event_id", "idx_trade_outbox_pending_scan");
+            } finally {
+                adminStatement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
+            }
+        }
+    }
+
+    @Test
+    void upgradesExistingPendingOrderByBackfillingWinnerHoldAmountFromCaptureOutbox() throws Exception {
+        DatabaseTarget target = databaseTarget();
+        String schema = "tidebid_trade_upgrade_"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toLowerCase(Locale.ROOT);
+        String schemaUrl = jdbcUrl(target.host(), target.port(), schema);
+
+        try (Connection admin = DriverManager.getConnection(target.serverUrl(), "root", target.rootPassword());
+             Statement adminStatement = admin.createStatement()) {
+            adminStatement.executeUpdate("CREATE DATABASE `" + schema
+                    + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
+            try {
+                Flyway.configure().dataSource(schemaUrl, "root", target.rootPassword())
+                        .locations("classpath:db/migration").defaultSchema(schema)
+                        .target(MigrationVersion.fromVersion("1")).cleanDisabled(true).load().migrate();
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", target.rootPassword());
+                     Statement statement = connection.createStatement()) {
+                    statement.executeUpdate("""
+                            INSERT INTO trade_order (
+                                id, order_no, auction_id, item_id, winning_bid_id, seller_id, buyer_id,
+                                item_title, winner_hold_no, final_price, status, seller_settlement_status,
+                                version, auction_closed_at, created_at, updated_at
+                            ) VALUES (
+                                101, 'TB-201', 201, 301, 401, 501, 502, 'Existing order',
+                                'HOLD:201', 500.00, 'PENDING_DEPOSIT', 'NOT_REQUIRED', 0,
+                                '2026-09-17 01:00:00', '2026-09-17 01:00:01', '2026-09-17 01:00:01'
+                            )
+                            """);
+                    statement.executeUpdate("""
+                            INSERT INTO trade_outbox (
+                                id, event_id, aggregate_type, aggregate_id, event_type, schema_version,
+                                topic, tag, message_key, payload, payload_hash, deliver_at, status,
+                                attempt_count, next_attempt_at, created_at, updated_at
+                            ) VALUES (
+                                601, '11111111-1111-4111-8111-111111111111', 'TRADE_ORDER', '101',
+                                'deposit.settlement-requested', 1, 'tidebid-trade-events',
+                                'deposit.settlement-requested', '11111111-1111-4111-8111-111111111111',
+                                JSON_OBJECT('payload', JSON_OBJECT('holdAmount', '120.00')),
+                                REPEAT('a', 64), '2026-09-17 01:00:01', 'PENDING', 0,
+                                '2026-09-17 01:00:01', '2026-09-17 01:00:01', '2026-09-17 01:00:01'
+                            )
+                            """);
+                }
+
+                Flyway.configure().dataSource(schemaUrl, "root", target.rootPassword())
+                        .locations("classpath:db/migration").defaultSchema(schema).cleanDisabled(true).load().migrate();
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", target.rootPassword());
+                     Statement statement = connection.createStatement();
+                     ResultSet row = statement.executeQuery(
+                             "SELECT winner_hold_amount FROM trade_order WHERE id = 101")) {
+                    assertThat(row.next()).isTrue();
+                    assertThat(row.getBigDecimal(1)).isEqualByComparingTo("120.00");
+                }
             } finally {
                 adminStatement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
             }

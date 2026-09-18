@@ -39,3 +39,8 @@ info:
 logging:
   pattern:
     level: "%5p [traceId=%X{traceId:-}]"
+
+tidebid:
+  trade:
+    order:
+      payment-window: 30m

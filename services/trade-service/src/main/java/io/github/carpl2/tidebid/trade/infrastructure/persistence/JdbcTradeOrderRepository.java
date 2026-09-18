@@ -37,7 +37,7 @@ public class JdbcTradeOrderRepository implements TradeOrderRepository {
         String lockingClause = lockCurrentRow ? " FOR UPDATE" : "";
         List<TradeOrder> rows = jdbc.query("""
                 SELECT id, order_no, auction_id, item_id, winning_bid_id, seller_id, buyer_id,
-                       item_title, winner_hold_no, final_price, status, seller_settlement_status,
+                       item_title, winner_hold_no, winner_hold_amount, final_price, status, seller_settlement_status,
                        version, auction_closed_at, created_at, updated_at
                 FROM trade_order WHERE auction_id = ?
                 """ + lockingClause, (row, number) -> new TradeOrder(
@@ -50,6 +50,7 @@ public class JdbcTradeOrderRepository implements TradeOrderRepository {
                 row.getLong("buyer_id"),
                 row.getString("item_title"),
                 row.getString("winner_hold_no"),
+                row.getBigDecimal("winner_hold_amount"),
                 row.getBigDecimal("final_price"),
                 TradeOrderStatus.valueOf(row.getString("status")),
                 SellerSettlementStatus.valueOf(row.getString("seller_settlement_status")),
@@ -68,13 +69,14 @@ public class JdbcTradeOrderRepository implements TradeOrderRepository {
         jdbc.update("""
                 INSERT INTO trade_order (
                     id, order_no, auction_id, item_id, winning_bid_id, seller_id, buyer_id,
-                    item_title, winner_hold_no, final_price, status, seller_settlement_status,
+                    item_title, winner_hold_no, winner_hold_amount, final_price, status, seller_settlement_status,
                     version, auction_closed_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE id = id
                 """,
                 order.id(), order.orderNo(), order.auctionId(), order.itemId(), order.winningBidId(),
-                order.sellerId(), order.buyerId(), order.itemTitle(), order.winnerHoldNo(), order.finalPrice(),
+                order.sellerId(), order.buyerId(), order.itemTitle(), order.winnerHoldNo(),
+                order.winnerHoldAmount(), order.finalPrice(),
                 order.status().name(), order.sellerSettlementStatus().name(), order.version(),
                 Timestamp.from(order.auctionClosedAt()), Timestamp.from(order.createdAt()),
                 Timestamp.from(order.updatedAt()));
