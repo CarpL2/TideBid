@@ -52,14 +52,25 @@ public class JdbcDepositSettlementTransaction implements DepositSettlementTransa
     ) {
         HoldRow hold = lockHold(request.holdNo());
         validateIdentity(hold, request);
-        if ("RELEASED".equals(hold.status())) {
-            validateExistingReleaseIntent(hold, request);
-            return existingRelease(hold, request);
+        if ("RELEASED".equals(hold.status()) || "CAPTURED".equals(hold.status())) {
+            validateExistingIntent(hold, request);
+            return existingResult(hold, request);
         }
         if (!"HELD".equals(hold.status())) {
             throw new DepositSettlementConflictException("wallet hold already has an incompatible terminal result");
         }
 
+        return request.settlementType() == DepositSettlementType.RELEASE
+                ? release(sourceEventId, traceId, request, hold)
+                : capture(sourceEventId, traceId, request, hold);
+    }
+
+    private WalletHoldSettledEvent release(
+            UUID sourceEventId,
+            String traceId,
+            DepositSettlementRequestedEvent request,
+            HoldRow hold
+    ) {
         Instant now = clock.instant();
         int holdChanged = jdbc.update("""
                 UPDATE wallet_hold
@@ -99,6 +110,54 @@ public class JdbcDepositSettlementTransaction implements DepositSettlementTransa
         return result;
     }
 
+    private WalletHoldSettledEvent capture(
+            UUID sourceEventId,
+            String traceId,
+            DepositSettlementRequestedEvent request,
+            HoldRow hold
+    ) {
+        Instant now = clock.instant();
+        BigDecimal capturedAmount = hold.amount().min(request.captureTargetAmount());
+        BigDecimal releasedAmount = hold.amount().subtract(capturedAmount);
+        int holdChanged = jdbc.update("""
+                UPDATE wallet_hold
+                SET status = 'CAPTURED', captured_amount = ?, released_amount = ?,
+                    settlement_event_id = ?, settled_at = ?, version = version + 1, updated_at = ?
+                WHERE id = ? AND status = 'HELD' AND version = ?
+                """, capturedAmount, releasedAmount, sourceEventId.toString(), Timestamp.from(now),
+                Timestamp.from(now), hold.id(), hold.version());
+        if (holdChanged != 1) {
+            throw new DepositSettlementConflictException("wallet hold changed concurrently");
+        }
+        int walletChanged = jdbc.update("""
+                UPDATE wallet_account
+                SET available_balance = available_balance + ?, frozen_balance = frozen_balance - ?,
+                    version = version + 1, updated_at = ?
+                WHERE user_id = ? AND frozen_balance >= ?
+                """, releasedAmount, hold.amount(), Timestamp.from(now), hold.userId(), hold.amount());
+        if (walletChanged != 1) {
+            throw new IllegalStateException("wallet frozen balance is inconsistent with its hold");
+        }
+        WalletRow wallet = loadWallet(hold.userId());
+        UUID resultEventId = AccountOutboxEventFactory.deterministicSettlementResultEventId(
+                hold.holdNo(), DepositSettlementType.CAPTURE.name());
+        jdbc.update("""
+                INSERT INTO wallet_ledger (
+                    id, wallet_id, business_no, ledger_type, available_delta, frozen_delta,
+                    available_balance_after, frozen_balance_after, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, IdWorker.getId(), wallet.id(), resultEventId.toString(),
+                WalletLedgerType.AUCTION_DEPOSIT_CAPTURE.name(), releasedAmount, hold.amount().negate(),
+                wallet.available(), wallet.frozen(), Timestamp.from(now));
+
+        WalletHoldSettledEvent result = new WalletHoldSettledEvent(
+                DepositSettlementType.CAPTURE, WalletHoldSettlementStatus.CAPTURED,
+                request.auctionId(), request.orderId(), request.userId(), request.holdNo(), request.holdAmount(),
+                request.captureTargetAmount(), capturedAmount, releasedAmount, now);
+        outbox.enqueue(eventFactory.walletHoldSettled(result, traceId), now);
+        return result;
+    }
+
     private HoldRow lockHold(String holdNo) {
         List<HoldRow> rows = jdbc.query("""
                 SELECT id, hold_no, user_id, amount, status, captured_amount, released_amount,
@@ -133,46 +192,63 @@ public class JdbcDepositSettlementTransaction implements DepositSettlementTransa
         }
     }
 
-    private static WalletHoldSettledEvent existingRelease(HoldRow hold, DepositSettlementRequestedEvent request) {
-        if (hold.capturedAmount().signum() != 0 || hold.releasedAmount().compareTo(hold.amount()) != 0
-                || hold.settledAt() == null) {
-            throw new DepositSettlementConflictException("stored release result is inconsistent");
-        }
+    private static WalletHoldSettledEvent existingResult(HoldRow hold, DepositSettlementRequestedEvent request) {
+        DepositSettlementType settlementType = "RELEASED".equals(hold.status())
+                ? DepositSettlementType.RELEASE
+                : DepositSettlementType.CAPTURE;
+        WalletHoldSettlementStatus status = WalletHoldSettlementStatus.valueOf(hold.status());
         return new WalletHoldSettledEvent(
-                DepositSettlementType.RELEASE, WalletHoldSettlementStatus.RELEASED,
-                request.auctionId(), null, request.userId(), request.holdNo(), request.holdAmount(),
-                BigDecimal.ZERO.setScale(2), BigDecimal.ZERO.setScale(2), hold.releasedAmount(), hold.settledAt());
+                settlementType, status, request.auctionId(), request.orderId(), request.userId(), request.holdNo(),
+                request.holdAmount(), request.captureTargetAmount(), hold.capturedAmount(),
+                hold.releasedAmount(), hold.settledAt());
     }
 
-    private void validateExistingReleaseIntent(HoldRow hold, DepositSettlementRequestedEvent request) {
+    private void validateExistingIntent(HoldRow hold, DepositSettlementRequestedEvent request) {
+        if (!hold.status().equals(request.settlementType() == DepositSettlementType.RELEASE
+                ? WalletHoldSettlementStatus.RELEASED.name()
+                : WalletHoldSettlementStatus.CAPTURED.name())) {
+            throw new DepositSettlementConflictException("wallet hold already has an incompatible terminal result");
+        }
         String resultEventId = AccountOutboxEventFactory.deterministicSettlementResultEventId(
-                hold.holdNo(), DepositSettlementType.RELEASE.name()).toString();
+                hold.holdNo(), request.settlementType().name()).toString();
         List<MapRow> rows = jdbc.query("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.payload.auctionId')) AS auction_id,
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.payload.orderId')) AS order_id,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.payload.userId')) AS user_id,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.payload.holdNo')) AS hold_no,
-                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.payload.holdAmount')) AS hold_amount
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.payload.holdAmount')) AS hold_amount,
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.payload.captureTargetAmount')) AS capture_target_amount
                 FROM account_outbox WHERE event_id = ?
                 """, (row, number) -> new MapRow(
-                row.getString("auction_id"), row.getString("user_id"), row.getString("hold_no"),
-                row.getString("hold_amount")), resultEventId);
+                row.getString("auction_id"), row.getString("order_id"), row.getString("user_id"),
+                row.getString("hold_no"), row.getString("hold_amount"),
+                row.getString("capture_target_amount")), resultEventId);
         if (rows.size() != 1) {
-            throw new DepositSettlementConflictException("stored release result is missing its durable event");
+            throw new DepositSettlementConflictException("stored settlement result is missing its durable event");
         }
         MapRow original = rows.getFirst();
         if (!Long.toString(request.auctionId()).equals(original.auctionId())
+                || !nullableLongEquals(request.orderId(), original.orderId())
                 || !Long.toString(request.userId()).equals(original.userId())
                 || !request.holdNo().equals(original.holdNo())
-                || request.holdAmount().compareTo(new BigDecimal(original.holdAmount())) != 0) {
-            throw new DepositSettlementConflictException("wallet hold release was replayed with different intent");
+                || request.holdAmount().compareTo(new BigDecimal(original.holdAmount())) != 0
+                || request.captureTargetAmount().compareTo(new BigDecimal(original.captureTargetAmount())) != 0) {
+            throw new DepositSettlementConflictException("wallet hold settlement was replayed with different intent");
         }
+    }
+
+    private static boolean nullableLongEquals(Long expected, String actual) {
+        return expected == null
+                ? actual == null || "null".equals(actual)
+                : Long.toString(expected).equals(actual);
     }
 
     private record HoldRow(long id, String holdNo, long userId, BigDecimal amount, String status,
                            BigDecimal capturedAmount, BigDecimal releasedAmount,
                            String settlementEventId, Instant settledAt, long version) { }
     private record WalletRow(long id, BigDecimal available, BigDecimal frozen) { }
-    private record MapRow(String auctionId, String userId, String holdNo, String holdAmount) { }
+    private record MapRow(String auctionId, String orderId, String userId, String holdNo,
+                          String holdAmount, String captureTargetAmount) { }
 
     public static final class DepositSettlementConflictException extends RuntimeException {
         public DepositSettlementConflictException(String message) { super(message); }
