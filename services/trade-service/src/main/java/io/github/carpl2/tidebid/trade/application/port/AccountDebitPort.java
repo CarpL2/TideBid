@@ -11,6 +11,8 @@ public interface AccountDebitPort {
 
     DebitResult debit(DebitCommand command);
 
+    DebitLookup lookup(DebitLookupQuery query);
+
     record DebitCommand(
             String paymentNo, long buyerId, long orderId, BigDecimal amount,
             String requestId, String traceId
@@ -38,6 +40,19 @@ public interface AccountDebitPort {
         }
     }
 
+    record DebitLookupQuery(String paymentNo, String traceId) {
+        private static final Pattern BUSINESS_NO = Pattern.compile("[A-Za-z0-9][A-Za-z0-9:_-]{0,63}");
+
+        public DebitLookupQuery {
+            if (paymentNo == null || !BUSINESS_NO.matcher(paymentNo).matches()) {
+                throw new IllegalArgumentException("paymentNo has an invalid format");
+            }
+            if (!TraceIds.isValid(traceId)) {
+                throw new IllegalArgumentException("traceId has an invalid format");
+            }
+        }
+    }
+
     sealed interface DebitResult permits Succeeded, Rejected, Unknown {
     }
 
@@ -52,5 +67,22 @@ public interface AccountDebitPort {
     }
 
     record Unknown() implements DebitResult {
+    }
+
+    sealed interface DebitLookup permits Found, Missing, LookupUnknown {
+    }
+
+    record Found(DebitResult result) implements DebitLookup {
+        public Found {
+            if (!(result instanceof Succeeded) && !(result instanceof Rejected)) {
+                throw new IllegalArgumentException("lookup result must be definite");
+            }
+        }
+    }
+
+    record Missing() implements DebitLookup {
+    }
+
+    record LookupUnknown() implements DebitLookup {
     }
 }

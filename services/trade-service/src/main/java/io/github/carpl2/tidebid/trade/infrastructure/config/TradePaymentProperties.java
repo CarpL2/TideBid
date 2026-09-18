@@ -7,13 +7,44 @@ import java.time.Duration;
 import java.util.Objects;
 
 @ConfigurationProperties("tidebid.trade.payment")
-public record TradePaymentProperties(@DefaultValue("5s") Duration initialRecoveryDelay) {
+public record TradePaymentProperties(
+        @DefaultValue("true") boolean recoveryEnabled,
+        @DefaultValue("5s") Duration initialRecoveryDelay,
+        @DefaultValue("5s") Duration initialRetryDelay,
+        @DefaultValue("5m") Duration maximumRetryDelay,
+        @DefaultValue("30s") Duration leaseDuration,
+        @DefaultValue("5s") Duration scanInterval,
+        @DefaultValue("20") int batchSize,
+        @DefaultValue("12") int maximumAttempts
+) {
 
     public TradePaymentProperties {
-        initialRecoveryDelay = Objects.requireNonNull(initialRecoveryDelay, "initialRecoveryDelay must not be null");
-        if (initialRecoveryDelay.compareTo(Duration.ofSeconds(1)) < 0
-                || initialRecoveryDelay.compareTo(Duration.ofMinutes(5)) > 0) {
-            throw new IllegalArgumentException("initialRecoveryDelay must be between 1 second and 5 minutes");
+        initialRecoveryDelay = requireBetween(
+                initialRecoveryDelay, Duration.ofSeconds(1), Duration.ofMinutes(5), "initialRecoveryDelay");
+        initialRetryDelay = requireBetween(
+                initialRetryDelay, Duration.ofMillis(100), Duration.ofHours(1), "initialRetryDelay");
+        maximumRetryDelay = requireBetween(
+                maximumRetryDelay, Duration.ofSeconds(1), Duration.ofHours(24), "maximumRetryDelay");
+        leaseDuration = requireBetween(
+                leaseDuration, Duration.ofSeconds(1), Duration.ofMinutes(30), "leaseDuration");
+        scanInterval = requireBetween(
+                scanInterval, Duration.ofMillis(100), Duration.ofMinutes(30), "scanInterval");
+        if (maximumRetryDelay.compareTo(initialRetryDelay) < 0) {
+            throw new IllegalArgumentException("maximumRetryDelay must not be shorter than initialRetryDelay");
         }
+        if (batchSize < 1 || batchSize > 1000) {
+            throw new IllegalArgumentException("batchSize must be between 1 and 1000");
+        }
+        if (maximumAttempts < 2 || maximumAttempts > 100) {
+            throw new IllegalArgumentException("maximumAttempts must be between 2 and 100");
+        }
+    }
+
+    private static Duration requireBetween(Duration value, Duration minimum, Duration maximum, String name) {
+        value = Objects.requireNonNull(value, name + " must not be null");
+        if (value.compareTo(minimum) < 0 || value.compareTo(maximum) > 0) {
+            throw new IllegalArgumentException(name + " is outside the allowed range");
+        }
+        return value;
     }
 }

@@ -23,7 +23,10 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 @Service
@@ -117,6 +120,68 @@ public class TradePaymentTransaction {
         if (result instanceof AccountDebitPort.Unknown) {
             return markUnknown(attempt);
         }
+        return applyDefinite(attempt, result, traceId, false);
+    }
+
+    @Transactional
+    public List<RecoveryClaim> claimDue(String leaseOwner) {
+        if (leaseOwner == null || leaseOwner.isBlank() || leaseOwner.length() > 64) {
+            throw new IllegalArgumentException("leaseOwner must contain 1 to 64 characters");
+        }
+        Instant now = clock.instant();
+        Instant processingCutoff = now.minus(properties.initialRecoveryDelay());
+        List<Long> ids = jdbc.queryForList("""
+                SELECT id FROM payment_attempt
+                WHERE recovery_count < ?
+                  AND (lease_until IS NULL OR lease_until <= ?)
+                  AND ((status = 'UNKNOWN' AND next_recovery_at IS NOT NULL AND next_recovery_at <= ?)
+                    OR (status = 'PROCESSING' AND next_recovery_at IS NULL AND updated_at <= ?))
+                ORDER BY COALESCE(next_recovery_at, updated_at), id
+                LIMIT ?
+                """, Long.class, properties.maximumAttempts(), Timestamp.from(now), Timestamp.from(now),
+                Timestamp.from(processingCutoff), properties.batchSize());
+        List<RecoveryClaim> claimed = new ArrayList<>();
+        for (Long id : ids) {
+            String token = UUID.randomUUID().toString();
+            int changed = jdbc.update("""
+                    UPDATE payment_attempt
+                    SET lease_owner = ?, lease_token = ?, lease_until = ?
+                    WHERE id = ? AND recovery_count < ?
+                      AND (lease_until IS NULL OR lease_until <= ?)
+                      AND ((status = 'UNKNOWN' AND next_recovery_at IS NOT NULL AND next_recovery_at <= ?)
+                        OR (status = 'PROCESSING' AND next_recovery_at IS NULL AND updated_at <= ?))
+                    """, leaseOwner, token, Timestamp.from(now.plus(properties.leaseDuration())), id,
+                    properties.maximumAttempts(), Timestamp.from(now), Timestamp.from(now),
+                    Timestamp.from(processingCutoff));
+            if (changed == 1) {
+                claimed.add(new RecoveryClaim(findById(id, false), token));
+            }
+        }
+        return List.copyOf(claimed);
+    }
+
+    @Transactional
+    public PaymentAttemptSnapshot applyRecovered(
+            long attemptId, String leaseToken, AccountDebitPort.DebitResult result, String traceId
+    ) {
+        RecoveryRow recovery = findRecoveryRow(attemptId, true);
+        PaymentAttemptSnapshot attempt = recovery.attempt();
+        if ("SUCCEEDED".equals(attempt.status()) || "REJECTED".equals(attempt.status())) {
+            return attempt;
+        }
+        if (leaseToken == null || !leaseToken.equals(recovery.leaseToken())) {
+            return attempt;
+        }
+        if (result instanceof AccountDebitPort.Unknown) {
+            return scheduleRecovery(attempt, leaseToken);
+        }
+        return applyDefinite(attempt, result, traceId, true);
+    }
+
+    private PaymentAttemptSnapshot applyDefinite(
+            PaymentAttemptSnapshot attempt, AccountDebitPort.DebitResult result,
+            String traceId, boolean recovered
+    ) {
         OrderRow order = lockOrder(attempt.orderId());
         if (!"PAYMENT_PROCESSING".equals(order.status())) {
             return attempt;
@@ -124,15 +189,15 @@ public class TradePaymentTransaction {
         Instant now = clock.instant();
         if (result instanceof AccountDebitPort.Succeeded success) {
             requireMatching(attempt, success.paymentNo(), success.buyerId(), success.orderId(), success.amount());
-            return succeed(attempt, order, traceId, now);
+            return succeed(attempt, order, traceId, now, recovered);
         }
         AccountDebitPort.Rejected rejected = (AccountDebitPort.Rejected) result;
         requireMatching(attempt, rejected.paymentNo(), rejected.buyerId(), rejected.orderId(), rejected.amount());
-        return reject(attempt, order, rejected.failureCode(), now);
+        return reject(attempt, order, rejected.failureCode(), now, recovered);
     }
 
     private PaymentAttemptSnapshot succeed(
-            PaymentAttemptSnapshot attempt, OrderRow order, String traceId, Instant now
+            PaymentAttemptSnapshot attempt, OrderRow order, String traceId, Instant now, boolean recovered
     ) {
         String creditNo = "SC:" + order.id() + ":SALE";
         int orderChanged = jdbc.update("""
@@ -148,10 +213,11 @@ public class TradePaymentTransaction {
         jdbc.update("""
                 UPDATE payment_attempt
                 SET status = 'SUCCEEDED', failure_code = NULL, next_recovery_at = NULL,
+                    recovery_count = recovery_count + ?,
                     lease_owner = NULL, lease_token = NULL, lease_until = NULL,
                     completed_at = ?, updated_at = ?
                 WHERE id = ? AND status IN ('PROCESSING', 'UNKNOWN')
-                """, Timestamp.from(now), Timestamp.from(now), attempt.id());
+                """, recovered ? 1 : 0, Timestamp.from(now), Timestamp.from(now), attempt.id());
 
         OrderPaidEvent paid = new OrderPaidEvent(
                 order.id(), order.orderNo(), order.auctionId(), order.sellerId(), order.buyerId(),
@@ -167,7 +233,7 @@ public class TradePaymentTransaction {
     }
 
     private PaymentAttemptSnapshot reject(
-            PaymentAttemptSnapshot attempt, OrderRow order, String failureCode, Instant now
+            PaymentAttemptSnapshot attempt, OrderRow order, String failureCode, Instant now, boolean recovered
     ) {
         String safeCode = safeFailureCode(failureCode);
         int orderChanged = jdbc.update("""
@@ -180,10 +246,12 @@ public class TradePaymentTransaction {
         jdbc.update("""
                 UPDATE payment_attempt
                 SET status = 'REJECTED', failure_code = ?, next_recovery_at = NULL,
+                    recovery_count = recovery_count + ?,
                     lease_owner = NULL, lease_token = NULL, lease_until = NULL,
                     completed_at = ?, updated_at = ?
                 WHERE id = ? AND status IN ('PROCESSING', 'UNKNOWN')
-                """, safeCode, Timestamp.from(now), Timestamp.from(now), attempt.id());
+                """, safeCode, recovered ? 1 : 0,
+                Timestamp.from(now), Timestamp.from(now), attempt.id());
         return findById(attempt.id(), false);
     }
 
@@ -201,6 +269,42 @@ public class TradePaymentTransaction {
         return findById(attempt.id(), false);
     }
 
+    private PaymentAttemptSnapshot scheduleRecovery(PaymentAttemptSnapshot attempt, String leaseToken) {
+        Instant now = clock.instant();
+        int completedAttempts = attempt.recoveryCount() + 1;
+        if (completedAttempts >= properties.maximumAttempts()) {
+            jdbc.update("""
+                    UPDATE payment_attempt
+                    SET status = 'PROCESSING', recovery_count = recovery_count + 1,
+                        next_recovery_at = NULL, lease_owner = NULL, lease_token = NULL,
+                        lease_until = NULL, updated_at = ?
+                    WHERE id = ? AND status IN ('PROCESSING', 'UNKNOWN') AND lease_token = ?
+                    """, Timestamp.from(now), attempt.id(), leaseToken);
+        } else {
+            jdbc.update("""
+                    UPDATE payment_attempt
+                    SET status = 'UNKNOWN', recovery_count = recovery_count + 1,
+                        next_recovery_at = ?, lease_owner = NULL, lease_token = NULL,
+                        lease_until = NULL, updated_at = ?
+                    WHERE id = ? AND status IN ('PROCESSING', 'UNKNOWN') AND lease_token = ?
+                    """, Timestamp.from(now.plus(retryDelay(completedAttempts))), Timestamp.from(now),
+                    attempt.id(), leaseToken);
+        }
+        return findById(attempt.id(), false);
+    }
+
+    private Duration retryDelay(int completedAttempts) {
+        Duration delay = properties.initialRetryDelay();
+        for (int attempt = 1;
+             attempt < completedAttempts && delay.compareTo(properties.maximumRetryDelay()) < 0;
+             attempt++) {
+            Duration doubled = delay.multipliedBy(2);
+            delay = doubled.compareTo(properties.maximumRetryDelay()) > 0
+                    ? properties.maximumRetryDelay() : doubled;
+        }
+        return delay;
+    }
+
     private StartResult existing(PaymentAttemptSnapshot attempt, long orderId) {
         if (attempt.orderId() != orderId) {
             throw new BusinessException(TradeErrorCode.PAYMENT_IDEMPOTENCY_CONFLICT);
@@ -211,7 +315,7 @@ public class TradePaymentTransaction {
     private PaymentAttemptSnapshot findByBuyerRequest(long buyerId, String requestId, boolean lock) {
         List<PaymentAttemptSnapshot> rows = jdbc.query("""
                 SELECT id, payment_no, order_id, buyer_id, request_id, amount, status,
-                       failure_code, next_recovery_at, completed_at, created_at, updated_at
+                       failure_code, recovery_count, next_recovery_at, completed_at, created_at, updated_at
                 FROM payment_attempt WHERE buyer_id = ? AND request_id = ?
                 """ + (lock ? " FOR UPDATE" : ""),
                 (row, number) -> mapAttempt(row), buyerId, requestId);
@@ -221,10 +325,20 @@ public class TradePaymentTransaction {
     private PaymentAttemptSnapshot findById(long id, boolean lock) {
         return jdbc.query("""
                 SELECT id, payment_no, order_id, buyer_id, request_id, amount, status,
-                       failure_code, next_recovery_at, completed_at, created_at, updated_at
+                       failure_code, recovery_count, next_recovery_at, completed_at, created_at, updated_at
                 FROM payment_attempt WHERE id = ?
                 """ + (lock ? " FOR UPDATE" : ""),
                 (row, number) -> mapAttempt(row), id).getFirst();
+    }
+
+    private RecoveryRow findRecoveryRow(long id, boolean lock) {
+        return jdbc.query("""
+                SELECT id, payment_no, order_id, buyer_id, request_id, amount, status,
+                       failure_code, recovery_count, next_recovery_at, completed_at, created_at, updated_at,
+                       lease_token
+                FROM payment_attempt WHERE id = ?
+                """ + (lock ? " FOR UPDATE" : ""),
+                (row, number) -> new RecoveryRow(mapAttempt(row), row.getString("lease_token")), id).getFirst();
     }
 
     private OrderRow lockOrder(long orderId) {
@@ -248,6 +362,7 @@ public class TradePaymentTransaction {
                 row.getLong("id"), row.getString("payment_no"), row.getLong("order_id"),
                 row.getLong("buyer_id"), row.getString("request_id"), row.getBigDecimal("amount"),
                 row.getString("status"), row.getString("failure_code"),
+                row.getInt("recovery_count"),
                 instant(row, "next_recovery_at"), instant(row, "completed_at"),
                 instant(row, "created_at"), instant(row, "updated_at"));
     }
@@ -278,6 +393,12 @@ public class TradePaymentTransaction {
     }
 
     public record StartResult(PaymentAttemptSnapshot attempt, boolean shouldCallAccount) {
+    }
+
+    public record RecoveryClaim(PaymentAttemptSnapshot attempt, String leaseToken) {
+    }
+
+    private record RecoveryRow(PaymentAttemptSnapshot attempt, String leaseToken) {
     }
 
     private record OrderRow(

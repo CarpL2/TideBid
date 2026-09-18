@@ -12,6 +12,7 @@ public record PaymentAttemptSnapshot(
         BigDecimal amount,
         String status,
         String failureCode,
+        int recoveryCount,
         Instant nextRecoveryAt,
         Instant completedAt,
         Instant createdAt,

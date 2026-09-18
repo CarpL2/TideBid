@@ -30,6 +30,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -148,6 +149,76 @@ class TradePaymentIntegrationTest {
         });
     }
 
+    @Test
+    void recoversLostResponseAndCrashBeforeRemoteCallWithStableAttempt() throws Exception {
+        withDatabase(fixture -> {
+            long lostResponseOrder = fixture.seedOrder(9501L);
+            var lostResponse = fixture.begin(BUYER, lostResponseOrder, "pay_req_0009");
+            fixture.apply(lostResponse.attempt().id(), new AccountDebitPort.Unknown());
+            fixture.advance(Duration.ofSeconds(5));
+
+            var firstClaim = fixture.claim("worker-one");
+            assertThat(firstClaim).hasSize(1);
+            assertThat(fixture.claim("worker-two")).isEmpty();
+            PaymentAttemptSnapshot restored = fixture.applyRecovered(firstClaim.getFirst(),
+                    new AccountDebitPort.Succeeded(lostResponse.attempt().paymentNo(), BUYER,
+                            lostResponseOrder, money("100.00"), fixture.clock.instant()));
+            assertThat(restored.status()).isEqualTo("SUCCEEDED");
+            assertThat(restored.recoveryCount()).isOne();
+            assertThat(fixture.orderStatus(lostResponseOrder)).isEqualTo("PAID");
+            assertThat(fixture.outboxCount(lostResponseOrder, OrderPaidEvent.EVENT_TYPE)).isOne();
+
+            long crashOrder = fixture.seedOrder(9502L);
+            var crashed = fixture.begin(BUYER, crashOrder, "pay_req_0010");
+            fixture.advance(Duration.ofSeconds(5));
+            var crashClaim = fixture.claim("worker-restart");
+            assertThat(crashClaim).hasSize(1);
+            assertThat(crashClaim.getFirst().attempt().paymentNo()).isEqualTo(crashed.attempt().paymentNo());
+            fixture.applyRecovered(crashClaim.getFirst(), new AccountDebitPort.Succeeded(
+                    crashed.attempt().paymentNo(), BUYER, crashOrder, money("100.00"), fixture.clock.instant()));
+            assertThat(fixture.orderStatus(crashOrder)).isEqualTo("PAID");
+            assertThat(fixture.attemptCount(crashOrder)).isOne();
+        });
+    }
+
+    @Test
+    void reclaimsExpiredLeaseRejectsStaleOwnerAndStopsAfterBoundedRetries() throws Exception {
+        withDatabase(fixture -> {
+            long orderId = fixture.seedOrder(9601L);
+            var started = fixture.begin(BUYER, orderId, "pay_req_0011");
+            fixture.apply(started.attempt().id(), new AccountDebitPort.Unknown());
+            fixture.advance(Duration.ofSeconds(5));
+
+            var abandoned = fixture.claim("worker-abandoned").getFirst();
+            fixture.advance(Duration.ofSeconds(4));
+            var reclaimed = fixture.claim("worker-reclaimed").getFirst();
+            assertThat(reclaimed.leaseToken()).isNotEqualTo(abandoned.leaseToken());
+
+            PaymentAttemptSnapshot stale = fixture.applyRecovered(abandoned, new AccountDebitPort.Unknown());
+            assertThat(stale.recoveryCount()).isZero();
+            PaymentAttemptSnapshot firstRetry = fixture.applyRecovered(reclaimed, new AccountDebitPort.Unknown());
+            assertThat(firstRetry.status()).isEqualTo("UNKNOWN");
+            assertThat(firstRetry.recoveryCount()).isOne();
+            assertThat(firstRetry.nextRecoveryAt()).isEqualTo(fixture.clock.instant().plusSeconds(2));
+
+            fixture.advance(Duration.ofSeconds(2));
+            PaymentAttemptSnapshot secondRetry = fixture.applyRecovered(
+                    fixture.claim("worker-two").getFirst(), new AccountDebitPort.Unknown());
+            assertThat(secondRetry.recoveryCount()).isEqualTo(2);
+            assertThat(secondRetry.nextRecoveryAt()).isEqualTo(fixture.clock.instant().plusSeconds(4));
+
+            fixture.advance(Duration.ofSeconds(4));
+            PaymentAttemptSnapshot exhausted = fixture.applyRecovered(
+                    fixture.claim("worker-three").getFirst(), new AccountDebitPort.Unknown());
+            assertThat(exhausted.status()).isEqualTo("PROCESSING");
+            assertThat(exhausted.recoveryCount()).isEqualTo(3);
+            assertThat(exhausted.nextRecoveryAt()).isNull();
+            fixture.advance(Duration.ofHours(1));
+            assertThat(fixture.claim("worker-four")).isEmpty();
+            assertThat(fixture.orderStatus(orderId)).isEqualTo("PAYMENT_PROCESSING");
+        });
+    }
+
     private static void withDatabase(ThrowingConsumer<Fixture> test) throws Exception {
         String host = environmentOrDefault("TIDEBID_MYSQL_HOST", "127.0.0.1");
         String port = environmentOrDefault("TIDEBID_MYSQL_PORT", "13306");
@@ -175,18 +246,20 @@ class TradePaymentIntegrationTest {
         private final TradePaymentTransaction payments;
         private final TransactionTemplate transactions;
         private final TradeOrderQueryService queries;
+        private final MutableClock clock = new MutableClock(NOW);
         private final AtomicLong ids = new AtomicLong(3000000000000000000L);
 
         private Fixture(String url, String password) {
             var dataSource = new DriverManagerDataSource(url, "root", password);
             jdbc = new JdbcTemplate(dataSource);
-            Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
             var outbox = new JdbcTradeOutboxRepository(dataSource, new TradeOutboxProperties(
                     Duration.ofSeconds(1), 10, Duration.ofSeconds(30), Duration.ofSeconds(1),
                     Duration.ofSeconds(8), 5, Duration.ofHours(48)));
             payments = new TradePaymentTransaction(dataSource, ids::incrementAndGet, outbox,
                     new TradeOutboxEventFactory(new ObjectMapper().findAndRegisterModules()),
-                    new TradePaymentProperties(Duration.ofSeconds(5)), clock);
+                    new TradePaymentProperties(true, Duration.ofSeconds(5), Duration.ofSeconds(2),
+                            Duration.ofSeconds(8), Duration.ofSeconds(3), Duration.ofSeconds(1), 20, 3),
+                    clock);
             transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
             queries = new TradeOrderQueryService(dataSource, clock);
         }
@@ -214,6 +287,21 @@ class TradePaymentIntegrationTest {
 
         private PaymentAttemptSnapshot apply(long attemptId, AccountDebitPort.DebitResult result) {
             return transactions.execute(status -> payments.apply(attemptId, result, "trace-payment-123"));
+        }
+
+        private java.util.List<TradePaymentTransaction.RecoveryClaim> claim(String owner) {
+            return transactions.execute(status -> payments.claimDue(owner));
+        }
+
+        private PaymentAttemptSnapshot applyRecovered(
+                TradePaymentTransaction.RecoveryClaim claim, AccountDebitPort.DebitResult result
+        ) {
+            return transactions.execute(status -> payments.applyRecovered(
+                    claim.attempt().id(), claim.leaseToken(), result, "trace-recovery-123"));
+        }
+
+        private void advance(Duration duration) {
+            clock.advance(duration);
         }
 
         private Object tryBegin(CountDownLatch start, long orderId, String requestId) throws InterruptedException {
@@ -260,4 +348,34 @@ class TradePaymentIntegrationTest {
 
     @FunctionalInterface
     private interface ThrowingConsumer<T> { void accept(T value) throws Exception; }
+
+    private static final class MutableClock extends Clock {
+        private Instant current;
+
+        private MutableClock(Instant current) {
+            this.current = current;
+        }
+
+        private void advance(Duration duration) {
+            current = current.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            if (!ZoneOffset.UTC.equals(zone)) {
+                throw new IllegalArgumentException("test clock only supports UTC");
+            }
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return current;
+        }
+    }
 }

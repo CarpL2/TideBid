@@ -47,4 +47,11 @@ tidebid:
     order:
       payment-window: 30m
     payment:
+      recovery-enabled: true
       initial-recovery-delay: 5s
+      initial-retry-delay: 5s
+      maximum-retry-delay: 5m
+      lease-duration: 30s
+      scan-interval: 5s
+      batch-size: 20
+      maximum-attempts: 12
