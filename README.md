@@ -542,6 +542,20 @@ It passes only when the Topic gains another copy with the same `eventId`, Outbox
 by exactly one, and Account's Inbox count, wallet credit, ledger count, balance and wallet version
 all remain unchanged.
 
+Finally, use the same completed order to exercise a real consumer transaction rollback. The guarded
+script temporarily lowers the lock wait for new local MySQL sessions, restarts Account, locks the
+seller wallet, and publishes a contract-valid request with a new `eventId` but the same credit intent:
+
+```powershell
+.\scripts\consumer-rollback-drill.ps1 -OrderId '<completed-orderId>' -AcknowledgeImpact
+```
+
+The first delivery inserts Inbox and then times out waiting for the wallet lock, so the whole local
+transaction must roll back. The script confirms that the new Inbox row is absent and all financial
+state is unchanged before releasing the lock. It then requires the Broker retry to commit exactly
+one Inbox row without duplicating the existing credit, ledger, result Outbox, balance or wallet
+version. A `finally` block restores the original MySQL lock wait and restarts Account even on failure.
+
 After the drill, audit the latest application run without printing any matched secret value:
 
 ```powershell
