@@ -420,9 +420,9 @@ Outbox/database-fallback exercise uses two terminals:
 ```
 
 This drill deliberately changes local runtime availability and creates normal smoke business data;
-it does not mutate database rows by hand. ACK-before-mark, consumer rollback, poison/DLQ and
-Account-debit-unknown cases remain automated integration-test/final-acceptance exercises rather
-than unsafe production-style injection endpoints.
+it does not mutate database rows by hand. ACK-before-mark, consumer rollback and poison/DLQ cases
+remain automated integration-test/final-acceptance exercises rather than unsafe production-style
+injection endpoints.
 
 To verify the payment-deadline database fallback, keep `TIDEBID_TRADE_PAYMENT_WINDOW=2m`, run the
 full smoke with a checkpoint, and suspend only the Broker when the timeout order reaches
@@ -442,6 +442,40 @@ full smoke with a checkpoint, and suspend only the Broker when the timeout order
 .\scripts\outbox-status.ps1 -AssertHealthy
 # Return to Terminal A and press Enter; final wallet and COMPLETED settlement assertions continue.
 ```
+
+To reproduce an Account-success/Trade-unknown recovery with real processes, use the two guarded
+application checkpoints. The helper calls only Account's localhost-only internal API, reads the
+service token from `.env` without printing it, and verifies every identifier in the response:
+
+```powershell
+# Terminal A
+.\scripts\smoke.ps1 -ReliableTrade -ReliableTradeCoverage Sold `
+    -ReliableTradeTimeoutSeconds 300 `
+    -PauseBeforeSoldPayment -PauseAfterSoldPaymentUnknown
+
+# Terminal B at the first checkpoint; then return to A and press Enter.
+.\scripts\app-outage.ps1 -Service account -Action Suspend -AcknowledgeImpact
+
+# Terminal B at the second checkpoint. Copy the five values printed by Terminal A.
+.\scripts\app-outage.ps1 -Service trade -Action Suspend -AcknowledgeImpact
+.\scripts\app-outage.ps1 -Service account -Action Resume
+.\scripts\account-debit-drill.ps1 `
+    -PaymentNo '<paymentNo>' -UserId '<buyerId>' -OrderId '<orderId>' `
+    -Amount 60.00 -RequestId '<requestId>' -AcknowledgeImpact
+
+# Trade is still stopped, so Account has one durable debit while Trade remains UNKNOWN.
+# Restore the complete application set from an empty application-process state.
+.\scripts\stop-apps.ps1
+.\scripts\start-apps.ps1 -SkipBuild
+.\scripts\outbox-status.ps1 -AssertHealthy
+
+# Return to Terminal A and press Enter. It must finish PAID/COMPLETED and wallet assertions.
+```
+
+The stable `paymentNo` is the idempotency key. Replaying the debit cannot add another
+`wallet_debit` or `wallet_ledger` row; after restart, Trade queries that same number before deciding
+whether any retry is safe. `app-outage.ps1` checks the PID manifest and exact command marker before
+stopping a process, and `Resume` updates the manifest so the normal stop script still owns it.
 
 After the drill, audit the latest application run without printing any matched secret value:
 

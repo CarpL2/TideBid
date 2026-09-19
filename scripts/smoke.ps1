@@ -39,7 +39,13 @@ param(
     [switch]$PauseAfterSecondBid,
 
     [Parameter()]
-    [switch]$PauseAfterTimeoutPending
+    [switch]$PauseAfterTimeoutPending,
+
+    [Parameter()]
+    [switch]$PauseBeforeSoldPayment,
+
+    [Parameter()]
+    [switch]$PauseAfterSoldPaymentUnknown
 )
 
 Set-StrictMode -Version Latest
@@ -54,6 +60,12 @@ if ($ReliableTrade) {
 }
 if ($PauseAfterTimeoutPending -and (-not $ReliableTrade -or $ReliableTradeCoverage -ne 'All')) {
     throw 'PauseAfterTimeoutPending requires -ReliableTrade -ReliableTradeCoverage All.'
+}
+if (($PauseBeforeSoldPayment -or $PauseAfterSoldPaymentUnknown) -and -not $ReliableTrade) {
+    throw 'Sold-payment fault checkpoints require -ReliableTrade.'
+}
+if ($PauseAfterSoldPaymentUnknown -and -not $PauseBeforeSoldPayment) {
+    throw 'PauseAfterSoldPaymentUnknown requires PauseBeforeSoldPayment so Account can be suspended first.'
 }
 
 function Resolve-GatewayBaseUri {
@@ -1129,6 +1141,12 @@ try {
     Assert-Value -Condition ([bool]$pendingOrder.paymentEligible) -Message 'pending order is not payment eligible'
     $orderId = [string]$pendingOrder.orderId
 
+    if ($PauseBeforeSoldPayment) {
+        Write-Host "Fault-drill checkpoint reached before buyer payment. orderId=$orderId buyerId=$($buyerTwo.UserId) amount=60.00"
+        Write-Host 'Suspend Account, then return here so Trade persists an unknown debit result.'
+        Read-Host 'Press Enter to submit the payment while Account is unavailable' | Out-Null
+    }
+
     $paymentRequestId = "smoke-pay-$($suffix.Substring(0, 12))"
     $payment = Invoke-SmokeRequest `
         -Step 'pay-order' `
@@ -1137,8 +1155,9 @@ try {
         -ExpectedStatus 200 `
         -Headers @{ Authorization = $buyerTwoAuthorization; 'X-Request-Id' = $paymentRequestId } `
         -ApiEnvelope
-    Assert-Value -Condition ([string]$payment.data.status -eq 'SUCCEEDED') `
-        -Message "payment did not succeed (status=$([string]$payment.data.status))"
+    $expectedPaymentStatus = if ($PauseAfterSoldPaymentUnknown) { 'UNKNOWN' } else { 'SUCCEEDED' }
+    Assert-Value -Condition ([string]$payment.data.status -eq $expectedPaymentStatus) `
+        -Message "payment did not reach $expectedPaymentStatus (status=$([string]$payment.data.status))"
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $payment.data.amount 'payment amount') -eq [decimal]60.00) `
         -Message 'payment attempt amount is not 60.00'
 
@@ -1151,6 +1170,14 @@ try {
         -ApiEnvelope
     Assert-Value -Condition ([string]$paymentReplay.data.paymentAttemptId -ceq [string]$payment.data.paymentAttemptId) `
         -Message 'payment replay returned a different payment attempt'
+
+    if ($PauseAfterSoldPaymentUnknown) {
+        Assert-Value -Condition ([string]$paymentReplay.data.status -eq 'UNKNOWN') `
+            -Message 'unknown payment replay changed status before recovery'
+        Write-Host "Fault-drill checkpoint reached after Trade persisted UNKNOWN. orderId=$orderId buyerId=$($buyerTwo.UserId) paymentNo=$([string]$payment.data.paymentNo) requestId=$paymentRequestId amount=60.00"
+        Write-Host 'Stop Trade, restore Account, execute the same internal debit once, restart the applications, then return here.'
+        Read-Host 'Press Enter to continue PAID, settlement and wallet assertions' | Out-Null
+    }
 
     $paidOrder = Wait-BuyerOrder `
         -AuctionId $auctionId `
