@@ -25,9 +25,13 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +50,7 @@ public class AuctionRocketMqTransport implements SmartLifecycle {
     private final List<InboundHandler> handlers;
     private final MeterRegistry meters;
     private final ClientServiceProvider provider;
+    private final Clock clock;
     private final Map<String, PushConsumer> consumers = new ConcurrentHashMap<>();
 
     private volatile Producer producer;
@@ -66,10 +71,21 @@ public class AuctionRocketMqTransport implements SmartLifecycle {
             MeterRegistry meters,
             ClientServiceProvider provider
     ) {
+        this(properties, handlers, meters, provider, Clock.systemUTC());
+    }
+
+    AuctionRocketMqTransport(
+            AuctionRocketMqProperties properties,
+            List<InboundHandler> handlers,
+            MeterRegistry meters,
+            ClientServiceProvider provider,
+            Clock clock
+    ) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.handlers = List.copyOf(handlers);
         this.meters = Objects.requireNonNull(meters, "meters must not be null");
         this.provider = Objects.requireNonNull(provider, "provider must not be null");
+        this.clock = Objects.requireNonNull(clock, "clock must not be null");
     }
 
     /** Sends synchronously; returning means the Broker has acknowledged the message. */
@@ -179,7 +195,8 @@ public class AuctionRocketMqTransport implements SmartLifecycle {
         return producer;
     }
 
-    private Message buildMessage(JdbcAuctionOutboxRepository.OutboxEntity outbox) {
+    Message buildMessage(JdbcAuctionOutboxRepository.OutboxEntity outbox) {
+        byte[] body = outbox.payload().getBytes(StandardCharsets.UTF_8);
         MessageBuilder builder = provider.newMessageBuilder()
                 .setTopic(outbox.topic())
                 .setTag(outbox.tag())
@@ -187,12 +204,24 @@ public class AuctionRocketMqTransport implements SmartLifecycle {
                 .addProperty("eventId", outbox.eventId())
                 .addProperty("eventType", outbox.eventType())
                 .addProperty("schemaVersion", Integer.toString(outbox.schemaVersion()))
-                .addProperty("payloadHash", outbox.payloadHash())
-                .setBody(outbox.payload().getBytes(StandardCharsets.UTF_8));
-        if (outbox.deliverAt().isAfter(Instant.now())) {
-            builder.setDeliveryTimestamp(outbox.deliverAt().toEpochMilli());
+                .addProperty("payloadHash", sha256(body))
+                .setBody(body);
+        if (properties.topics().scheduledCommands().equals(outbox.topic())) {
+            Instant now = clock.instant();
+            Instant effectiveDelivery = outbox.deliverAt().isAfter(now)
+                    ? outbox.deliverAt()
+                    : now.plusSeconds(1);
+            builder.setDeliveryTimestamp(effectiveDelivery.toEpochMilli());
         }
         return builder.build();
+    }
+
+    private static String sha256(byte[] value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is not available", exception);
+        }
     }
 
     private ClientConfiguration clientConfiguration() {

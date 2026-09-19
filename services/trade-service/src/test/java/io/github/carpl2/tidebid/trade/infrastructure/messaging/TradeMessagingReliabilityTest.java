@@ -5,6 +5,8 @@ import io.github.carpl2.tidebid.trade.infrastructure.config.TradeRocketMqPropert
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.rocketmq.client.apis.ClientServiceProvider;
 import org.apache.rocketmq.client.apis.consumer.ConsumeResult;
+import org.apache.rocketmq.client.apis.message.Message;
+import org.apache.rocketmq.client.apis.message.MessageBuilder;
 import org.apache.rocketmq.client.apis.message.MessageId;
 import org.apache.rocketmq.client.apis.message.MessageView;
 import org.junit.jupiter.api.Test;
@@ -21,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -29,6 +32,8 @@ import static org.mockito.Mockito.when;
 class TradeMessagingReliabilityTest {
 
     private static final Instant NOW = Instant.parse("2026-09-19T08:00:00Z");
+    private static final String EMPTY_JSON_SHA256 =
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
 
     @Test
     void republishesAfterBrokerAckWhenTheLocalPublishedMarkFails() {
@@ -122,6 +127,29 @@ class TradeMessagingReliabilityTest {
                 "outcome", "failure").count()).isEqualTo(1);
     }
 
+    @Test
+    void reschedulesAnOverdueCommandOneSecondIntoTheFuture() {
+        ClientServiceProvider provider = mock(ClientServiceProvider.class);
+        MessageBuilder builder = mock(MessageBuilder.class);
+        Message message = mock(Message.class);
+        when(provider.newMessageBuilder()).thenReturn(builder);
+        when(builder.setTopic(any())).thenReturn(builder);
+        when(builder.setTag(any())).thenReturn(builder);
+        when(builder.setKeys(any(String[].class))).thenReturn(builder);
+        when(builder.addProperty(any(), any())).thenReturn(builder);
+        when(builder.setBody(any())).thenReturn(builder);
+        when(builder.setDeliveryTimestamp(anyLong())).thenReturn(builder);
+        when(builder.build()).thenReturn(message);
+        var transport = new TradeRocketMqTransport(properties(), List.of(), new SimpleMeterRegistry(),
+                provider, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThat(transport.buildMessage(outbox(
+                "lease-overdue", RocketMqTopology.SCHEDULED_COMMANDS_TOPIC, NOW.minusSeconds(30))))
+                .isSameAs(message);
+        verify(builder).addProperty("payloadHash", EMPTY_JSON_SHA256);
+        verify(builder).setDeliveryTimestamp(NOW.plusSeconds(1).toEpochMilli());
+    }
+
     private static TradeRocketMqProperties properties() {
         return new TradeRocketMqProperties("127.0.0.1:8081", Duration.ofSeconds(3), 2,
                 new TradeRocketMqProperties.Topics(
@@ -150,10 +178,18 @@ class TradeMessagingReliabilityTest {
     }
 
     private static JdbcTradeOutboxRepository.OutboxEntity outbox(String leaseToken) {
+        return outbox(leaseToken, RocketMqTopology.TRADE_EVENTS_TOPIC, NOW);
+    }
+
+    private static JdbcTradeOutboxRepository.OutboxEntity outbox(
+            String leaseToken,
+            String topic,
+            Instant deliverAt
+    ) {
         return new JdbcTradeOutboxRepository.OutboxEntity(
                 1L, "event-1", "ORDER", "1001", "order.paid", 1,
-                RocketMqTopology.TRADE_EVENTS_TOPIC, "order.paid", "event-1",
-                "{}", "a".repeat(64), NOW, "PUBLISHING", 0, NOW, "trade-test", leaseToken,
+                topic, "order.paid", "event-1",
+                "{}", "a".repeat(64), deliverAt, "PUBLISHING", 0, NOW, "trade-test", leaseToken,
                 NOW.plusSeconds(30), null, null, NOW, NOW);
     }
 }

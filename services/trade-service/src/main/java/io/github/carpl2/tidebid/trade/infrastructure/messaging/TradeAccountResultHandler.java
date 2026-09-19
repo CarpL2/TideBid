@@ -3,6 +3,7 @@ package io.github.carpl2.tidebid.trade.infrastructure.messaging;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.contracts.EventEnvelope;
 import io.github.carpl2.tidebid.contracts.EventMessageDecoder;
+import io.github.carpl2.tidebid.contracts.DepositSettlementType;
 import io.github.carpl2.tidebid.contracts.SellerCreditedEvent;
 import io.github.carpl2.tidebid.contracts.WalletHoldSettledEvent;
 import io.github.carpl2.tidebid.trade.application.TradeDepositSettlementService;
@@ -70,6 +71,12 @@ public class TradeAccountResultHandler implements TradeRocketMqTransport.Inbound
             return;
         }
         if (envelope.payload() instanceof WalletHoldSettledEvent result) {
+            // Account publishes both winner captures and loser/unsold releases on the same topic.
+            // A release has no order and is therefore intentionally irrelevant to Trade, but it
+            // is still recorded in the Inbox so a redelivery remains an idempotent success.
+            if (result.settlementType() == DepositSettlementType.RELEASE) {
+                return;
+            }
             settlements.apply(result, envelope.traceId());
         } else {
             sellerSettlements.apply((SellerCreditedEvent) envelope.payload());

@@ -139,6 +139,20 @@ class TradeDepositSettlementIntegrationTest {
     }
 
     @Test
+    void acknowledgesReleaseResultsWithoutTreatingThemAsOrderFailures() throws Exception {
+        withDatabase(fixture -> {
+            UUID eventId = UUID.randomUUID();
+            byte[] release = fixture.releaseMessage(eventId, 8150L, "100.00");
+
+            fixture.handleAccount(release);
+            fixture.handleAccount(release);
+
+            assertThat(fixture.inboxCount(eventId)).isOne();
+            assertThat(fixture.accountInboxCount()).isOne();
+        });
+    }
+
+    @Test
     void rejectsUnknownOrMismatchedResultsAndRollsBackWhenOutboxFails() throws Exception {
         withDatabase(fixture -> {
             long orderId = fixture.createOrder(8201L, "100.00", "150.00");
@@ -264,6 +278,14 @@ class TradeDepositSettlementIntegrationTest {
                     DepositSettlementType.CAPTURE, WalletHoldSettlementStatus.CAPTURED,
                     auctionId, orderId, 2101L, "hold-" + auctionId, money(holdAmount),
                     money(target), money(captured), money(released), NOW.minusSeconds(10));
+            return message(eventId, result, WalletHoldSettledEvent.EVENT_TYPE, "tidebid-account-service");
+        }
+
+        private byte[] releaseMessage(UUID eventId, long auctionId, String holdAmount) throws Exception {
+            WalletHoldSettledEvent result = new WalletHoldSettledEvent(
+                    DepositSettlementType.RELEASE, WalletHoldSettlementStatus.RELEASED,
+                    auctionId, null, 2101L, "hold-" + auctionId, money(holdAmount),
+                    money("0.00"), money("0.00"), money(holdAmount), NOW.minusSeconds(10));
             return message(eventId, result, WalletHoldSettledEvent.EVENT_TYPE, "tidebid-account-service");
         }
 

@@ -16,8 +16,10 @@ import org.apache.rocketmq.client.apis.producer.SendReceipt;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,6 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -32,6 +35,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AuctionRocketMqTransportTest {
+
+    private static final Instant NOW = Instant.parse("2026-09-19T08:00:00Z");
+    private static final String EMPTY_JSON_SHA256 =
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
 
     @Test
     void reusesOneProducerAndClosesItOnShutdown() throws Exception {
@@ -63,6 +70,7 @@ class AuctionRocketMqTransportTest {
         assertThat(transport.send(outbox())).isEqualTo("broker-message-1");
         assertThat(transport.send(outbox())).isEqualTo("broker-message-1");
         verify(provider, times(1)).newProducerBuilder();
+        verify(messageBuilder, never()).setDeliveryTimestamp(anyLong());
 
         transport.stop();
         verify(producer).close();
@@ -124,6 +132,32 @@ class AuctionRocketMqTransportTest {
                 "consumerGroup", "test-group", "outcome", "failure").count()).isEqualTo(1);
     }
 
+    @Test
+    void reschedulesAnOverdueCommandOneSecondIntoTheFuture() {
+        ClientServiceProvider provider = mock(ClientServiceProvider.class);
+        MessageBuilder builder = mock(MessageBuilder.class);
+        Message message = mock(Message.class);
+        when(provider.newMessageBuilder()).thenReturn(builder);
+        when(builder.setTopic(any())).thenReturn(builder);
+        when(builder.setTag(any())).thenReturn(builder);
+        when(builder.setKeys(any(String[].class))).thenReturn(builder);
+        when(builder.addProperty(any(), any())).thenReturn(builder);
+        when(builder.setBody(any())).thenReturn(builder);
+        when(builder.setDeliveryTimestamp(anyLong())).thenReturn(builder);
+        when(builder.build()).thenReturn(message);
+        var properties = new AuctionRocketMqProperties(
+                "127.0.0.1:8081", Duration.ofSeconds(3), 2,
+                new AuctionRocketMqProperties.Topics("tidebid-auction-events", "tidebid-scheduled-commands"),
+                new AuctionRocketMqProperties.ConsumerGroups("tidebid-auction-close-v1"));
+        var transport = new AuctionRocketMqTransport(properties, List.of(), new SimpleMeterRegistry(),
+                provider, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThat(transport.buildMessage(outbox("tidebid-scheduled-commands", NOW.minusSeconds(30))))
+                .isSameAs(message);
+        verify(builder).addProperty("payloadHash", EMPTY_JSON_SHA256);
+        verify(builder).setDeliveryTimestamp(NOW.plusSeconds(1).toEpochMilli());
+    }
+
     private static AuctionRocketMqTransport transport(ClientServiceProvider provider,
                                                        List<AuctionRocketMqTransport.InboundHandler> handlers,
                                                        SimpleMeterRegistry meters) {
@@ -169,11 +203,14 @@ class AuctionRocketMqTransportTest {
     }
 
     private static JdbcAuctionOutboxRepository.OutboxEntity outbox() {
-        Instant now = Instant.parse("2026-09-17T01:00:00Z");
+        return outbox("tidebid-auction-events", NOW);
+    }
+
+    private static JdbcAuctionOutboxRepository.OutboxEntity outbox(String topic, Instant deliverAt) {
         return new JdbcAuctionOutboxRepository.OutboxEntity(
                 1L, "event-1", "AUCTION", "1001", "auction.closed", 1,
-                "tidebid-auction-events", "auction.closed", "event-1", "{}", "a".repeat(64),
-                now, "PUBLISHING", 0, now, "auction-test", "lease-1",
-                now.plusSeconds(30), null, null, now, now);
+                topic, "auction.closed", "event-1", "{}", "a".repeat(64),
+                deliverAt, "PUBLISHING", 0, NOW, "auction-test", "lease-1",
+                NOW.plusSeconds(30), null, null, NOW, NOW);
     }
 }

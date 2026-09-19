@@ -5,6 +5,8 @@ import io.github.carpl2.tidebid.contracts.RocketMqTopology;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.rocketmq.client.apis.ClientServiceProvider;
 import org.apache.rocketmq.client.apis.consumer.ConsumeResult;
+import org.apache.rocketmq.client.apis.message.Message;
+import org.apache.rocketmq.client.apis.message.MessageBuilder;
 import org.apache.rocketmq.client.apis.message.MessageId;
 import org.apache.rocketmq.client.apis.message.MessageView;
 import org.junit.jupiter.api.Test;
@@ -21,7 +23,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -29,6 +33,27 @@ import static org.mockito.Mockito.when;
 class AccountMessagingReliabilityTest {
 
     private static final Instant NOW = Instant.parse("2026-09-19T08:00:00Z");
+    private static final String EMPTY_JSON_SHA256 =
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
+
+    @Test
+    void hashesTheExactBytesSentAndNeverMarksANormalEventAsDelayed() {
+        ClientServiceProvider provider = mock(ClientServiceProvider.class);
+        MessageBuilder builder = mock(MessageBuilder.class);
+        Message message = mock(Message.class);
+        when(provider.newMessageBuilder()).thenReturn(builder);
+        when(builder.setTopic(any())).thenReturn(builder);
+        when(builder.setTag(any())).thenReturn(builder);
+        when(builder.setKeys(any(String[].class))).thenReturn(builder);
+        when(builder.addProperty(any(), any())).thenReturn(builder);
+        when(builder.setBody(any())).thenReturn(builder);
+        when(builder.build()).thenReturn(message);
+        var transport = new AccountRocketMqTransport(properties(), List.of(), new SimpleMeterRegistry(), provider);
+
+        assertThat(transport.buildMessage(outbox("lease-hash"))).isSameAs(message);
+        verify(builder).addProperty("payloadHash", EMPTY_JSON_SHA256);
+        verify(builder, never()).setDeliveryTimestamp(anyLong());
+    }
 
     @Test
     void republishesAfterBrokerAckWhenTheLocalPublishedMarkFails() {

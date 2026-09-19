@@ -24,9 +24,11 @@ import org.springframework.stereotype.Component;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -170,7 +172,8 @@ public class AccountRocketMqTransport implements SmartLifecycle {
         return producer;
     }
 
-    private Message buildMessage(JdbcAccountOutboxRepository.OutboxEntity outbox) {
+    Message buildMessage(JdbcAccountOutboxRepository.OutboxEntity outbox) {
+        byte[] body = outbox.payload().getBytes(StandardCharsets.UTF_8);
         MessageBuilder builder = provider.newMessageBuilder()
                 .setTopic(outbox.topic())
                 .setTag(outbox.tag())
@@ -178,12 +181,17 @@ public class AccountRocketMqTransport implements SmartLifecycle {
                 .addProperty("eventId", outbox.eventId())
                 .addProperty("eventType", outbox.eventType())
                 .addProperty("schemaVersion", Integer.toString(outbox.schemaVersion()))
-                .addProperty("payloadHash", outbox.payloadHash())
-                .setBody(outbox.payload().getBytes(StandardCharsets.UTF_8));
-        if (outbox.deliverAt().isAfter(Instant.now())) {
-            builder.setDeliveryTimestamp(outbox.deliverAt().toEpochMilli());
-        }
+                .addProperty("payloadHash", sha256(body))
+                .setBody(body);
         return builder.build();
+    }
+
+    private static String sha256(byte[] value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is not available", exception);
+        }
     }
 
     private ClientConfiguration clientConfiguration() {

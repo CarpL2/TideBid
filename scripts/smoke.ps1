@@ -421,6 +421,7 @@ function Send-SmokeImageToOss {
         $curlConfig = ($configLines -join "`n") + "`n"
         $statusText = $curlConfig | & $curl.Source `
             --config - `
+            --noproxy '.aliyuncs.com' `
             --silent `
             --output NUL `
             --max-time $RequestTimeoutSeconds `

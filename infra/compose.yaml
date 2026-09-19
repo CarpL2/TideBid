@@ -171,7 +171,7 @@ services:
     environment:
       TZ: UTC
       NAMESRV_ADDR: rocketmq-nameserver:9876
-      JAVA_OPT_EXT: -server -Xms256m -Xmx512m -Xmn128m -XX:MaxDirectMemorySize=128m
+      JAVA_OPT_EXT: -server -Xms256m -Xmx512m -Xmn128m -XX:MaxDirectMemorySize=512m
     command: sh mqbroker -c /home/rocketmq/conf/broker.conf
     ports:
       - "127.0.0.1:10911:10911"
@@ -189,7 +189,7 @@ services:
       retries: 20
       start_period: 30s
     stop_grace_period: 30s
-    mem_limit: 768m
+    mem_limit: 1280m
     networks:
       - tidebid-network
 

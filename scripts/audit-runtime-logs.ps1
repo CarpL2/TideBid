@@ -75,7 +75,22 @@ if ($logFiles.Count -eq 0) {
 }
 
 foreach ($file in $logFiles) {
-    $content = [System.IO.File]::ReadAllText($file.FullName)
+    $stream = [System.IO.FileStream]::new(
+        $file.FullName,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite
+    )
+    try {
+        $reader = [System.IO.StreamReader]::new($stream)
+        try {
+            $content = $reader.ReadToEnd()
+        } finally {
+            $reader.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
     $relativePath = $file.FullName.Substring($LogDirectory.TrimEnd('\').Length).TrimStart('\')
     foreach ($entry in $highConfidencePatterns.GetEnumerator()) {
         if ([regex]::IsMatch($content, $entry.Value)) {
