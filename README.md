@@ -173,14 +173,20 @@ configuration:
 .\scripts\smoke.ps1 -ReliableTrade
 ```
 
-`-ReliableTrade` includes the full phase 02 flow but creates a deliberately short auction. It waits
-for the database fallback/MQ close path to reach `CLOSED_SOLD`, verifies the winning `50.00` deposit
-is captured and the losing deposit is released, finds the resulting `PENDING_PAYMENT` order, pays
-the `60.00` balance twice with one request ID, and confirms both calls resolve to one payment attempt.
-It then waits for the order to become `PAID`, for seller settlement to become `COMPLETED`, and checks
-the exact final virtual-wallet balances: seller `10110.00/0.00`, winner `9890.00/0.00`, loser
-`10000.00/0.00`. The default timeout can be adjusted with `-ReliableTradeTimeoutSeconds` when a local
-Docker environment is slow. Each run uses new users and business data; any failed assertion exits
+`-ReliableTrade` includes the full phase 02 flow and runs three deliberately short auctions. The
+first closes sold, captures the winning `50.00` deposit, releases the losing deposit, pays the
+`60.00` tail twice with one request ID, and verifies one payment plus the seller's full `110.00`
+credit. The second has two registered buyers but no bids; it must close `CLOSED_UNSOLD`, create no
+order, and release both deposits. The third closes sold but remains unpaid; it must become
+`PAYMENT_TIMEOUT`, release the loser, forfeit only the winner's `50.00` deposit, and credit only that
+amount to the seller.
+
+The checked `.env.example` sets `TIDEBID_TRADE_PAYMENT_WINDOW=2m` so local timeout acceptance is
+practical, while the application keeps a production-safe `30m` default whenever that variable is
+absent. Restart the applications after changing it. `-ReliableTrade` validates the configured value
+before creating data. Use `-ReliableTradeCoverage Sold` or `SoldAndUnsold` for a shorter diagnostic
+run; the default `All` is the final acceptance path. `-ReliableTradeTimeoutSeconds` controls each
+eventual-consistency wait. Every run uses new users and business data; any failed assertion exits
 nonzero.
 
 Stop only the application processes recorded by this checkout, then optionally stop middleware:

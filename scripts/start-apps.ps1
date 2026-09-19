@@ -136,6 +136,24 @@ function Assert-ManagedMessagingConfiguration {
         throw 'TIDEBID_ROCKETMQ_ENDPOINTS port must be between 1 and 65535; its value was not printed.'
     }
 
+    $paymentWindow = [Environment]::GetEnvironmentVariable('TIDEBID_TRADE_PAYMENT_WINDOW', 'Process')
+    if (-not [string]::IsNullOrWhiteSpace($paymentWindow)) {
+        $normalizedWindow = $paymentWindow.Trim().ToLowerInvariant()
+        if ($normalizedWindow -notmatch '^(?<amount>[1-9][0-9]*)(?<unit>s|m|h)$') {
+            throw 'TIDEBID_TRADE_PAYMENT_WINDOW must use a positive whole-number duration such as 90s, 2m, or 1h.'
+        }
+        $amount = [long]$Matches['amount']
+        $multiplier = switch ($Matches['unit']) {
+            's' { 1 }
+            'm' { 60 }
+            'h' { 3600 }
+        }
+        $seconds = $amount * $multiplier
+        if ($seconds -lt 60 -or $seconds -gt 86400) {
+            throw 'TIDEBID_TRADE_PAYMENT_WINDOW must be between 1 minute and 24 hours; its value was not printed.'
+        }
+    }
+
     $expectedFragments = [ordered]@{
         'infra\rocketmq\broker.conf' = @(
             'timerMaxDelaySec=259200'
@@ -176,6 +194,9 @@ function Assert-ManagedMessagingConfiguration {
             'auction-results: tidebid-trade-auction-v1',
             'account-results: tidebid-trade-account-v1',
             'payment-timeout: tidebid-trade-timeout-v1'
+        )
+        'services\trade-service\src\main\resources\application.yml' = @(
+            'payment-window: ${TIDEBID_TRADE_PAYMENT_WINDOW:30m}'
         )
     }
 

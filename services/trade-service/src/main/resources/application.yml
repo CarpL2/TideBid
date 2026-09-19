@@ -45,7 +45,7 @@ tidebid:
     account-client:
       internal-token: ${TIDEBID_INTERNAL_SERVICE_TOKEN:}
     order:
-      payment-window: 30m
+      payment-window: ${TIDEBID_TRADE_PAYMENT_WINDOW:30m}
     payment:
       recovery-enabled: true
       initial-recovery-delay: 5s

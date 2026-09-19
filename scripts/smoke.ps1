@@ -17,6 +17,10 @@ param(
     [switch]$ReliableTrade,
 
     [Parameter()]
+    [ValidateSet('Sold', 'SoldAndUnsold', 'All')]
+    [string]$ReliableTradeCoverage = 'All',
+
+    [Parameter()]
     [ValidateRange(60, 600)]
     [int]$AuctionOpenTimeoutSeconds = 240,
 
@@ -257,6 +261,25 @@ function Get-SmokeEnvironmentValue {
     return ''
 }
 
+function ConvertFrom-SmokeDurationSeconds {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $normalized = $Value.Trim().ToLowerInvariant()
+    if ($normalized -notmatch '^(?<amount>[1-9][0-9]*)(?<unit>s|m|h)$') {
+        throw "$Name must use a positive whole-number duration such as 90s, 2m, or 1h."
+    }
+    $amount = [long]$Matches['amount']
+    $multiplier = switch ($Matches['unit']) {
+        's' { $amount }
+        'm' { $amount * 60 }
+        'h' { $amount * 3600 }
+    }
+    return $multiplier
+}
+
 function Get-AuctionCoreSettings {
     $values = Read-SmokeEnvironment
     $ossEnabled = Get-SmokeEnvironmentValue -Name 'TIDEBID_OSS_ENABLED' -Values $values
@@ -273,7 +296,24 @@ function Get-AuctionCoreSettings {
         $adminPassword.StartsWith('change-me')) {
         throw 'AuctionCore smoke test requires non-placeholder development administrator credentials; values were not printed.'
     }
-    return [pscustomobject]@{ AdminUsername = $adminUsername; AdminPassword = $adminPassword }
+    $paymentWindowSeconds = 0L
+    if ($ReliableTrade -and $ReliableTradeCoverage -eq 'All') {
+        $paymentWindow = Get-SmokeEnvironmentValue -Name 'TIDEBID_TRADE_PAYMENT_WINDOW' -Values $values
+        if ([string]::IsNullOrWhiteSpace($paymentWindow)) {
+            throw 'ReliableTrade All requires TIDEBID_TRADE_PAYMENT_WINDOW in .env; use 2m for local acceptance.'
+        }
+        $paymentWindowSeconds = ConvertFrom-SmokeDurationSeconds `
+            -Value $paymentWindow `
+            -Name 'TIDEBID_TRADE_PAYMENT_WINDOW'
+        if ($paymentWindowSeconds -lt 60 -or $paymentWindowSeconds -gt ($ReliableTradeTimeoutSeconds - 15)) {
+            throw "ReliableTrade All requires a payment window from 60 seconds through $($ReliableTradeTimeoutSeconds - 15) seconds."
+        }
+    }
+    return [pscustomobject]@{
+        AdminUsername = $adminUsername
+        AdminPassword = $adminPassword
+        PaymentWindowSeconds = $paymentWindowSeconds
+    }
 }
 
 function Register-SmokeActor {
@@ -471,10 +511,11 @@ function Get-SmokeWallet {
     }
 }
 
-function Wait-AuctionClosedSold {
+function Wait-AuctionTerminal {
     param(
         [Parameter(Mandatory = $true)][string]$AuctionId,
-        [Parameter(Mandatory = $true)][string]$Authorization
+        [Parameter(Mandatory = $true)][string]$Authorization,
+        [Parameter(Mandatory = $true)][ValidateSet('CLOSED_SOLD', 'CLOSED_UNSOLD')][string]$ExpectedStatus
     )
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($ReliableTradeTimeoutSeconds)
@@ -488,16 +529,16 @@ function Wait-AuctionClosedSold {
             -ApiEnvelope `
             -Quiet
         $status = [string]$result.data.sessionStatus
-        if ($status -eq 'CLOSED_SOLD') {
-            Write-Host "[PASS] auction-closed-sold traceId=$script:currentTraceId"
+        if ($status -eq $ExpectedStatus) {
+            Write-Host "[PASS] auction-terminal traceId=$script:currentTraceId status=$status"
             return $result.data
         }
-        if ($status -eq 'CLOSED_UNSOLD') {
-            throw 'auction unexpectedly closed without a winner'
+        if ($status -in @('CLOSED_SOLD', 'CLOSED_UNSOLD')) {
+            throw "auction reached unexpected terminal state $status instead of $ExpectedStatus"
         }
         Start-Sleep -Milliseconds 750
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
-    throw "auction did not reach CLOSED_SOLD within $ReliableTradeTimeoutSeconds seconds"
+    throw "auction did not reach $ExpectedStatus within $ReliableTradeTimeoutSeconds seconds"
 }
 
 function Wait-BuyerOrder {
@@ -535,6 +576,149 @@ function Wait-BuyerOrder {
         Start-Sleep -Milliseconds 750
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
     throw "buyer order did not reach status [$($ExpectedStatuses -join ',')] and settlement '$ExpectedSettlementStatus' within $ReliableTradeTimeoutSeconds seconds"
+}
+
+function Wait-SmokeWallet {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$Authorization,
+        [Parameter(Mandatory = $true)][decimal]$ExpectedAvailable,
+        [Parameter(Mandatory = $true)][decimal]$ExpectedFrozen
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($ReliableTradeTimeoutSeconds)
+    do {
+        $wallet = Get-SmokeWallet -Label $Label -Authorization $Authorization
+        if ($wallet.Available -eq $ExpectedAvailable -and $wallet.Frozen -eq $ExpectedFrozen) {
+            Write-Host "[PASS] $Label-wallet-balance available=$($wallet.Available.ToString('F2', $invariantCulture)) frozen=$($wallet.Frozen.ToString('F2', $invariantCulture))"
+            return $wallet
+        }
+        Start-Sleep -Milliseconds 750
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "$Label wallet did not reach expected available/frozen balances within $ReliableTradeTimeoutSeconds seconds"
+}
+
+function New-ApprovedSmokeAuction {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$Suffix,
+        [Parameter(Mandatory = $true)][string]$SellerAuthorization,
+        [Parameter(Mandatory = $true)][string]$AdminAuthorization,
+        [Parameter(Mandatory = $true)][byte[]]$ImageBytes
+    )
+
+    $checksum = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($ImageBytes)).ToLowerInvariant()
+    $requestToken = "$Label-$($Suffix.Substring(0, 8))"
+    $uploadIntent = Invoke-SmokeRequest `
+        -Step "$Label-create-upload-intent" `
+        -Method POST `
+        -Path '/api/assets/upload-intents' `
+        -ExpectedStatus 201 `
+        -Headers @{ Authorization = $SellerAuthorization; 'X-Request-Id' = "smoke-upload-$requestToken" } `
+        -Body @{
+            originalFilename = "smoke-$Label-$Suffix.png"
+            contentType = 'image/png'
+            contentLength = $ImageBytes.Length
+            checksumSha256 = $checksum
+        } `
+        -ApiEnvelope
+    Send-SmokeImageToOss `
+        -UploadUrl ([string]$uploadIntent.data.uploadUrl) `
+        -RequiredHeaders $uploadIntent.data.requiredHeaders `
+        -Content $ImageBytes
+
+    $startAt = [DateTimeOffset]::UtcNow.AddSeconds(75)
+    $endAt = $startAt.AddSeconds(45)
+    $draft = Invoke-SmokeRequest `
+        -Step "$Label-create-auction-draft" `
+        -Method POST `
+        -Path '/api/assets' `
+        -ExpectedStatus 201 `
+        -Headers @{ Authorization = $SellerAuthorization; 'X-Request-Id' = "smoke-draft-$requestToken" } `
+        -Body @{
+            title = "Smoke $Label $($Suffix.Substring(0, 8))"
+            description = "Stage 03 $Label reliable-trade smoke auction."
+            category = 'COLLECTIBLES'
+            itemCondition = 'GOOD'
+            startPrice = '100.00'
+            bidIncrement = '10.00'
+            depositAmount = '50.00'
+            startAt = $startAt.ToString('o')
+            endAt = $endAt.ToString('o')
+            imageObjectKeys = @([string]$uploadIntent.data.objectKey)
+        } `
+        -ApiEnvelope
+    $itemId = [string]$draft.data.itemId
+    $auctionId = [string]$draft.data.auctionId
+    $submission = Invoke-SmokeRequest `
+        -Step "$Label-submit-auction" `
+        -Method POST `
+        -Path "/api/assets/$itemId/submit" `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $SellerAuthorization; 'X-Request-Id' = "smoke-submit-$requestToken" } `
+        -Body @{ itemVersion = [long]$draft.data.itemVersion; sessionVersion = [long]$draft.data.sessionVersion } `
+        -ApiEnvelope
+    $review = Invoke-SmokeRequest `
+        -Step "$Label-approve-auction" `
+        -Method POST `
+        -Path "/api/admin/assets/$itemId/reviews" `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $AdminAuthorization; 'X-Request-Id' = "smoke-review-$requestToken" } `
+        -Body @{
+            decision = 'APPROVE'
+            submissionVersion = [int]$submission.data.submissionVersion
+            comment = "Approved by stage 03 $Label smoke verification."
+        } `
+        -ApiEnvelope
+    Assert-Value -Condition ([string]$review.data.sessionStatus -eq 'SCHEDULED') `
+        -Message "$Label auction was not scheduled after approval"
+    return [pscustomobject]@{ ItemId = $itemId; AuctionId = $auctionId }
+}
+
+function Register-SmokeBuyerForAuction {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$AuctionId,
+        [Parameter(Mandatory = $true)][string]$Authorization,
+        [Parameter(Mandatory = $true)][string]$Suffix
+    )
+
+    $registration = Invoke-SmokeRequest `
+        -Step "$Label-register-auction" `
+        -Method POST `
+        -Path '/api/registrations' `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $Authorization; 'X-Request-Id' = "smoke-$Label-$($Suffix.Substring(0, 8))" } `
+        -Body @{ auctionId = $AuctionId } `
+        -ApiEnvelope
+    $final = Wait-RegistrationFinal `
+        -Label $Label `
+        -RegistrationId ([string]$registration.data.registrationId) `
+        -Authorization $Authorization
+    Assert-Value -Condition ([string]$final.status -eq 'REGISTERED') `
+        -Message "$Label registration failed with code $([string]$final.failureCode)"
+    return $final
+}
+
+function Assert-NoAuctionOrder {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$AuctionId,
+        [Parameter(Mandatory = $true)][string]$Authorization
+    )
+
+    $result = Invoke-SmokeRequest `
+        -Step "$Label-no-order" `
+        -Method GET `
+        -Path $Path `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $Authorization } `
+        -ApiEnvelope `
+        -Quiet
+    $matching = @($result.data.items | Where-Object { [string]$_.auctionId -ceq $AuctionId })
+    Assert-Value -Condition ($matching.Count -eq 0) -Message "$Label unexpectedly found an order for an unsold auction"
+    Write-Host "[PASS] $Label-no-order traceId=$script:currentTraceId"
 }
 
 try {
@@ -875,7 +1059,10 @@ try {
         return
     }
 
-    $closed = Wait-AuctionClosedSold -AuctionId $auctionId -Authorization $buyerTwoAuthorization
+    $closed = Wait-AuctionTerminal `
+        -AuctionId $auctionId `
+        -Authorization $buyerTwoAuthorization `
+        -ExpectedStatus 'CLOSED_SOLD'
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $closed.finalPrice 'finalPrice') -eq [decimal]110.00) `
         -Message 'closed auction final price is not 110.00'
     Assert-Value -Condition ([bool]$closed.wonByCurrentUser) `
@@ -938,7 +1125,150 @@ try {
     Assert-Value -Condition ($loserWalletAfter.Available -eq [decimal]10000.00 -and $loserWalletAfter.Frozen -eq 0) `
         -Message 'loser deposit was not fully released'
 
-    Write-Host "TideBid reliable-trade sold/payment smoke test passed. itemId=$itemId auctionId=$auctionId orderId=$orderId sellerId=$userId winnerId=$($buyerTwo.UserId) loserId=$($buyerOne.UserId)."
+    Write-Host "[PASS] reliable-trade-sold-payment itemId=$itemId auctionId=$auctionId orderId=$orderId"
+    if ($ReliableTradeCoverage -eq 'Sold') {
+        Write-Host "TideBid reliable-trade sold/payment smoke test passed. sellerId=$userId winnerId=$($buyerTwo.UserId) loserId=$($buyerOne.UserId)."
+        return
+    }
+
+    $unsoldBuyerOneBefore = Get-SmokeWallet -Label 'unsold-buyer1-before' -Authorization $buyerOneAuthorization
+    $unsoldBuyerTwoBefore = Get-SmokeWallet -Label 'unsold-buyer2-before' -Authorization $buyerTwoAuthorization
+    $unsold = New-ApprovedSmokeAuction `
+        -Label 'unsold' `
+        -Suffix $suffix `
+        -SellerAuthorization $sellerAuthorization `
+        -AdminAuthorization $adminAuthorization `
+        -ImageBytes $imageBytes
+    Register-SmokeBuyerForAuction `
+        -Label 'unsold-buyer1' `
+        -AuctionId $unsold.AuctionId `
+        -Authorization $buyerOneAuthorization `
+        -Suffix $suffix | Out-Null
+    Register-SmokeBuyerForAuction `
+        -Label 'unsold-buyer2' `
+        -AuctionId $unsold.AuctionId `
+        -Authorization $buyerTwoAuthorization `
+        -Suffix $suffix | Out-Null
+    Wait-AuctionOpen -AuctionId $unsold.AuctionId -Authorization $buyerOneAuthorization | Out-Null
+    $unsoldClosed = Wait-AuctionTerminal `
+        -AuctionId $unsold.AuctionId `
+        -Authorization $buyerOneAuthorization `
+        -ExpectedStatus 'CLOSED_UNSOLD'
+    Assert-Value -Condition ($null -eq $unsoldClosed.finalPrice) -Message 'unsold auction unexpectedly has a final price'
+    Assert-Value -Condition ([long]$unsoldClosed.bidCount -eq 0) -Message 'unsold auction unexpectedly has bids'
+    Wait-SmokeWallet `
+        -Label 'unsold-buyer1-released' `
+        -Authorization $buyerOneAuthorization `
+        -ExpectedAvailable $unsoldBuyerOneBefore.Available `
+        -ExpectedFrozen $unsoldBuyerOneBefore.Frozen | Out-Null
+    Wait-SmokeWallet `
+        -Label 'unsold-buyer2-released' `
+        -Authorization $buyerTwoAuthorization `
+        -ExpectedAvailable $unsoldBuyerTwoBefore.Available `
+        -ExpectedFrozen $unsoldBuyerTwoBefore.Frozen | Out-Null
+    Assert-NoAuctionOrder `
+        -Label 'unsold-seller' `
+        -Path '/api/orders/sales?page=1&size=50' `
+        -AuctionId $unsold.AuctionId `
+        -Authorization $sellerAuthorization
+    Assert-NoAuctionOrder `
+        -Label 'unsold-buyer1' `
+        -Path '/api/orders/mine?page=1&size=50' `
+        -AuctionId $unsold.AuctionId `
+        -Authorization $buyerOneAuthorization
+    Assert-NoAuctionOrder `
+        -Label 'unsold-buyer2' `
+        -Path '/api/orders/mine?page=1&size=50' `
+        -AuctionId $unsold.AuctionId `
+        -Authorization $buyerTwoAuthorization
+    Write-Host "[PASS] reliable-trade-unsold itemId=$($unsold.ItemId) auctionId=$($unsold.AuctionId)"
+    if ($ReliableTradeCoverage -eq 'SoldAndUnsold') {
+        Write-Host 'TideBid reliable-trade sold/payment and unsold/release smoke tests passed.'
+        return
+    }
+
+    $timeoutSellerBefore = Get-SmokeWallet -Label 'timeout-seller-before' -Authorization $sellerAuthorization
+    $timeoutBuyerOneBefore = Get-SmokeWallet -Label 'timeout-buyer1-before' -Authorization $buyerOneAuthorization
+    $timeoutBuyerTwoBefore = Get-SmokeWallet -Label 'timeout-buyer2-before' -Authorization $buyerTwoAuthorization
+    $timeoutAuction = New-ApprovedSmokeAuction `
+        -Label 'timeout' `
+        -Suffix $suffix `
+        -SellerAuthorization $sellerAuthorization `
+        -AdminAuthorization $adminAuthorization `
+        -ImageBytes $imageBytes
+    Register-SmokeBuyerForAuction `
+        -Label 'timeout-buyer1' `
+        -AuctionId $timeoutAuction.AuctionId `
+        -Authorization $buyerOneAuthorization `
+        -Suffix $suffix | Out-Null
+    Register-SmokeBuyerForAuction `
+        -Label 'timeout-buyer2' `
+        -AuctionId $timeoutAuction.AuctionId `
+        -Authorization $buyerTwoAuthorization `
+        -Suffix $suffix | Out-Null
+    Wait-AuctionOpen -AuctionId $timeoutAuction.AuctionId -Authorization $buyerOneAuthorization | Out-Null
+
+    $timeoutBidOne = Invoke-SmokeRequest `
+        -Step 'timeout-buyer1-bid' `
+        -Method POST `
+        -Path '/api/bids' `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $buyerOneAuthorization; 'X-Request-Id' = "smoke-timeout-bid1-$($suffix.Substring(0, 8))" } `
+        -Body @{ auctionId = $timeoutAuction.AuctionId; amount = '100.00' } `
+        -ApiEnvelope
+    Assert-Value -Condition ([long]$timeoutBidOne.data.sequenceNo -eq 1) -Message 'timeout buyer1 bid sequence is not 1'
+    $timeoutBidTwo = Invoke-SmokeRequest `
+        -Step 'timeout-buyer2-bid' `
+        -Method POST `
+        -Path '/api/bids' `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $buyerTwoAuthorization; 'X-Request-Id' = "smoke-timeout-bid2-$($suffix.Substring(0, 8))" } `
+        -Body @{ auctionId = $timeoutAuction.AuctionId; amount = '110.00' } `
+        -ApiEnvelope
+    Assert-Value -Condition ([long]$timeoutBidTwo.data.sequenceNo -eq 2) -Message 'timeout buyer2 bid sequence is not 2'
+
+    Wait-AuctionTerminal `
+        -AuctionId $timeoutAuction.AuctionId `
+        -Authorization $buyerTwoAuthorization `
+        -ExpectedStatus 'CLOSED_SOLD' | Out-Null
+    $timeoutPending = Wait-BuyerOrder `
+        -AuctionId $timeoutAuction.AuctionId `
+        -Authorization $buyerTwoAuthorization `
+        -ExpectedStatuses @('PENDING_PAYMENT')
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $timeoutPending.capturedDepositAmount 'timeout capturedDepositAmount') -eq [decimal]50.00) `
+        -Message 'timeout order did not capture the winner deposit'
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $timeoutPending.payableAmount 'timeout payableAmount') -eq [decimal]60.00) `
+        -Message 'timeout order payable amount is not 60.00'
+
+    $timedOutOrder = Wait-BuyerOrder `
+        -AuctionId $timeoutAuction.AuctionId `
+        -Authorization $buyerTwoAuthorization `
+        -ExpectedStatuses @('PAYMENT_TIMEOUT') `
+        -ExpectedSettlementStatus 'COMPLETED'
+    Assert-Value -Condition ($null -ne $timedOutOrder.timedOutAt) -Message 'timed-out order has no timedOutAt timestamp'
+    Assert-Value -Condition ($null -eq $timedOutOrder.paidAt) -Message 'timed-out order unexpectedly has a paidAt timestamp'
+    Assert-Value -Condition (-not [bool]$timedOutOrder.paymentEligible) -Message 'timed-out order remains payment eligible'
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $timedOutOrder.sellerReceivableAmount 'timeout sellerReceivableAmount') -eq [decimal]50.00) `
+        -Message 'timeout seller compensation is not exactly the captured deposit'
+
+    Wait-SmokeWallet `
+        -Label 'timeout-seller-compensated' `
+        -Authorization $sellerAuthorization `
+        -ExpectedAvailable ($timeoutSellerBefore.Available + [decimal]50.00) `
+        -ExpectedFrozen $timeoutSellerBefore.Frozen | Out-Null
+    Wait-SmokeWallet `
+        -Label 'timeout-loser-released' `
+        -Authorization $buyerOneAuthorization `
+        -ExpectedAvailable $timeoutBuyerOneBefore.Available `
+        -ExpectedFrozen $timeoutBuyerOneBefore.Frozen | Out-Null
+    Wait-SmokeWallet `
+        -Label 'timeout-winner-forfeited' `
+        -Authorization $buyerTwoAuthorization `
+        -ExpectedAvailable ($timeoutBuyerTwoBefore.Available - [decimal]50.00) `
+        -ExpectedFrozen $timeoutBuyerTwoBefore.Frozen | Out-Null
+
+    Write-Host "[PASS] reliable-trade-payment-timeout itemId=$($timeoutAuction.ItemId) auctionId=$($timeoutAuction.AuctionId) orderId=$([string]$timedOutOrder.orderId)"
+    Write-Host "TideBid reliable-trade full smoke test passed. sellerId=$userId buyer1Id=$($buyerOne.UserId) buyer2Id=$($buyerTwo.UserId)."
 } catch {
     throw "TideBid smoke test failed at step '$script:currentStep' traceId=$script:currentTraceId. $($_.Exception.Message)"
 }
