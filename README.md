@@ -424,6 +424,25 @@ it does not mutate database rows by hand. ACK-before-mark, consumer rollback, po
 Account-debit-unknown cases remain automated integration-test/final-acceptance exercises rather
 than unsafe production-style injection endpoints.
 
+To verify the payment-deadline database fallback, keep `TIDEBID_TRADE_PAYMENT_WINDOW=2m`, run the
+full smoke with a checkpoint, and suspend only the Broker when the timeout order reaches
+`PENDING_PAYMENT`:
+
+```powershell
+# Terminal A
+.\scripts\smoke.ps1 -ReliableTrade -ReliableTradeCoverage All `
+    -ReliableTradeTimeoutSeconds 300 -PauseAfterTimeoutPending
+
+# Terminal B after the checkpoint printed by Terminal A
+.\scripts\rocketmq-outage.ps1 -Action Suspend -AcknowledgeImpact
+# Wait past the printed paymentDeadline. The order must become PAYMENT_TIMEOUT while seller
+# settlement remains PENDING because the credit event cannot yet be delivered.
+.\scripts\outbox-status.ps1
+.\scripts\rocketmq-outage.ps1 -Action Resume
+.\scripts\outbox-status.ps1 -AssertHealthy
+# Return to Terminal A and press Enter; final wallet and COMPLETED settlement assertions continue.
+```
+
 After the drill, audit the latest application run without printing any matched secret value:
 
 ```powershell

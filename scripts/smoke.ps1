@@ -36,7 +36,10 @@ param(
     [switch]$PauseBeforeFirstBid,
 
     [Parameter()]
-    [switch]$PauseAfterSecondBid
+    [switch]$PauseAfterSecondBid,
+
+    [Parameter()]
+    [switch]$PauseAfterTimeoutPending
 )
 
 Set-StrictMode -Version Latest
@@ -48,6 +51,9 @@ $invariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ($ReliableTrade) {
     $AuctionCore = $true
+}
+if ($PauseAfterTimeoutPending -and (-not $ReliableTrade -or $ReliableTradeCoverage -ne 'All')) {
+    throw 'PauseAfterTimeoutPending requires -ReliableTrade -ReliableTradeCoverage All.'
 }
 
 function Resolve-GatewayBaseUri {
@@ -1281,6 +1287,13 @@ try {
         -Message 'timeout order did not capture the winner deposit'
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $timeoutPending.payableAmount 'timeout payableAmount') -eq [decimal]60.00) `
         -Message 'timeout order payable amount is not 60.00'
+
+    if ($PauseAfterTimeoutPending) {
+        $timeoutDeadlineUtc = ([DateTimeOffset]$timeoutPending.paymentDeadline).ToUniversalTime().ToString('O')
+        Write-Host "Fault-drill checkpoint reached with timeout order PENDING_PAYMENT. orderId=$([string]$timeoutPending.orderId) paymentDeadlineUtc=$timeoutDeadlineUtc"
+        Write-Host 'Suspend RocketMQ, wait past paymentDeadline, verify PAYMENT_TIMEOUT/PENDING settlement in MySQL, restore RocketMQ, then return here.'
+        Read-Host 'Press Enter to continue timeout settlement and wallet assertions' | Out-Null
+    }
 
     $timedOutOrder = Wait-BuyerOrder `
         -AuctionId $timeoutAuction.AuctionId `
