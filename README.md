@@ -517,6 +517,31 @@ The Account consumer may receive the request more than once after recovery. The 
 the unique `wallet_credit.order_id`, Inbox deduplication and ledger business number prevent duplicate
 seller balance changes. Always restore both Account and the Broker if the drill is interrupted.
 
+Run the bounded local poison-message drill to verify real Broker retries and DLQ routing. The script
+uses a unique UUID key, sends invalid JSON only to the seller-credit subscription, temporarily uses
+two short retries, and restores the configured 16-retry group baseline in a `finally` block:
+
+```powershell
+.\scripts\rocketmq-dlq-drill.ps1 -AcknowledgeImpact
+```
+
+Success requires at least three rejected deliveries with the same RocketMQ message ID, a matching
+record in `%DLQ%tidebid-account-credit-v1`, and a passing topology check after restoration. The
+invalid message cannot reach the Inbox or any wallet mutation because envelope decoding fails first.
+
+Use a completed paid order from the seller-settlement drill to reproduce the other Outbox ambiguity:
+the Broker accepted an event but the producer crashed before marking its local row. This guarded
+local script reopens only that order's published seller-credit lease, preserving its event and
+payload, and waits for the normal Trade publisher to reclaim it:
+
+```powershell
+.\scripts\outbox-ack-drill.ps1 -OrderId '<completed-orderId>' -AcknowledgeImpact
+```
+
+It passes only when the Topic gains another copy with the same `eventId`, Outbox attempts increase
+by exactly one, and Account's Inbox count, wallet credit, ledger count, balance and wallet version
+all remain unchanged.
+
 After the drill, audit the latest application run without printing any matched secret value:
 
 ```powershell
