@@ -89,6 +89,42 @@ class AuctionBidQueryServiceTest {
     }
 
     @Test
+    void keepsTheWinningBidHistoryVisibleAfterTheAuctionCloses() {
+        AuctionSession closed = closedSoldSession();
+        when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(closed));
+        when(lifecycleService.advanceToCurrentState(closed)).thenReturn(closed);
+        when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(approvedItem()));
+        when(sessionRepository.findBidsByAuction(AUCTION_ID, 0, 20)).thenReturn(
+                new AuctionSessionRepository.BidPage(List.of(
+                        bid(302L, REQUESTER_ID, 3L, "130.00", "120.00")
+                ), 1L)
+        );
+
+        AuctionBidQueryService.BidPage result = queryService.find(REQUESTER_ID, AUCTION_ID, 1, 20);
+
+        assertThat(result.total()).isEqualTo(1);
+        assertThat(result.items()).singleElement().satisfies(bid -> {
+            assertThat(bid.sequenceNo()).isEqualTo(3L);
+            assertThat(bid.mine()).isTrue();
+        });
+    }
+
+    @Test
+    void keepsAnEmptyBidHistoryVisibleAfterAnAuctionClosesUnsold() {
+        AuctionSession closed = closedUnsoldSession();
+        when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(closed));
+        when(lifecycleService.advanceToCurrentState(closed)).thenReturn(closed);
+        when(itemRepository.findItemById(ITEM_ID)).thenReturn(Optional.of(approvedItem()));
+        when(sessionRepository.findBidsByAuction(AUCTION_ID, 0, 20))
+                .thenReturn(new AuctionSessionRepository.BidPage(List.of(), 0));
+
+        AuctionBidQueryService.BidPage result = queryService.find(REQUESTER_ID, AUCTION_ID, 1, 20);
+
+        assertThat(result.items()).isEmpty();
+        assertThat(result.total()).isZero();
+    }
+
+    @Test
     void rejectsInvalidPaginationBeforeReadingPersistence() {
         assertThatThrownBy(() -> queryService.find(REQUESTER_ID, AUCTION_ID, 0, 20))
                 .isInstanceOfSatisfying(BusinessException.class, exception ->
@@ -136,6 +172,28 @@ class AuctionBidQueryServiceTest {
                 new BigDecimal("130.00"), 88L, 3L,
                 NOW.minusSeconds(60), NOW.plusSeconds(3600), status, 4L,
                 NOW.minusSeconds(3600), NOW
+        );
+    }
+
+    private static AuctionSession closedSoldSession() {
+        return new AuctionSession(
+                AUCTION_ID, ITEM_ID, SELLER_ID,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                new BigDecimal("130.00"), REQUESTER_ID, 3L,
+                NOW.minusSeconds(3600), NOW.minusSeconds(60), AuctionSessionStatus.CLOSED_SOLD,
+                REQUESTER_ID, 302L, new BigDecimal("130.00"), NOW.minusSeconds(30),
+                5L, NOW.minusSeconds(7200), NOW.minusSeconds(30)
+        );
+    }
+
+    private static AuctionSession closedUnsoldSession() {
+        return new AuctionSession(
+                AUCTION_ID, ITEM_ID, SELLER_ID,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0L,
+                NOW.minusSeconds(3600), NOW.minusSeconds(60), AuctionSessionStatus.CLOSED_UNSOLD,
+                null, null, null, NOW.minusSeconds(30),
+                3L, NOW.minusSeconds(7200), NOW.minusSeconds(30)
         );
     }
 

@@ -27,7 +27,9 @@ public class AuctionBidQueryService {
     private static final Set<AuctionSessionStatus> VISIBLE_STATUSES = Set.of(
             AuctionSessionStatus.SCHEDULED,
             AuctionSessionStatus.OPEN,
-            AuctionSessionStatus.AWAITING_CLOSE
+            AuctionSessionStatus.AWAITING_CLOSE,
+            AuctionSessionStatus.CLOSED_SOLD,
+            AuctionSessionStatus.CLOSED_UNSOLD
     );
 
     private final AuctionSessionRepository sessionRepository;

@@ -405,6 +405,7 @@ Outbox/database-fallback exercise uses two terminals:
 ```powershell
 # Terminal A: pause immediately before the first bid and again after both bids commit.
 .\scripts\smoke.ps1 -ReliableTrade -ReliableTradeCoverage Sold `
+    -ReliableTradeAuctionDurationSeconds 180 `
     -PauseBeforeFirstBid -PauseAfterSecondBid
 
 # Terminal B at the first checkpoint:

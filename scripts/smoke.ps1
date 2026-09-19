@@ -29,6 +29,10 @@ param(
     [int]$ReliableTradeTimeoutSeconds = 180,
 
     [Parameter()]
+    [ValidateRange(45, 600)]
+    [int]$ReliableTradeAuctionDurationSeconds = 45,
+
+    [Parameter()]
     [switch]$PauseBeforeFirstBid,
 
     [Parameter()]
@@ -861,7 +865,11 @@ try {
     } else {
         [DateTimeOffset]::UtcNow.AddMinutes(2)
     }
-    $endAt = if ($ReliableTrade) { $startAt.AddSeconds(45) } else { $startAt.AddMinutes(10) }
+    $endAt = if ($ReliableTrade) {
+        $startAt.AddSeconds($ReliableTradeAuctionDurationSeconds)
+    } else {
+        $startAt.AddMinutes(10)
+    }
     $draft = Invoke-SmokeRequest `
         -Step 'create-auction-draft' `
         -Method POST `
@@ -1086,6 +1094,21 @@ try {
         -Message 'closed auction final price is not 110.00'
     Assert-Value -Condition ([bool]$closed.wonByCurrentUser) `
         -Message 'buyer2 is not marked as the winner after closing'
+
+    $closedHistory = Invoke-SmokeRequest `
+        -Step 'verify-closed-bid-history' `
+        -Method GET `
+        -Path "/api/auctions/$auctionId/bids?page=1&size=20" `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $buyerTwoAuthorization } `
+        -ApiEnvelope
+    Assert-Value -Condition ([long]$closedHistory.data.total -eq 2) `
+        -Message 'closed auction bid history is not available or has changed'
+    $closedHistoryItems = @($closedHistory.data.items)
+    Assert-Value -Condition ($closedHistoryItems.Count -eq 2) `
+        -Message 'closed auction bid history does not contain exactly two records'
+    Assert-Value -Condition ([long]$closedHistoryItems[0].sequenceNo -eq 2 -and [bool]$closedHistoryItems[0].mine) `
+        -Message 'closed auction bid history does not preserve the winning bid'
 
     $pendingOrder = Wait-BuyerOrder `
         -AuctionId $auctionId `
