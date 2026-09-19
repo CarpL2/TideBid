@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -56,6 +57,40 @@ class AuctionOutboxPublisherTest {
         assertThat(meters.counter("tidebid.outbox.publish", "service", "auction", "outcome", "failed")
                 .count()).isEqualTo(1);
         verify(repository).markFailed(message.eventId(), message.leaseToken(), "ILLEGALSTATEEXCEPTION", NOW);
+    }
+
+    @Test
+    void republishesAfterBrokerAckWhenTheLocalPublishedMarkFails() {
+        JdbcAuctionOutboxRepository repository = mock(JdbcAuctionOutboxRepository.class);
+        AuctionRocketMqTransport transport = mock(AuctionRocketMqTransport.class);
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
+        var firstLease = message("lease-ack-lost-1");
+        var retryLease = message("lease-ack-lost-2");
+        when(repository.claimBatch("auction-test", NOW))
+                .thenReturn(List.of(firstLease))
+                .thenReturn(List.of(retryLease));
+        when(repository.diagnostics(NOW)).thenReturn(
+                new JdbcAuctionOutboxRepository.OutboxDiagnostics(1, 0, 0))
+                .thenReturn(new JdbcAuctionOutboxRepository.OutboxDiagnostics(0, 0, 0));
+        when(transport.send(firstLease)).thenReturn("broker-message-first");
+        when(transport.send(retryLease)).thenReturn("broker-message-retry");
+        when(repository.markPublished(firstLease.eventId(), firstLease.leaseToken(), NOW))
+                .thenThrow(new IllegalStateException("database unavailable after broker acknowledgement"));
+        when(repository.markFailed(firstLease.eventId(), firstLease.leaseToken(),
+                "ILLEGALSTATEEXCEPTION", NOW))
+                .thenReturn(JdbcAuctionOutboxRepository.FailureResult.RETRY_SCHEDULED);
+        when(repository.markPublished(retryLease.eventId(), retryLease.leaseToken(), NOW)).thenReturn(true);
+        var publisher = new AuctionOutboxPublisher(repository, transport, meters,
+                Clock.fixed(NOW, ZoneOffset.UTC), "auction-test");
+
+        assertThat(publisher.publishDue()).isZero();
+        assertThat(publisher.publishDue()).isOne();
+        verify(transport, times(2)).send(
+                org.mockito.ArgumentMatchers.any(JdbcAuctionOutboxRepository.OutboxEntity.class));
+        assertThat(meters.counter("tidebid.outbox.publish", "service", "auction", "outcome", "failed")
+                .count()).isEqualTo(1);
+        assertThat(meters.counter("tidebid.outbox.publish", "service", "auction", "outcome", "published")
+                .count()).isEqualTo(1);
     }
 
     private static JdbcAuctionOutboxRepository.OutboxEntity message(String leaseToken) {

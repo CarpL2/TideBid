@@ -111,6 +111,19 @@ class AuctionRocketMqTransportTest {
                 "consumerGroup", "test-group", "outcome", "failure").count()).isEqualTo(1);
     }
 
+    @Test
+    void neverAcknowledgesAPermanentPoisonMessageEvenAtALateDeliveryAttempt() {
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
+        AtomicInteger calls = new AtomicInteger();
+        var transport = transport(mock(ClientServiceProvider.class), List.of(), meters);
+
+        assertThat(transport.consumeSynchronously(handler(true, calls), messageView(17)))
+                .isEqualTo(ConsumeResult.FAILURE);
+        assertThat(calls).hasValue(1);
+        assertThat(meters.counter("tidebid.rocketmq.consume", "service", "auction",
+                "consumerGroup", "test-group", "outcome", "failure").count()).isEqualTo(1);
+    }
+
     private static AuctionRocketMqTransport transport(ClientServiceProvider provider,
                                                        List<AuctionRocketMqTransport.InboundHandler> handlers,
                                                        SimpleMeterRegistry meters) {
@@ -138,6 +151,10 @@ class AuctionRocketMqTransportTest {
     }
 
     private static MessageView messageView() {
+        return messageView(1);
+    }
+
+    private static MessageView messageView(int deliveryAttempt) {
         MessageView view = mock(MessageView.class);
         MessageId id = mock(MessageId.class);
         when(id.toString()).thenReturn("message-1");
@@ -147,7 +164,7 @@ class AuctionRocketMqTransportTest {
         when(view.getProperties()).thenReturn(Map.of("eventId", "event-1"));
         when(view.getTag()).thenReturn(Optional.of("auction.closed"));
         when(view.getKeys()).thenReturn(List.of("event-1"));
-        when(view.getDeliveryAttempt()).thenReturn(1);
+        when(view.getDeliveryAttempt()).thenReturn(deliveryAttempt);
         return view;
     }
 
