@@ -375,6 +375,66 @@ first image pull. Verify the persisted RocketMQ Topic types and Consumer Group s
 .\scripts\check-rocketmq-topology.ps1
 ```
 
+Inspect messaging and trade state without selecting event payloads, credentials, user details or
+presigned URLs:
+
+```powershell
+.\scripts\outbox-status.ps1
+.\scripts\outbox-status.ps1 -AssertHealthy
+```
+
+The first command reports per-service Outbox backlog/DEAD counts, safe error codes, Inbox counts,
+auction/Hold/order/payment status totals and pending seller settlement totals. `-AssertHealthy`
+additionally exits nonzero when any due Outbox row or DEAD message remains; future delayed commands
+are not treated as backlog.
+
+For a controlled local Broker outage drill, use only the scoped helper below. It addresses the
+`rocketmq-broker` service from this repository's Compose file, never removes a container or volume,
+and requires an explicit acknowledgement before interruption:
+
+```powershell
+.\scripts\rocketmq-outage.ps1 -Action Status
+.\scripts\rocketmq-outage.ps1 -Action Suspend -AcknowledgeImpact
+.\scripts\rocketmq-outage.ps1 -Action Resume
+```
+
+`Resume` delegates to the idempotent infrastructure startup and then revalidates every persisted
+Topic and Consumer Group. Always run it even when a drill assertion fails. A repeatable
+Outbox/database-fallback exercise uses two terminals:
+
+```powershell
+# Terminal A: pause immediately before the first bid and again after both bids commit.
+.\scripts\smoke.ps1 -ReliableTrade -ReliableTradeCoverage Sold `
+    -PauseBeforeFirstBid -PauseAfterSecondBid
+
+# Terminal B at the first checkpoint:
+.\scripts\outbox-status.ps1
+.\scripts\rocketmq-outage.ps1 -Action Suspend -AcknowledgeImpact
+# Return to A and submit both bids. At the second checkpoint inspect the due backlog,
+# leave the Broker down past endAt if testing the Auction database fallback, then restore it:
+.\scripts\outbox-status.ps1
+.\scripts\rocketmq-outage.ps1 -Action Resume
+.\scripts\outbox-status.ps1 -AssertHealthy
+# Return to A; the normal sold/payment assertions must still finish exactly once.
+```
+
+This drill deliberately changes local runtime availability and creates normal smoke business data;
+it does not mutate database rows by hand. ACK-before-mark, consumer rollback, poison/DLQ and
+Account-debit-unknown cases remain automated integration-test/final-acceptance exercises rather
+than unsafe production-style injection endpoints.
+
+After the drill, audit the latest application run without printing any matched secret value:
+
+```powershell
+.\scripts\audit-runtime-logs.ps1
+# Or inspect a specific preserved run:
+.\scripts\audit-runtime-logs.ps1 -LogDirectory .runtime/apps/logs/<timestamp>
+```
+
+The audit compares logs with configured sensitive environment values and detects bearer
+credentials, OSS signature query parameters and private-key material. It exits nonzero and reports
+only the affected file and finding category when a leak is detected.
+
 The first pull is large because Nacos and RocketMQ are Java images. Nacos is available at
 `http://127.0.0.1:8080`, and RocketMQ Dashboard at `http://127.0.0.1:8088`. Host Java applications
 use the RocketMQ Proxy endpoint `127.0.0.1:8081`, not the Broker's internal Docker hostname.

@@ -26,7 +26,13 @@ param(
 
     [Parameter()]
     [ValidateRange(30, 600)]
-    [int]$ReliableTradeTimeoutSeconds = 180
+    [int]$ReliableTradeTimeoutSeconds = 180,
+
+    [Parameter()]
+    [switch]$PauseBeforeFirstBid,
+
+    [Parameter()]
+    [switch]$PauseAfterSecondBid
 )
 
 Set-StrictMode -Version Latest
@@ -988,6 +994,12 @@ try {
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $opened.minimumNextBid 'minimumNextBid') -eq [decimal]100.00) `
         -Message 'first minimum bid is not the start price'
 
+    if ($PauseBeforeFirstBid) {
+        Write-Host 'Fault-drill checkpoint reached before the first bid.'
+        Write-Host 'In another terminal, suspend or restore RocketMQ as required, then return here.'
+        Read-Host 'Press Enter to submit the bid' | Out-Null
+    }
+
     $buyerOneBidRequest = "smoke-bid1-$($suffix.Substring(0, 12))"
     $buyerOneBid = Invoke-SmokeRequest `
         -Step 'buyer1-bid' `
@@ -1022,6 +1034,12 @@ try {
         -Body @{ auctionId = $auctionId; amount = '110.00' } `
         -ApiEnvelope
     Assert-Value -Condition ([long]$buyerTwoBid.data.sequenceNo -eq 2) -Message 'buyer2 bid sequence is not 2'
+
+    if ($PauseAfterSecondBid) {
+        Write-Host 'Fault-drill checkpoint reached after both bids committed to MySQL.'
+        Write-Host 'Inspect Outbox state, optionally wait past endAt, restore RocketMQ, then return here.'
+        Read-Host 'Press Enter to continue terminal-state and downstream assertions' | Out-Null
+    }
 
     $finalDetail = Invoke-SmokeRequest `
         -Step 'verify-final-auction' `
