@@ -249,8 +249,11 @@ onBeforeUnmount(cancelRegistrationPoll)
             <h1>{{ detail.title }}</h1>
             <p class="detail-summary__description">{{ detail.description }}</p>
             <div class="detail-current-price">
-              <span>当前展示价</span><strong>{{ formatMoney(detail.displayPrice) }}</strong>
-              <small>下一笔最低 {{ formatMoney(detail.minimumNextBid) }}</small>
+              <span>{{ detail.sessionStatus === 'CLOSED_SOLD' ? '成交价' : detail.sessionStatus === 'CLOSED_UNSOLD' ? '最终结果' : '当前展示价' }}</span>
+              <strong>{{ detail.sessionStatus === 'CLOSED_UNSOLD' ? '流拍' : formatMoney(detail.finalPrice ?? detail.displayPrice) }}</strong>
+              <small v-if="detail.sessionStatus === 'CLOSED_SOLD'">{{ detail.wonByCurrentUser ? '恭喜，你是本场买家' : '本场竞价已成交' }}</small>
+              <small v-else-if="detail.sessionStatus === 'CLOSED_UNSOLD'">本场没有产生有效成交</small>
+              <small v-else>下一笔最低 {{ formatMoney(detail.minimumNextBid) }}</small>
             </div>
             <dl class="detail-facts">
               <div><dt>起拍价</dt><dd>{{ formatMoney(detail.startPrice) }}</dd></div>
@@ -259,7 +262,16 @@ onBeforeUnmount(cancelRegistrationPoll)
               <div><dt>报价次数</dt><dd>{{ detail.bidCount }}</dd></div>
               <div><dt>开始时间</dt><dd>{{ formatShanghaiTime(detail.startAt) }}</dd></div>
               <div><dt>结束时间</dt><dd>{{ formatShanghaiTime(detail.endAt) }}</dd></div>
+              <div v-if="detail.closedAt"><dt>关拍时间</dt><dd>{{ formatShanghaiTime(detail.closedAt) }}</dd></div>
             </dl>
+
+            <div v-if="detail.sessionStatus === 'CLOSED_SOLD' || detail.sessionStatus === 'CLOSED_UNSOLD'" class="auction-result-notice">
+              <strong>{{ detail.sessionStatus === 'CLOSED_SOLD' ? '竞价已成交' : '竞价已流拍' }}</strong>
+              <span v-if="detail.wonByCurrentUser">订单会在保证金结算后出现在“我的订单”。</span>
+              <span v-else-if="detail.ownedByCurrentUser && detail.sessionStatus === 'CLOSED_SOLD'">可前往“我的订单”的卖出视图查看订单和入账状态。</span>
+              <span v-else>此处展示 Auction 服务记录的最终关拍结果。</span>
+              <RouterLink v-if="detail.wonByCurrentUser || detail.ownedByCurrentUser" :to="{ name: 'my-orders', query: detail.ownedByCurrentUser ? { view: 'sales' } : {} }">查看相关订单</RouterLink>
+            </div>
 
             <section class="auction-action-panel" aria-label="报名与出价">
               <ApiErrorNotice :error="actionError" />
@@ -294,7 +306,7 @@ onBeforeUnmount(cancelRegistrationPoll)
               </template>
             </section>
             <ElButton :loading="loading" plain @click="loadDetail()">手动刷新最终状态</ElButton>
-            <p class="detail-refresh-note">阶段 02 不提供实时推送；其他用户的价格变化以手动刷新为准。</p>
+            <p class="detail-refresh-note">阶段 03 不提供实时推送；价格和关拍结果以手动刷新为准。</p>
           </article>
         </section>
 

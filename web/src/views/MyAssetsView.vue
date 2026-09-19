@@ -6,7 +6,7 @@ import { getMyAuctionAssets, submitAuctionAsset } from '@/api/auction'
 import { normalizeApiError, type ApiError } from '@/api/errors'
 import ApiErrorNotice from '@/components/ApiErrorNotice.vue'
 import AppHeader from '@/components/AppHeader.vue'
-import { conditionLabel, formatMoney, formatShanghaiTime, reviewStatusLabel } from '@/features/auction/presentation'
+import { conditionLabel, formatMoney, formatShanghaiTime, reviewStatusLabel, sessionStatusLabel } from '@/features/auction/presentation'
 import type { AuctionAssetSummary } from '@/types/auction'
 
 const PAGE_SIZE = 12
@@ -80,6 +80,7 @@ onMounted(() => loadAssets())
           <div class="seller-asset-row__main">
             <div class="seller-asset-row__tags">
               <ElTag effect="plain">{{ reviewStatusLabel(item.reviewStatus) }}</ElTag>
+              <ElTag effect="plain">{{ sessionStatusLabel(item.sessionStatus) }}</ElTag>
               <span>{{ item.category }} · {{ conditionLabel(item.itemCondition) }}</span>
             </div>
             <h2>{{ item.title }}</h2>
@@ -87,7 +88,7 @@ onMounted(() => loadAssets())
           </div>
           <dl class="seller-asset-row__facts">
             <div><dt>起拍价</dt><dd>{{ formatMoney(item.startPrice) }}</dd></div>
-            <div><dt>报价</dt><dd>{{ item.currentPrice ? formatMoney(item.currentPrice) : '暂无' }}</dd></div>
+            <div><dt>{{ item.sessionStatus === 'CLOSED_SOLD' ? '成交价' : '报价' }}</dt><dd>{{ item.sessionStatus === 'CLOSED_UNSOLD' ? '流拍' : item.currentPrice ? formatMoney(item.currentPrice) : '暂无' }}</dd></div>
           </dl>
           <div class="seller-asset-row__actions">
             <RouterLink

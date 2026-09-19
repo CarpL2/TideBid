@@ -40,6 +40,12 @@ const USER_MESSAGES: Record<string, string> = {
   AUCTION_BID_CONFLICT: '价格刚刚发生变化，请按最新最低报价重试。',
   AUCTION_IDEMPOTENCY_CONFLICT: '该请求编号已用于另一笔报价，请重新操作。',
   AUCTION_ACCOUNT_SERVICE_UNAVAILABLE: '保证金服务暂时不可用，报名状态将在后台恢复。',
+  TRADE_ORDER_NOT_FOUND: '订单不存在或已经不可访问。',
+  TRADE_ORDER_FORBIDDEN: '你不能查看或操作这笔订单。',
+  TRADE_ORDER_NOT_PAYABLE: '订单当前不能支付，请刷新订单状态。',
+  TRADE_PAYMENT_DEADLINE_EXPIRED: '订单支付期限已过，不能继续支付。',
+  TRADE_PAYMENT_IDEMPOTENCY_CONFLICT: '本次支付请求与已有记录冲突，请刷新后重试。',
+  TRADE_PAYMENT_CONCURRENT_CONFLICT: '另一笔支付正在处理中，请稍后刷新结果。',
 }
 
 export interface ApiErrorOptions {

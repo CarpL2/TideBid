@@ -38,6 +38,7 @@ describe('account dashboard', () => {
     expect(wrapper.text()).toContain('10,000.00')
     expect(wrapper.text()).toContain('trace-wallet')
     expect(wrapper.get('.app-nav a[href="/auctions"]').text()).toContain('竞价大厅')
-    expect(wrapper.findAll('.app-nav__item--disabled')).toHaveLength(1)
+    expect(wrapper.get('.app-nav a[href="/orders"]').text()).toContain('我的订单')
+    expect(wrapper.findAll('.app-nav__item--disabled')).toHaveLength(0)
   })
 })

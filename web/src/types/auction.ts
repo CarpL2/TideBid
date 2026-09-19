@@ -1,6 +1,11 @@
 export type DecimalValue = string | number
 
-export type AuctionSessionStatus = 'SCHEDULED' | 'OPEN' | 'AWAITING_CLOSE'
+export type AuctionSessionStatus =
+  | 'SCHEDULED'
+  | 'OPEN'
+  | 'AWAITING_CLOSE'
+  | 'CLOSED_SOLD'
+  | 'CLOSED_UNSOLD'
 export type AuctionItemCondition = 'NEW' | 'LIKE_NEW' | 'GOOD' | 'FAIR'
 export type AuctionRegistrationStatus = 'PENDING_HOLD' | 'REGISTERED' | 'FAILED'
 export type AuctionReviewStatus = 'DRAFT' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED'
@@ -35,6 +40,8 @@ export interface AuctionLobbyItem {
   bidCount: number
   startAt: string
   endAt: string
+  finalPrice: DecimalValue | null
+  closedAt: string | null
   coverImage: AuctionCoverImage | null
 }
 
@@ -94,6 +101,9 @@ export interface AuctionDetail {
   bidCount: number
   startAt: string
   endAt: string
+  finalPrice: DecimalValue | null
+  closedAt: string | null
+  wonByCurrentUser: boolean
   ownedByCurrentUser: boolean
   images: AuctionImage[]
   myRegistration: AuctionRegistrationSummary | null

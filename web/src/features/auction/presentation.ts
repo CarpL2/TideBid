@@ -10,6 +10,8 @@ const SESSION_LABELS: Record<AuctionSessionStatus, string> = {
   SCHEDULED: '即将开始',
   OPEN: '竞价中',
   AWAITING_CLOSE: '等待关拍',
+  CLOSED_SOLD: '已成交',
+  CLOSED_UNSOLD: '已流拍',
 }
 
 const CONDITION_LABELS: Record<AuctionItemCondition, string> = {
@@ -42,8 +44,8 @@ export const AUCTION_CATEGORY_OPTIONS = [
   { value: 'OTHER', label: '其他' },
 ] as const
 
-export function sessionStatusLabel(status: AuctionSessionStatus): string {
-  return SESSION_LABELS[status]
+export function sessionStatusLabel(status: AuctionSessionStatus | 'DRAFT'): string {
+  return status === 'DRAFT' ? '未排期' : SESSION_LABELS[status]
 }
 
 export function conditionLabel(condition: AuctionItemCondition): string {

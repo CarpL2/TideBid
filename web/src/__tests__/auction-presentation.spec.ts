@@ -22,6 +22,8 @@ describe('auction presentation', () => {
 
   it('maps domain enums to stable Chinese labels', () => {
     expect(sessionStatusLabel('OPEN')).toBe('竞价中')
+    expect(sessionStatusLabel('CLOSED_SOLD')).toBe('已成交')
+    expect(sessionStatusLabel('CLOSED_UNSOLD')).toBe('已流拍')
     expect(conditionLabel('LIKE_NEW')).toBe('几乎全新')
     expect(registrationStatusLabel('PENDING_HOLD')).toBe('保证金处理中')
   })

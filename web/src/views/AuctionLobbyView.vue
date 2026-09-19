@@ -87,14 +87,15 @@ onMounted(() => loadLobby())
             </div>
             <h2>{{ item.title }}</h2>
             <div class="auction-card__price">
-              <span>当前展示价</span>
-              <strong>{{ formatMoney(item.displayPrice) }}</strong>
+              <span>{{ item.sessionStatus === 'CLOSED_SOLD' ? '成交价' : item.sessionStatus === 'CLOSED_UNSOLD' ? '最终结果' : '当前展示价' }}</span>
+              <strong>{{ item.sessionStatus === 'CLOSED_UNSOLD' ? '流拍' : formatMoney(item.finalPrice ?? item.displayPrice) }}</strong>
             </div>
             <dl>
-              <div><dt>下一最低价</dt><dd>{{ formatMoney(item.minimumNextBid) }}</dd></div>
+              <div v-if="item.sessionStatus === 'CLOSED_SOLD' || item.sessionStatus === 'CLOSED_UNSOLD'"><dt>关拍时间</dt><dd>{{ formatShanghaiTime(item.closedAt) }}</dd></div>
+              <div v-else><dt>下一最低价</dt><dd>{{ formatMoney(item.minimumNextBid) }}</dd></div>
               <div><dt>报价次数</dt><dd>{{ item.bidCount }}</dd></div>
             </dl>
-            <p class="auction-card__time">{{ formatShanghaiTime(item.startAt) }} 开始</p>
+            <p class="auction-card__time">{{ item.closedAt ? `${formatShanghaiTime(item.closedAt)} 关拍` : `${formatShanghaiTime(item.startAt)} 开始` }}</p>
           </div>
         </RouterLink>
       </section>

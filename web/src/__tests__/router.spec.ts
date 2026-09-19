@@ -62,4 +62,13 @@ describe('authentication route guard', () => {
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/registrations/mine')
   })
+
+  it('protects order list and detail routes', async () => {
+    const router = createAppRouter(createMemoryHistory())
+
+    await router.push('/orders/9007199254740993')
+
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/orders/9007199254740993')
+  })
 })

@@ -65,4 +65,34 @@ describe('auction lobby', () => {
     expect(wrapper.text()).toContain('trace-auction-page')
     expect(wrapper.get('.auction-card').attributes('href')).toBe('/auctions/9007199254740995')
   })
+
+  it('shows sold and unsold terminal outcomes instead of another bid prompt', async () => {
+    saveAuthSession({ accessToken: 'signed-token', tokenType: 'Bearer', expiresIn: 60 })
+    const terminalBase = {
+      itemId: '51', title: '终态拍品', category: 'ART', itemCondition: 'GOOD',
+      startPrice: '100.00', currentPrice: '150.00', displayPrice: '150.00',
+      minimumNextBid: '160.00', bidCount: 3, startAt: '2026-09-14T01:00:00Z',
+      endAt: '2026-09-14T02:00:00Z', closedAt: '2026-09-14T02:00:01Z', coverImage: null,
+    }
+    getAuctionLobbyMock.mockResolvedValue({
+      traceId: 'trace-terminal',
+      data: {
+        page: 1, size: 12, total: 2, totalPages: 1,
+        items: [
+          { ...terminalBase, auctionId: '52', sessionStatus: 'CLOSED_SOLD', finalPrice: '150.00' },
+          { ...terminalBase, itemId: '53', auctionId: '54', title: '无人出价拍品', sessionStatus: 'CLOSED_UNSOLD', currentPrice: null, finalPrice: null, bidCount: 0 },
+        ],
+      },
+    })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/auctions')
+    await router.isReady()
+    const wrapper = mount(AuctionLobbyView, { global: { plugins: [createPinia(), router] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已成交')
+    expect(wrapper.text()).toContain('¥150.00')
+    expect(wrapper.text()).toContain('已流拍')
+    expect(wrapper.text()).toContain('流拍')
+  })
 })

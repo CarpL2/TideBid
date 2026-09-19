@@ -79,6 +79,18 @@ export function createAppRouter(
         meta: { title: '我的报名 · TideBid', requiresAuth: true, section: 'buyer' },
       },
       {
+        path: '/orders',
+        name: 'my-orders',
+        component: () => import('@/views/MyOrdersView.vue'),
+        meta: { title: '我的订单 · TideBid', requiresAuth: true, section: 'orders' },
+      },
+      {
+        path: '/orders/:orderId',
+        name: 'order-detail',
+        component: () => import('@/views/OrderDetailView.vue'),
+        meta: { title: '订单详情 · TideBid', requiresAuth: true, section: 'orders' },
+      },
+      {
         path: '/:pathMatch(.*)*',
         name: 'not-found',
         component: () => import('@/views/NotFoundView.vue'),

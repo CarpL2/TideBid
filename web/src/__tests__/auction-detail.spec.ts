@@ -196,4 +196,34 @@ describe('auction detail', () => {
     expect(wrapper.text()).toContain('价格变化')
     wrapper.unmount()
   })
+
+  it('shows the winner a sold outcome and an order entry without realtime claims', async () => {
+    saveAuthSession({ accessToken: 'signed-token', tokenType: 'Bearer', expiresIn: 60 })
+    auctionApiMocks.getAuctionDetail.mockResolvedValue({
+      traceId: 'trace-closed',
+      data: {
+        itemId: '61', auctionId: '62', title: '已成交拍品', description: '成交快照展示测试。',
+        category: 'ART', itemCondition: 'GOOD', sessionStatus: 'CLOSED_SOLD', startPrice: '100.00',
+        bidIncrement: '10.00', depositAmount: '50.00', currentPrice: '180.00', displayPrice: '180.00',
+        minimumNextBid: '190.00', bidCount: 4, startAt: '2026-09-14T01:00:00Z',
+        endAt: '2026-09-14T02:00:00Z', finalPrice: '180.00', closedAt: '2026-09-14T02:00:01Z',
+        wonByCurrentUser: true, ownedByCurrentUser: false, images: [],
+        myRegistration: { registrationId: '63', status: 'REGISTERED', failureCode: null, registeredAt: '2026-09-14T00:30:00Z' },
+      },
+    })
+    auctionApiMocks.getAuctionBidHistory.mockResolvedValue({
+      traceId: 'trace-bids', data: { auctionId: '62', page: 1, size: 10, total: 0, totalPages: 0, items: [] },
+    })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/auctions/62')
+    await router.isReady()
+    const wrapper = mount(AuctionDetailView, { global: { plugins: [createPinia(), router] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('竞价已成交')
+    expect(wrapper.text()).toContain('恭喜，你是本场买家')
+    expect(wrapper.get('a[href="/orders"]')).toBeTruthy()
+    expect(wrapper.text()).toContain('不提供实时推送')
+    wrapper.unmount()
+  })
 })

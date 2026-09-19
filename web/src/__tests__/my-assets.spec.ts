@@ -30,7 +30,7 @@ describe('seller asset list', () => {
       data: {
         page: 1,
         size: 12,
-        total: 1,
+        total: 2,
         totalPages: 1,
         items: [
           {
@@ -51,6 +51,14 @@ describe('seller asset list', () => {
             createdAt: '2026-09-14T02:00:00Z',
             updatedAt: '2026-09-14T02:00:00Z',
           },
+          {
+            itemId: '9007199254740995', auctionId: '9007199254740996', title: '已成交藏品',
+            category: 'COLLECTIBLES', itemCondition: 'LIKE_NEW', reviewStatus: 'APPROVED',
+            sessionStatus: 'CLOSED_SOLD', startPrice: '500.00', currentPrice: '880.00',
+            startAt: '2026-09-13T02:00:00Z', endAt: '2026-09-13T04:00:00Z',
+            itemVersion: 2, sessionVersion: 8, coverImage: null,
+            createdAt: '2026-09-12T02:00:00Z', updatedAt: '2026-09-13T04:00:01Z',
+          },
         ],
       },
     })
@@ -64,6 +72,8 @@ describe('seller asset list', () => {
 
     expect(wrapper.text()).toContain('机械键盘')
     expect(wrapper.text()).toContain('草稿')
+    expect(wrapper.text()).toContain('已成交')
+    expect(wrapper.text()).toContain('¥880.00')
     expect(wrapper.get('a[href="/assets/9007199254740993/edit"]')).toBeTruthy()
     await wrapper.get('.seller-asset-row__actions button').trigger('click')
     await flushPromises()
