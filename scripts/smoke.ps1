@@ -45,7 +45,10 @@ param(
     [switch]$PauseBeforeSoldPayment,
 
     [Parameter()]
-    [switch]$PauseAfterSoldPaymentUnknown
+    [switch]$PauseAfterSoldPaymentUnknown,
+
+    [Parameter()]
+    [switch]$PauseAfterSoldPaymentPendingSettlement
 )
 
 Set-StrictMode -Version Latest
@@ -61,11 +64,18 @@ if ($ReliableTrade) {
 if ($PauseAfterTimeoutPending -and (-not $ReliableTrade -or $ReliableTradeCoverage -ne 'All')) {
     throw 'PauseAfterTimeoutPending requires -ReliableTrade -ReliableTradeCoverage All.'
 }
-if (($PauseBeforeSoldPayment -or $PauseAfterSoldPaymentUnknown) -and -not $ReliableTrade) {
+if (($PauseBeforeSoldPayment -or $PauseAfterSoldPaymentUnknown -or $PauseAfterSoldPaymentPendingSettlement) -and
+    -not $ReliableTrade) {
     throw 'Sold-payment fault checkpoints require -ReliableTrade.'
 }
 if ($PauseAfterSoldPaymentUnknown -and -not $PauseBeforeSoldPayment) {
     throw 'PauseAfterSoldPaymentUnknown requires PauseBeforeSoldPayment so Account can be suspended first.'
+}
+if ($PauseAfterSoldPaymentPendingSettlement -and -not $PauseBeforeSoldPayment) {
+    throw 'PauseAfterSoldPaymentPendingSettlement requires PauseBeforeSoldPayment so Broker can be suspended first.'
+}
+if ($PauseAfterSoldPaymentUnknown -and $PauseAfterSoldPaymentPendingSettlement) {
+    throw 'Unknown-payment and pending-settlement fault checkpoints cannot run in the same smoke flow.'
 }
 
 function Resolve-GatewayBaseUri {
@@ -86,6 +96,15 @@ function New-StepTraceId {
     param([Parameter(Mandatory = $true)][string]$Step)
 
     return "smoke-$Step-$([Guid]::NewGuid().ToString('N').Substring(0, 16))"
+}
+
+function Wait-SmokeCheckpoint {
+    param([Parameter(Mandatory = $true)][string]$Prompt)
+
+    $confirmation = Read-Host "$Prompt Type CONTINUE to proceed"
+    if ($confirmation -cne 'CONTINUE') {
+        throw 'Fault-drill checkpoint was not explicitly confirmed with CONTINUE.'
+    }
 }
 
 function Convert-ResponseContentToText {
@@ -1024,7 +1043,7 @@ try {
     if ($PauseBeforeFirstBid) {
         Write-Host 'Fault-drill checkpoint reached before the first bid.'
         Write-Host 'In another terminal, suspend or restore RocketMQ as required, then return here.'
-        Read-Host 'Press Enter to submit the bid' | Out-Null
+        Wait-SmokeCheckpoint -Prompt 'Submit the bid after completing the external fault action.'
     }
 
     $buyerOneBidRequest = "smoke-bid1-$($suffix.Substring(0, 12))"
@@ -1065,7 +1084,7 @@ try {
     if ($PauseAfterSecondBid) {
         Write-Host 'Fault-drill checkpoint reached after both bids committed to MySQL.'
         Write-Host 'Inspect Outbox state, optionally wait past endAt, restore RocketMQ, then return here.'
-        Read-Host 'Press Enter to continue terminal-state and downstream assertions' | Out-Null
+        Wait-SmokeCheckpoint -Prompt 'Continue terminal-state and downstream assertions.'
     }
 
     $finalDetail = Invoke-SmokeRequest `
@@ -1143,8 +1162,15 @@ try {
 
     if ($PauseBeforeSoldPayment) {
         Write-Host "Fault-drill checkpoint reached before buyer payment. orderId=$orderId buyerId=$($buyerTwo.UserId) amount=60.00"
-        Write-Host 'Suspend Account, then return here so Trade persists an unknown debit result.'
-        Read-Host 'Press Enter to submit the payment while Account is unavailable' | Out-Null
+        if ($PauseAfterSoldPaymentUnknown) {
+            Write-Host 'Suspend Account, then return here so Trade persists an unknown debit result.'
+            Wait-SmokeCheckpoint -Prompt 'Submit the payment while Account is unavailable.'
+        } elseif ($PauseAfterSoldPaymentPendingSettlement) {
+            Write-Host 'Suspend RocketMQ Broker, then return here so payment succeeds while seller credit stays in Trade Outbox.'
+            Wait-SmokeCheckpoint -Prompt 'Submit the payment while Broker is unavailable.'
+        } else {
+            Wait-SmokeCheckpoint -Prompt 'Submit the buyer payment.'
+        }
     }
 
     $paymentRequestId = "smoke-pay-$($suffix.Substring(0, 12))"
@@ -1176,7 +1202,22 @@ try {
             -Message 'unknown payment replay changed status before recovery'
         Write-Host "Fault-drill checkpoint reached after Trade persisted UNKNOWN. orderId=$orderId buyerId=$($buyerTwo.UserId) paymentNo=$([string]$payment.data.paymentNo) requestId=$paymentRequestId amount=60.00"
         Write-Host 'Stop Trade, restore Account, execute the same internal debit once, restart the applications, then return here.'
-        Read-Host 'Press Enter to continue PAID, settlement and wallet assertions' | Out-Null
+        Wait-SmokeCheckpoint -Prompt 'Continue PAID, settlement and wallet assertions.'
+    } elseif ($PauseAfterSoldPaymentPendingSettlement) {
+        Assert-Value -Condition ([string]$paymentReplay.data.status -eq 'SUCCEEDED') `
+            -Message 'payment replay changed the successful result before seller settlement'
+        $paidPendingOrder = Wait-BuyerOrder `
+            -AuctionId $auctionId `
+            -Authorization $buyerTwoAuthorization `
+            -ExpectedStatuses @('PAID') `
+            -ExpectedSettlementStatus 'PENDING'
+        Assert-Value -Condition ($null -eq $paidPendingOrder.sellerCreditedAt) `
+            -Message 'pending seller settlement unexpectedly has sellerCreditedAt'
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $paidPendingOrder.sellerReceivableAmount 'sellerReceivableAmount') -eq [decimal]110.00) `
+            -Message 'pending seller settlement amount is not the full 110.00 final price'
+        Write-Host "Fault-drill checkpoint reached after payment with seller settlement PENDING. orderId=$orderId sellerId=$userId creditNo=SC:${orderId}:SALE amount=110.00"
+        Write-Host 'Suspend Account, restore Broker, verify no seller credit exists, resume Account, then return here.'
+        Wait-SmokeCheckpoint -Prompt 'Continue COMPLETED settlement and wallet assertions.'
     }
 
     $paidOrder = Wait-BuyerOrder `
@@ -1319,7 +1360,7 @@ try {
         $timeoutDeadlineUtc = ([DateTimeOffset]$timeoutPending.paymentDeadline).ToUniversalTime().ToString('O')
         Write-Host "Fault-drill checkpoint reached with timeout order PENDING_PAYMENT. orderId=$([string]$timeoutPending.orderId) paymentDeadlineUtc=$timeoutDeadlineUtc"
         Write-Host 'Suspend RocketMQ, wait past paymentDeadline, verify PAYMENT_TIMEOUT/PENDING settlement in MySQL, restore RocketMQ, then return here.'
-        Read-Host 'Press Enter to continue timeout settlement and wallet assertions' | Out-Null
+        Wait-SmokeCheckpoint -Prompt 'Continue timeout settlement and wallet assertions.'
     }
 
     $timedOutOrder = Wait-BuyerOrder `

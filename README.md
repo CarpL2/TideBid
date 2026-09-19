@@ -411,12 +411,12 @@ Outbox/database-fallback exercise uses two terminals:
 # Terminal B at the first checkpoint:
 .\scripts\outbox-status.ps1
 .\scripts\rocketmq-outage.ps1 -Action Suspend -AcknowledgeImpact
-# Return to A and submit both bids. At the second checkpoint inspect the due backlog,
+# Return to A and type CONTINUE to submit both bids. At the second checkpoint inspect the due backlog,
 # leave the Broker down past endAt if testing the Auction database fallback, then restore it:
 .\scripts\outbox-status.ps1
 .\scripts\rocketmq-outage.ps1 -Action Resume
 .\scripts\outbox-status.ps1 -AssertHealthy
-# Return to A; the normal sold/payment assertions must still finish exactly once.
+# Return to A and type CONTINUE; the normal sold/payment assertions must still finish exactly once.
 ```
 
 This drill deliberately changes local runtime availability and creates normal smoke business data;
@@ -440,7 +440,7 @@ full smoke with a checkpoint, and suspend only the Broker when the timeout order
 .\scripts\outbox-status.ps1
 .\scripts\rocketmq-outage.ps1 -Action Resume
 .\scripts\outbox-status.ps1 -AssertHealthy
-# Return to Terminal A and press Enter; final wallet and COMPLETED settlement assertions continue.
+# Return to Terminal A and type CONTINUE; final wallet and COMPLETED settlement assertions continue.
 ```
 
 To reproduce an Account-success/Trade-unknown recovery with real processes, use the two guarded
@@ -453,7 +453,7 @@ service token from `.env` without printing it, and verifies every identifier in 
     -ReliableTradeTimeoutSeconds 300 `
     -PauseBeforeSoldPayment -PauseAfterSoldPaymentUnknown
 
-# Terminal B at the first checkpoint; then return to A and press Enter.
+# Terminal B at the first checkpoint; then return to A and type CONTINUE.
 .\scripts\app-outage.ps1 -Service account -Action Suspend -AcknowledgeImpact
 
 # Terminal B at the second checkpoint. Copy the five values printed by Terminal A.
@@ -469,13 +469,53 @@ service token from `.env` without printing it, and verifies every identifier in 
 .\scripts\start-apps.ps1 -SkipBuild
 .\scripts\outbox-status.ps1 -AssertHealthy
 
-# Return to Terminal A and press Enter. It must finish PAID/COMPLETED and wallet assertions.
+# Return to Terminal A and type CONTINUE. It must finish PAID/COMPLETED and wallet assertions.
 ```
 
 The stable `paymentNo` is the idempotency key. Replaying the debit cannot add another
 `wallet_debit` or `wallet_ledger` row; after restart, Trade queries that same number before deciding
 whether any retry is safe. `app-outage.ps1` checks the PID manifest and exact command marker before
 stopping a process, and `Resume` updates the manifest so the normal stop script still owns it.
+
+To verify seller settlement while Account is unavailable, hold the credit request in Trade Outbox
+by stopping the Broker before payment. Payment still uses Account's synchronous internal API, so
+the order becomes `PAID/PENDING` without waiting for messaging:
+
+```powershell
+# Terminal B before starting the smoke. Keep this terminal open for the drill.
+# The longer window leaves room for the Broker's graceful local shutdown.
+$env:TIDEBID_TRADE_PAYMENT_WINDOW = '5m'
+.\scripts\app-outage.ps1 -Service trade -Action Suspend -AcknowledgeImpact
+.\scripts\app-outage.ps1 -Service trade -Action Resume
+
+# Terminal A
+.\scripts\smoke.ps1 -ReliableTrade -ReliableTradeCoverage Sold `
+    -ReliableTradeTimeoutSeconds 300 `
+    -PauseBeforeSoldPayment -PauseAfterSoldPaymentPendingSettlement
+
+# Terminal B at the first checkpoint; then return to A and type CONTINUE.
+.\scripts\rocketmq-outage.ps1 -Action Suspend -AcknowledgeImpact
+
+# Terminal B at the second checkpoint. Stop Account before releasing the credit request.
+.\scripts\app-outage.ps1 -Service account -Action Suspend -AcknowledgeImpact
+.\scripts\rocketmq-outage.ps1 -Action Resume
+.\scripts\outbox-status.ps1
+.\scripts\seller-credit-status.ps1 -OrderId '<orderId>' -ExpectedState Pending
+.\scripts\app-outage.ps1 -Service account -Action Resume
+.\scripts\seller-credit-status.ps1 -OrderId '<orderId>' -ExpectedState Completed
+.\scripts\outbox-status.ps1 -AssertHealthy
+
+# Return to Terminal A and type CONTINUE. It verifies COMPLETED and the seller's exact final balance.
+
+# Terminal B after Terminal A passes. Restore the value from .env.
+Remove-Item Env:TIDEBID_TRADE_PAYMENT_WINDOW
+.\scripts\app-outage.ps1 -Service trade -Action Suspend -AcknowledgeImpact
+.\scripts\app-outage.ps1 -Service trade -Action Resume
+```
+
+The Account consumer may receive the request more than once after recovery. The stable `creditNo`,
+the unique `wallet_credit.order_id`, Inbox deduplication and ledger business number prevent duplicate
+seller balance changes. Always restore both Account and the Broker if the drill is interrupted.
 
 After the drill, audit the latest application run without printing any matched secret value:
 
