@@ -559,6 +559,9 @@ try {
 
     if ($CheckOnly) {
         Write-Host 'TideBid application configuration and required tool versions are valid.'
+        Write-Host '  Stage 03: Trade datasource and Flyway schema declarations are present.'
+        Write-Host '  Stage 03: RocketMQ endpoint, delayed-message horizon, topics and consumer groups are present.'
+        Write-Host '  Security: required values were validated without printing their contents.'
         return
     }
 

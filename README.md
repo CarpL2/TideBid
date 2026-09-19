@@ -105,7 +105,8 @@ After creating `.env`, start the middleware and all host applications from the r
 ```
 
 `start-apps.ps1` validates Java 21, Maven 3.9+, Node 24, pnpm 11, required application values
-and all seven host ports. Required values include the Account and Auction database passwords and a
+and all seven host ports. Required values include the Account, Auction and Trade database passwords,
+the RocketMQ Proxy endpoint, and a
 32-to-512-character internal service Token. When `TIDEBID_OSS_ENABLED=true`, the script also checks
 that the AccessKey ID/Secret, HTTP(S) Endpoint, region and Bucket are complete and structurally valid;
 when it is false, cloud credentials remain optional. It packages the Java modules without rerunning
@@ -164,6 +165,23 @@ prints administrator credentials, Access Tokens, OSS credentials, or complete pr
 Windows the OSS PUT uses the bundled `curl.exe`/Schannel path; the signed URL and required headers
 are supplied through curl standard input rather than command-line arguments, and the temporary image
 body under ignored `.runtime/smoke/` is removed immediately after the request.
+
+Run the phase 03 sold-auction and payment flow with the same private OSS and development administrator
+configuration:
+
+```powershell
+.\scripts\smoke.ps1 -ReliableTrade
+```
+
+`-ReliableTrade` includes the full phase 02 flow but creates a deliberately short auction. It waits
+for the database fallback/MQ close path to reach `CLOSED_SOLD`, verifies the winning `50.00` deposit
+is captured and the losing deposit is released, finds the resulting `PENDING_PAYMENT` order, pays
+the `60.00` balance twice with one request ID, and confirms both calls resolve to one payment attempt.
+It then waits for the order to become `PAID`, for seller settlement to become `COMPLETED`, and checks
+the exact final virtual-wallet balances: seller `10110.00/0.00`, winner `9890.00/0.00`, loser
+`10000.00/0.00`. The default timeout can be adjusted with `-ReliableTradeTimeoutSeconds` when a local
+Docker environment is slow. Each run uses new users and business data; any failed assertion exits
+nonzero.
 
 Stop only the application processes recorded by this checkout, then optionally stop middleware:
 
@@ -574,16 +592,20 @@ Reference: [Gateway 4.3 starter](https://docs.spring.io/spring-cloud-gateway/ref
 | RocketMQ NameServer / Broker / Proxy | 9876 / 10911 / 8081 |
 | RocketMQ Dashboard | 8088 |
 
-## Foundation startup order
+## Local cold-start order
 
 The checked lifecycle scripts now implement this order:
 
 1. Copy `.env.example` to `.env` and replace local passwords.
-2. Run `infra-up.ps1` to start and verify MySQL, Redis, Nacos, and RocketMQ.
-3. Run `start-apps.ps1`; it builds JARs, prepares RS256 keys and imports Nacos configuration.
-4. The script starts Account first, the four skeleton services next, Gateway after its routes have
-   healthy targets, and Vue last.
-5. Run `smoke.ps1` to verify registration, login, profile, wallet identity, and initial balances.
+2. Run `infra-up.ps1`. Compose first initializes the MySQL schemas and users, then initializes the
+   RocketMQ volume and required topics/groups; the script waits for MySQL, Redis, Nacos, NameServer,
+   Broker, Proxy and Dashboard health plus successful one-time initialization jobs.
+3. Run `start-apps.ps1`; only after middleware is ready does it build JARs, prepare RS256 keys and
+   import the managed Nacos configuration.
+4. The script starts Account, Auction, Trade, Realtime, AI, Gateway and Vue in dependency order,
+   requiring every process to pass its readiness endpoint before moving on.
+5. Run `smoke.ps1`, `smoke.ps1 -AuctionCore`, or `smoke.ps1 -ReliableTrade` for the desired acceptance
+   depth. None of these lifecycle commands deletes containers or named volumes.
 
 ## Security notes
 

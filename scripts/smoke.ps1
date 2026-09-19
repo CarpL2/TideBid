@@ -14,8 +14,15 @@ param(
     [switch]$AuctionCore,
 
     [Parameter()]
+    [switch]$ReliableTrade,
+
+    [Parameter()]
     [ValidateRange(60, 600)]
-    [int]$AuctionOpenTimeoutSeconds = 240
+    [int]$AuctionOpenTimeoutSeconds = 240,
+
+    [Parameter()]
+    [ValidateRange(30, 600)]
+    [int]$ReliableTradeTimeoutSeconds = 180
 )
 
 Set-StrictMode -Version Latest
@@ -25,6 +32,9 @@ $script:currentStep = 'initialization'
 $script:currentTraceId = 'unavailable'
 $invariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if ($ReliableTrade) {
+    $AuctionCore = $true
+}
 
 function Resolve-GatewayBaseUri {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -441,6 +451,92 @@ function Wait-AuctionOpen {
     throw "auction did not open within $AuctionOpenTimeoutSeconds seconds"
 }
 
+function Get-SmokeWallet {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$Authorization
+    )
+
+    $result = Invoke-SmokeRequest `
+        -Step "$Label-wallet" `
+        -Method GET `
+        -Path '/api/wallets/me' `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $Authorization } `
+        -ApiEnvelope `
+        -Quiet
+    return [pscustomobject]@{
+        Available = ConvertTo-InvariantDecimal $result.data.availableBalance 'availableBalance'
+        Frozen = ConvertTo-InvariantDecimal $result.data.frozenBalance 'frozenBalance'
+    }
+}
+
+function Wait-AuctionClosedSold {
+    param(
+        [Parameter(Mandatory = $true)][string]$AuctionId,
+        [Parameter(Mandatory = $true)][string]$Authorization
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($ReliableTradeTimeoutSeconds)
+    do {
+        $result = Invoke-SmokeRequest `
+            -Step 'auction-close-status' `
+            -Method GET `
+            -Path "/api/auctions/$AuctionId" `
+            -ExpectedStatus 200 `
+            -Headers @{ Authorization = $Authorization } `
+            -ApiEnvelope `
+            -Quiet
+        $status = [string]$result.data.sessionStatus
+        if ($status -eq 'CLOSED_SOLD') {
+            Write-Host "[PASS] auction-closed-sold traceId=$script:currentTraceId"
+            return $result.data
+        }
+        if ($status -eq 'CLOSED_UNSOLD') {
+            throw 'auction unexpectedly closed without a winner'
+        }
+        Start-Sleep -Milliseconds 750
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "auction did not reach CLOSED_SOLD within $ReliableTradeTimeoutSeconds seconds"
+}
+
+function Wait-BuyerOrder {
+    param(
+        [Parameter(Mandatory = $true)][string]$AuctionId,
+        [Parameter(Mandatory = $true)][string]$Authorization,
+        [Parameter(Mandatory = $true)][string[]]$ExpectedStatuses,
+        [Parameter()][string]$ExpectedSettlementStatus = ''
+    )
+
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($ReliableTradeTimeoutSeconds)
+    do {
+        $result = Invoke-SmokeRequest `
+            -Step 'buyer-order-status' `
+            -Method GET `
+            -Path '/api/orders/mine?page=1&size=50' `
+            -ExpectedStatus 200 `
+            -Headers @{ Authorization = $Authorization } `
+            -ApiEnvelope `
+            -Quiet
+        $matching = @($result.data.items | Where-Object { [string]$_.auctionId -ceq $AuctionId })
+        if ($matching.Count -gt 1) {
+            throw 'buyer order query returned duplicate orders for one auction'
+        }
+        if ($matching.Count -eq 1) {
+            $order = $matching[0]
+            $statusMatches = $ExpectedStatuses -contains [string]$order.status
+            $settlementMatches = [string]::IsNullOrEmpty($ExpectedSettlementStatus) -or
+                [string]$order.sellerSettlementStatus -eq $ExpectedSettlementStatus
+            if ($statusMatches -and $settlementMatches) {
+                Write-Host "[PASS] buyer-order-status traceId=$script:currentTraceId status=$([string]$order.status) settlement=$([string]$order.sellerSettlementStatus)"
+                return $order
+            }
+        }
+        Start-Sleep -Milliseconds 750
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "buyer order did not reach status [$($ExpectedStatuses -join ',')] and settlement '$ExpectedSettlementStatus' within $ReliableTradeTimeoutSeconds seconds"
+}
+
 try {
     $GatewayBaseUri = Resolve-GatewayBaseUri -Value $GatewayBaseUri
     $auctionCoreSettings = if ($AuctionCore) { Get-AuctionCoreSettings } else { $null }
@@ -569,8 +665,12 @@ try {
         -RequiredHeaders $uploadIntent.data.requiredHeaders `
         -Content $imageBytes
 
-    $startAt = [DateTimeOffset]::UtcNow.AddMinutes(2)
-    $endAt = $startAt.AddMinutes(10)
+    $startAt = if ($ReliableTrade) {
+        [DateTimeOffset]::UtcNow.AddSeconds(75)
+    } else {
+        [DateTimeOffset]::UtcNow.AddMinutes(2)
+    }
+    $endAt = if ($ReliableTrade) { $startAt.AddSeconds(45) } else { $startAt.AddMinutes(10) }
     $draft = Invoke-SmokeRequest `
         -Step 'create-auction-draft' `
         -Method POST `
@@ -770,7 +870,75 @@ try {
     Assert-Value -Condition ([long]$historyItems[1].sequenceNo -eq 1 -and -not [bool]$historyItems[1].mine) `
         -Message 'buyer1 bid history entry is missing or incorrectly exposed'
 
-    Write-Host "TideBid auction-core smoke test passed. itemId=$itemId auctionId=$auctionId sellerId=$userId buyer1Id=$($buyerOne.UserId) buyer2Id=$($buyerTwo.UserId)."
+    if (-not $ReliableTrade) {
+        Write-Host "TideBid auction-core smoke test passed. itemId=$itemId auctionId=$auctionId sellerId=$userId buyer1Id=$($buyerOne.UserId) buyer2Id=$($buyerTwo.UserId)."
+        return
+    }
+
+    $closed = Wait-AuctionClosedSold -AuctionId $auctionId -Authorization $buyerTwoAuthorization
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $closed.finalPrice 'finalPrice') -eq [decimal]110.00) `
+        -Message 'closed auction final price is not 110.00'
+    Assert-Value -Condition ([bool]$closed.wonByCurrentUser) `
+        -Message 'buyer2 is not marked as the winner after closing'
+
+    $pendingOrder = Wait-BuyerOrder `
+        -AuctionId $auctionId `
+        -Authorization $buyerTwoAuthorization `
+        -ExpectedStatuses @('PENDING_PAYMENT')
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $pendingOrder.finalPrice 'order finalPrice') -eq [decimal]110.00) `
+        -Message 'order final price is not 110.00'
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $pendingOrder.capturedDepositAmount 'capturedDepositAmount') -eq [decimal]50.00) `
+        -Message 'winner deposit was not captured as 50.00'
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $pendingOrder.payableAmount 'payableAmount') -eq [decimal]60.00) `
+        -Message 'order payable amount is not 60.00'
+    Assert-Value -Condition ([bool]$pendingOrder.paymentEligible) -Message 'pending order is not payment eligible'
+    $orderId = [string]$pendingOrder.orderId
+
+    $paymentRequestId = "smoke-pay-$($suffix.Substring(0, 12))"
+    $payment = Invoke-SmokeRequest `
+        -Step 'pay-order' `
+        -Method POST `
+        -Path "/api/orders/$orderId/pay" `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $buyerTwoAuthorization; 'X-Request-Id' = $paymentRequestId } `
+        -ApiEnvelope
+    Assert-Value -Condition ([string]$payment.data.status -eq 'SUCCEEDED') `
+        -Message "payment did not succeed (status=$([string]$payment.data.status))"
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $payment.data.amount 'payment amount') -eq [decimal]60.00) `
+        -Message 'payment attempt amount is not 60.00'
+
+    $paymentReplay = Invoke-SmokeRequest `
+        -Step 'replay-order-payment' `
+        -Method POST `
+        -Path "/api/orders/$orderId/pay" `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $buyerTwoAuthorization; 'X-Request-Id' = $paymentRequestId } `
+        -ApiEnvelope
+    Assert-Value -Condition ([string]$paymentReplay.data.paymentAttemptId -ceq [string]$payment.data.paymentAttemptId) `
+        -Message 'payment replay returned a different payment attempt'
+
+    $paidOrder = Wait-BuyerOrder `
+        -AuctionId $auctionId `
+        -Authorization $buyerTwoAuthorization `
+        -ExpectedStatuses @('PAID') `
+        -ExpectedSettlementStatus 'COMPLETED'
+    Assert-Value -Condition ($null -ne $paidOrder.paidAt) -Message 'paid order has no paidAt timestamp'
+    Assert-Value -Condition ($null -ne $paidOrder.sellerCreditedAt) `
+        -Message 'completed seller settlement has no credited timestamp'
+    Assert-Value -Condition ((ConvertTo-InvariantDecimal $paidOrder.sellerReceivableAmount 'sellerReceivableAmount') -eq [decimal]110.00) `
+        -Message 'seller receivable is not the full 110.00 final price'
+
+    $sellerWalletAfter = Get-SmokeWallet -Label 'seller-final' -Authorization $sellerAuthorization
+    $winnerWalletAfter = Get-SmokeWallet -Label 'winner-final' -Authorization $buyerTwoAuthorization
+    $loserWalletAfter = Get-SmokeWallet -Label 'loser-final' -Authorization $buyerOneAuthorization
+    Assert-Value -Condition ($sellerWalletAfter.Available -eq [decimal]10110.00 -and $sellerWalletAfter.Frozen -eq 0) `
+        -Message 'seller wallet did not receive the full final price exactly once'
+    Assert-Value -Condition ($winnerWalletAfter.Available -eq [decimal]9890.00 -and $winnerWalletAfter.Frozen -eq 0) `
+        -Message 'winner wallet does not reflect deposit capture plus 60.00 tail payment'
+    Assert-Value -Condition ($loserWalletAfter.Available -eq [decimal]10000.00 -and $loserWalletAfter.Frozen -eq 0) `
+        -Message 'loser deposit was not fully released'
+
+    Write-Host "TideBid reliable-trade sold/payment smoke test passed. itemId=$itemId auctionId=$auctionId orderId=$orderId sellerId=$userId winnerId=$($buyerTwo.UserId) loserId=$($buyerOne.UserId)."
 } catch {
     throw "TideBid smoke test failed at step '$script:currentStep' traceId=$script:currentTraceId. $($_.Exception.Message)"
 }
