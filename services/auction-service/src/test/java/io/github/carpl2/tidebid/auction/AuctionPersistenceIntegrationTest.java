@@ -1190,7 +1190,7 @@ class AuctionPersistenceIntegrationTest {
                 new BigDecimal("100.00"), null, 1L, now.minusSeconds(1)
         );
         BidRecord duplicate = new BidRecord(
-                IdWorker.getId(), auctionId, bidderId, existing.requestId(),
+                existingBidId, auctionId, bidderId, existing.requestId(),
                 new BigDecimal("110.00"), new BigDecimal("100.00"), 2L, now
         );
 

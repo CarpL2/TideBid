@@ -22,10 +22,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AuctionMigrationIsolationTest {
 
     private static final List<String> EXPECTED_TABLES = List.of(
+            "auction_bid_command",
             "auction_inbox",
             "auction_item",
             "auction_item_image",
             "auction_outbox",
+            "auction_proxy_bid",
             "auction_registration",
             "auction_review",
             "auction_session",
@@ -58,11 +60,14 @@ class AuctionMigrationIsolationTest {
                         .baselineOnMigrate(false)
                         .load();
 
-                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
+                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
                 assertThat(flyway.migrate().migrationsExecuted).isZero();
                 assertThat(readTables(schemaUrl, rootPassword)).containsExactlyElementsOf(EXPECTED_TABLES);
                 assertThat(readColumns(schemaUrl, rootPassword, "auction_session"))
-                        .contains("winner_id", "winning_bid_id", "final_price", "closed_at");
+                        .contains("original_end_at", "extension_count", "winner_id", "winning_bid_id",
+                                "final_price", "closed_at");
+                assertThat(readColumns(schemaUrl, rootPassword, "bid_record"))
+                        .contains("source", "command_id");
             } finally {
                 statement.executeUpdate("DROP DATABASE `" + schema + "`");
             }
@@ -110,7 +115,7 @@ class AuctionMigrationIsolationTest {
                         .baselineOnMigrate(false)
                         .load();
 
-                assertThat(recoveredFlyway.migrate().migrationsExecuted).isEqualTo(4);
+                assertThat(recoveredFlyway.migrate().migrationsExecuted).isEqualTo(5);
                 assertThat(readTables(schemaUrl, rootPassword)).containsExactlyElementsOf(EXPECTED_TABLES);
             } finally {
                 statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
@@ -249,7 +254,7 @@ class AuctionMigrationIsolationTest {
                         .defaultSchema(schema)
                         .cleanDisabled(true)
                         .load();
-                assertThat(latest.migrate().migrationsExecuted).isOne();
+                assertThat(latest.migrate().migrationsExecuted).isEqualTo(2);
                 assertThat(latest.migrate().migrationsExecuted).isZero();
 
                 try (Connection connection = DriverManager.getConnection(schemaUrl, "root", rootPassword);
@@ -318,7 +323,7 @@ class AuctionMigrationIsolationTest {
                         .defaultSchema(schema)
                         .cleanDisabled(true)
                         .load();
-                assertThat(latest.migrate().migrationsExecuted).isEqualTo(2);
+                assertThat(latest.migrate().migrationsExecuted).isEqualTo(3);
 
                 assertThat(readIndexes(schemaUrl, rootPassword, "auction_outbox"))
                         .contains(
@@ -389,6 +394,152 @@ class AuctionMigrationIsolationTest {
                             "019947e0-e9d4-7f21-8d7a-3c74b922e19d",
                             "not-hex"
                     )).isInstanceOf(SQLException.class);
+                }
+            } finally {
+                adminStatement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
+            }
+        }
+    }
+
+    @Test
+    void upgradesVersionFourSchemaToProxyBiddingModelWithoutLosingBidHistory() throws Exception {
+        String host = environmentOrDefault("TIDEBID_MYSQL_HOST", "127.0.0.1");
+        String port = environmentOrDefault("TIDEBID_MYSQL_PORT", "13306");
+        String rootPassword = System.getenv("TIDEBID_MYSQL_ROOT_PASSWORD");
+        String schema = "tidebid_auction_verify_"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toLowerCase(Locale.ROOT);
+        String serverUrl = jdbcUrl(host, port, "");
+        String schemaUrl = jdbcUrl(host, port, schema);
+
+        try (Connection admin = DriverManager.getConnection(serverUrl, "root", rootPassword);
+             Statement adminStatement = admin.createStatement()) {
+            createSchema(adminStatement, schema);
+            try {
+                Flyway versionFour = Flyway.configure()
+                        .dataSource(schemaUrl, "root", rootPassword)
+                        .locations("classpath:db/migration")
+                        .defaultSchema(schema)
+                        .target("4")
+                        .cleanDisabled(true)
+                        .load();
+                assertThat(versionFour.migrate().migrationsExecuted).isEqualTo(4);
+
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", rootPassword);
+                     Statement statement = connection.createStatement()) {
+                    insertItem(statement, 104, 304);
+                    insertSession(statement, 204, 104, 304, "100.00", 401L, 1);
+                    statement.executeUpdate("""
+                            INSERT INTO bid_record (
+                                id, auction_id, bidder_id, request_id, amount, previous_price, sequence_no, created_at
+                            ) VALUES (
+                                801, 204, 401, 'legacy_request_0001', 100.00, NULL, 1,
+                                '2026-09-16 12:10:00.000000'
+                            )
+                            """);
+                }
+
+                Flyway latest = Flyway.configure()
+                        .dataSource(schemaUrl, "root", rootPassword)
+                        .locations("classpath:db/migration")
+                        .defaultSchema(schema)
+                        .cleanDisabled(true)
+                        .load();
+                assertThat(latest.migrate().migrationsExecuted).isOne();
+                assertThat(latest.migrate().migrationsExecuted).isZero();
+
+                assertThat(readTables(schemaUrl, rootPassword))
+                        .contains("auction_proxy_bid", "auction_bid_command");
+                assertThat(readIndexes(schemaUrl, rootPassword, "auction_proxy_bid"))
+                        .contains("uk_auction_proxy_bid_auction_bidder", "idx_auction_proxy_bid_competition");
+                assertThat(readIndexes(schemaUrl, rootPassword, "auction_bid_command"))
+                        .contains("uk_auction_bid_command_actor_request", "idx_auction_bid_command_auction_created");
+                assertThat(readIndexes(schemaUrl, rootPassword, "bid_record"))
+                        .contains("idx_bid_record_bidder_request", "idx_bid_record_command_sequence")
+                        .doesNotContain("uk_bid_record_bidder_request");
+
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", rootPassword);
+                     Statement statement = connection.createStatement()) {
+                    try (ResultSet migratedSession = statement.executeQuery("""
+                            SELECT end_at, original_end_at, extension_count
+                            FROM auction_session WHERE id = 204
+                            """)) {
+                        assertThat(migratedSession.next()).isTrue();
+                        assertThat(migratedSession.getTimestamp("original_end_at"))
+                                .isEqualTo(migratedSession.getTimestamp("end_at"));
+                        assertThat(migratedSession.getInt("extension_count")).isZero();
+                    }
+                    try (ResultSet migratedBid = statement.executeQuery("""
+                            SELECT source, command_id FROM bid_record WHERE id = 801
+                            """)) {
+                        assertThat(migratedBid.next()).isTrue();
+                        assertThat(migratedBid.getString("source")).isEqualTo("MANUAL");
+                        assertThat(migratedBid.getObject("command_id")).isNull();
+                    }
+
+                    assertThat(statement.executeUpdate("""
+                            INSERT INTO auction_proxy_bid (
+                                id, auction_id, bidder_id, max_amount, status, priority, version,
+                                disabled_at, created_at, updated_at
+                            ) VALUES (
+                                901, 204, 401, 500.00, 'ACTIVE', 1, 0, NULL,
+                                '2026-09-16 12:20:00.000000', '2026-09-16 12:20:00.000000'
+                            )
+                            """)).isOne();
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            INSERT INTO auction_proxy_bid (
+                                id, auction_id, bidder_id, max_amount, status, priority, version,
+                                disabled_at, created_at, updated_at
+                            ) VALUES (
+                                902, 204, 401, 600.00, 'ACTIVE', 2, 0, NULL,
+                                '2026-09-16 12:21:00.000000', '2026-09-16 12:21:00.000000'
+                            )
+                            """)).isInstanceOf(SQLException.class);
+
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            UPDATE auction_session SET extension_count = -1 WHERE id = 204
+                            """)).isInstanceOf(SQLException.class);
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            UPDATE auction_session
+                            SET end_at = DATE_SUB(original_end_at, INTERVAL 1 SECOND)
+                            WHERE id = 204
+                            """)).isInstanceOf(SQLException.class);
+
+                    assertThat(statement.executeUpdate("""
+                            INSERT INTO auction_bid_command (
+                                id, auction_id, actor_id, request_id, command_type, payload_hash, status, created_at
+                            ) VALUES (
+                                903, 204, 402, 'proxy_request_0001', 'UPSERT_PROXY', REPEAT('a', 64),
+                                'PROCESSING', '2026-09-16 12:22:00.000000'
+                            )
+                            """)).isOne();
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            INSERT INTO auction_bid_command (
+                                id, auction_id, actor_id, request_id, command_type, payload_hash, status, created_at
+                            ) VALUES (
+                                904, 204, 402, 'proxy_request_0001', 'UPSERT_PROXY', REPEAT('b', 64),
+                                'PROCESSING', '2026-09-16 12:22:01.000000'
+                            )
+                            """)).isInstanceOf(SQLException.class);
+
+                    assertThat(statement.executeUpdate("""
+                            INSERT INTO bid_record (
+                                id, auction_id, bidder_id, request_id, source, command_id,
+                                amount, previous_price, sequence_no, created_at
+                            ) VALUES
+                                (802, 204, 402, 'proxy_request_0001', 'MANUAL', 903,
+                                 110.00, 100.00, 2, '2026-09-16 12:22:02.000000'),
+                                (803, 204, 402, 'proxy_request_0001', 'PROXY', 903,
+                                 120.00, 110.00, 3, '2026-09-16 12:22:03.000000')
+                            """)).isEqualTo(2);
+                    assertThatThrownBy(() -> statement.executeUpdate("""
+                            INSERT INTO bid_record (
+                                id, auction_id, bidder_id, request_id, source, command_id,
+                                amount, previous_price, sequence_no, created_at
+                            ) VALUES (
+                                804, 204, 403, 'invalid_source_0001', 'SYSTEM', 903,
+                                130.00, 120.00, 4, '2026-09-16 12:22:04.000000'
+                            )
+                            """)).isInstanceOf(SQLException.class);
                 }
             } finally {
                 adminStatement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");

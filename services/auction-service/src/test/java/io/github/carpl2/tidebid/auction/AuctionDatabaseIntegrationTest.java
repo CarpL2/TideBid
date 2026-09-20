@@ -26,10 +26,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AuctionDatabaseIntegrationTest {
 
     private static final List<String> EXPECTED_BUSINESS_TABLES = List.of(
+            "auction_bid_command",
             "auction_inbox",
             "auction_item",
             "auction_item_image",
             "auction_outbox",
+            "auction_proxy_bid",
             "auction_registration",
             "auction_review",
             "auction_session",
@@ -87,7 +89,7 @@ class AuctionDatabaseIntegrationTest {
                 ORDER BY TABLE_NAME, ORDINAL_POSITION
                 """
         );
-        assertThat(moneyColumns).hasSize(8);
+        assertThat(moneyColumns).hasSize(10);
         assertThat(moneyColumns).allSatisfy(column -> {
             assertThat(((Number) column.get("NUMERIC_PRECISION")).intValue()).isEqualTo(19);
             assertThat(((Number) column.get("NUMERIC_SCALE")).intValue()).isEqualTo(2);
@@ -128,7 +130,8 @@ class AuctionDatabaseIntegrationTest {
                 "uk_auction_session_item_id",
                 "uk_auction_registration_no",
                 "uk_auction_registration_auction_bidder",
-                "uk_bid_record_bidder_request",
+                "uk_auction_proxy_bid_auction_bidder",
+                "uk_auction_bid_command_actor_request",
                 "uk_bid_record_auction_sequence"
         );
 
@@ -148,6 +151,10 @@ class AuctionDatabaseIntegrationTest {
                 "idx_auction_outbox_lease_scan",
                 "idx_auction_session_lobby",
                 "idx_auction_registration_recovery",
+                "idx_auction_proxy_bid_competition",
+                "idx_auction_bid_command_auction_created",
+                "idx_bid_record_bidder_request",
+                "idx_bid_record_command_sequence",
                 "idx_bid_record_auction_created"
         );
     }

@@ -16,6 +16,8 @@ public record AuctionSession(
         long bidCount,
         Instant startAt,
         Instant endAt,
+        Instant originalEndAt,
+        int extensionCount,
         AuctionSessionStatus status,
         Long winnerId,
         Long winningBidId,
@@ -48,6 +50,11 @@ public record AuctionSession(
         if (!endAt.isAfter(startAt)) {
             throw new IllegalArgumentException("endAt must be after startAt");
         }
+        originalEndAt = AuctionDomainRules.instant(originalEndAt, "originalEndAt");
+        if (!originalEndAt.isAfter(startAt) || endAt.isBefore(originalEndAt)) {
+            throw new IllegalArgumentException("originalEndAt must be after startAt and not after endAt");
+        }
+        AuctionDomainRules.nonNegative(extensionCount, "extensionCount");
         Objects.requireNonNull(status, "status must not be null");
         if (status == AuctionSessionStatus.CLOSED_SOLD) {
             AuctionDomainRules.positiveId(Objects.requireNonNull(winnerId, "winnerId"), "winnerId");
@@ -80,7 +87,18 @@ public record AuctionSession(
             Instant createdAt, Instant updatedAt
     ) {
         this(id, itemId, sellerId, startPrice, bidIncrement, depositAmount, currentPrice, currentBidderId,
-                bidCount, startAt, endAt, status, null, null, null, null, version, createdAt, updatedAt);
+                bidCount, startAt, endAt, endAt, 0, status, null, null, null, null, version, createdAt, updatedAt);
+    }
+
+    public AuctionSession(
+            long id, long itemId, long sellerId, BigDecimal startPrice, BigDecimal bidIncrement,
+            BigDecimal depositAmount, BigDecimal currentPrice, Long currentBidderId, long bidCount,
+            Instant startAt, Instant endAt, AuctionSessionStatus status, Long winnerId, Long winningBidId,
+            BigDecimal finalPrice, Instant closedAt, long version, Instant createdAt, Instant updatedAt
+    ) {
+        this(id, itemId, sellerId, startPrice, bidIncrement, depositAmount, currentPrice, currentBidderId,
+                bidCount, startAt, endAt, endAt, 0, status, winnerId, winningBidId, finalPrice, closedAt,
+                version, createdAt, updatedAt);
     }
 
     public BigDecimal displayPrice() {

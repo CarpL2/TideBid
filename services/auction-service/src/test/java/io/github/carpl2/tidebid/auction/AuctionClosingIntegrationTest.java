@@ -274,11 +274,11 @@ class AuctionClosingIntegrationTest {
         jdbc.update("""
                 INSERT INTO auction_session
                     (id, item_id, seller_id, start_price, bid_increment, deposit_amount,
-                     current_price, current_bidder_id, bid_count, start_at, end_at, status,
+                     current_price, current_bidder_id, bid_count, start_at, end_at, original_end_at, status,
                      version, created_at, updated_at)
-                VALUES (?, ?, ?, 100.00, 10.00, 50.00, NULL, NULL, ?, ?, ?, 'AWAITING_CLOSE', 3, ?, ?)
+                VALUES (?, ?, ?, 100.00, 10.00, 50.00, NULL, NULL, ?, ?, ?, ?, 'AWAITING_CLOSE', 3, ?, ?)
                 """, auctionId, itemId, sellerId, 0L, timestamp(createdAt.plusSeconds(60)),
-                timestamp(endAt), timestamp(createdAt), timestamp(endAt));
+                timestamp(endAt), timestamp(endAt), timestamp(createdAt), timestamp(endAt));
         return new Fixture(itemId, auctionId, sellerId, winnerId, loserId, bidId, endAt,
                 "REGISTRATION:" + auctionId + ":winner", "REGISTRATION:" + auctionId + ":loser");
     }

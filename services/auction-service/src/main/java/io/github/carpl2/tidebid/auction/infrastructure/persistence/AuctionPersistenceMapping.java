@@ -2,6 +2,9 @@ package io.github.carpl2.tidebid.auction.infrastructure.persistence;
 
 import io.github.carpl2.tidebid.auction.domain.AuctionImageStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionItem;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommand;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandStatus;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandType;
 import io.github.carpl2.tidebid.auction.domain.AuctionItemCondition;
 import io.github.carpl2.tidebid.auction.domain.AuctionItemImage;
 import io.github.carpl2.tidebid.auction.domain.AuctionItemReviewStatus;
@@ -9,13 +12,18 @@ import io.github.carpl2.tidebid.auction.domain.AuctionRegistration;
 import io.github.carpl2.tidebid.auction.domain.AuctionRegistrationStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionReview;
 import io.github.carpl2.tidebid.auction.domain.AuctionReviewDecision;
+import io.github.carpl2.tidebid.auction.domain.AuctionProxyBid;
+import io.github.carpl2.tidebid.auction.domain.AuctionProxyBidStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
+import io.github.carpl2.tidebid.auction.domain.BidSource;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionBidCommandEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionItemEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionItemImageEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionRegistrationEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionReviewEntity;
+import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionProxyBidEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.AuctionSessionEntity;
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.entity.BidRecordEntity;
 
@@ -111,6 +119,8 @@ final class AuctionPersistenceMapping {
         target.setBidCount(source.bidCount());
         target.setStartAt(source.startAt());
         target.setEndAt(source.endAt());
+        target.setOriginalEndAt(source.originalEndAt());
+        target.setExtensionCount(source.extensionCount());
         target.setStatus(source.status().name());
         target.setWinnerId(source.winnerId());
         target.setWinningBidId(source.winningBidId());
@@ -127,6 +137,7 @@ final class AuctionPersistenceMapping {
                 source.getId(), source.getItemId(), source.getSellerId(), source.getStartPrice(),
                 source.getBidIncrement(), source.getDepositAmount(), source.getCurrentPrice(),
                 source.getCurrentBidderId(), source.getBidCount(), source.getStartAt(), source.getEndAt(),
+                source.getOriginalEndAt(), source.getExtensionCount(),
                 AuctionSessionStatus.valueOf(source.getStatus()), source.getWinnerId(), source.getWinningBidId(),
                 source.getFinalPrice(), source.getClosedAt(), source.getVersion(), source.getCreatedAt(),
                 source.getUpdatedAt()
@@ -170,6 +181,8 @@ final class AuctionPersistenceMapping {
         target.setAuctionId(source.auctionId());
         target.setBidderId(source.bidderId());
         target.setRequestId(source.requestId());
+        target.setSource(source.source().name());
+        target.setCommandId(source.commandId());
         target.setAmount(source.amount());
         target.setPreviousPrice(source.previousPrice());
         target.setSequenceNo(source.sequenceNo());
@@ -180,7 +193,60 @@ final class AuctionPersistenceMapping {
     static BidRecord toDomain(BidRecordEntity source) {
         return new BidRecord(
                 source.getId(), source.getAuctionId(), source.getBidderId(), source.getRequestId(),
+                BidSource.valueOf(source.getSource()), source.getCommandId(),
                 source.getAmount(), source.getPreviousPrice(), source.getSequenceNo(), source.getCreatedAt()
+        );
+    }
+
+    static AuctionProxyBidEntity toEntity(AuctionProxyBid source) {
+        AuctionProxyBidEntity target = new AuctionProxyBidEntity();
+        target.setId(source.id());
+        target.setAuctionId(source.auctionId());
+        target.setBidderId(source.bidderId());
+        target.setMaxAmount(source.maxAmount());
+        target.setStatus(source.status().name());
+        target.setPriority(source.priority());
+        target.setVersion(source.version());
+        target.setDisabledAt(source.disabledAt());
+        target.setCreatedAt(source.createdAt());
+        target.setUpdatedAt(source.updatedAt());
+        return target;
+    }
+
+    static AuctionProxyBid toDomain(AuctionProxyBidEntity source) {
+        return new AuctionProxyBid(
+                source.getId(), source.getAuctionId(), source.getBidderId(), source.getMaxAmount(),
+                AuctionProxyBidStatus.valueOf(source.getStatus()), source.getPriority(), source.getVersion(),
+                source.getDisabledAt(), source.getCreatedAt(), source.getUpdatedAt()
+        );
+    }
+
+    static AuctionBidCommandEntity toEntity(AuctionBidCommand source) {
+        AuctionBidCommandEntity target = new AuctionBidCommandEntity();
+        target.setId(source.id());
+        target.setAuctionId(source.auctionId());
+        target.setActorId(source.actorId());
+        target.setRequestId(source.requestId());
+        target.setCommandType(source.commandType().name());
+        target.setPayloadHash(source.payloadHash());
+        target.setStatus(source.status().name());
+        target.setResultBidCount(source.resultBidCount());
+        target.setResultPrice(source.resultPrice());
+        target.setResultLeading(source.resultLeading());
+        target.setFirstSequenceNo(source.firstSequenceNo());
+        target.setLastSequenceNo(source.lastSequenceNo());
+        target.setCreatedAt(source.createdAt());
+        target.setCompletedAt(source.completedAt());
+        return target;
+    }
+
+    static AuctionBidCommand toDomain(AuctionBidCommandEntity source) {
+        return new AuctionBidCommand(
+                source.getId(), source.getAuctionId(), source.getActorId(), source.getRequestId(),
+                AuctionBidCommandType.valueOf(source.getCommandType()), source.getPayloadHash(),
+                AuctionBidCommandStatus.valueOf(source.getStatus()), source.getResultBidCount(),
+                source.getResultPrice(), source.getResultLeading(), source.getFirstSequenceNo(),
+                source.getLastSequenceNo(), source.getCreatedAt(), source.getCompletedAt()
         );
     }
 }

@@ -52,4 +52,31 @@ class AuctionDomainModelTest {
                 null, null, null, 0L, NOW, NOW
         )).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("failureCode");
     }
+
+    @Test
+    void rejectsInvalidAntiSnipingAndProxySnapshots() {
+        Instant startAt = NOW.plusSeconds(60);
+        Instant originalEndAt = startAt.plusSeconds(3600);
+
+        assertThatThrownBy(() -> new AuctionSession(
+                1L, 2L, 3L, new BigDecimal("100.00"), new BigDecimal("10.00"),
+                new BigDecimal("50.00"), null, null, 0,
+                startAt, originalEndAt.minusSeconds(1), originalEndAt, 1,
+                AuctionSessionStatus.OPEN, null, null, null, null, 0, NOW, NOW
+        )).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("originalEndAt");
+
+        assertThatThrownBy(() -> new AuctionProxyBid(
+                1L, 2L, 3L, new BigDecimal("500.00"), AuctionProxyBidStatus.ACTIVE,
+                1L, 0L, NOW, NOW, NOW
+        )).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("disabledAt");
+    }
+
+    @Test
+    void requiresCompletedBidCommandSequencesToMatchItsGeneratedBidCount() {
+        assertThatThrownBy(() -> new AuctionBidCommand(
+                1L, 2L, 3L, "proxy_request_0001", AuctionBidCommandType.UPSERT_PROXY,
+                "a".repeat(64), AuctionBidCommandStatus.SUCCEEDED, 2,
+                new BigDecimal("130.00"), true, 6L, 8L, NOW, NOW.plusSeconds(1)
+        )).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("contiguous");
+    }
 }

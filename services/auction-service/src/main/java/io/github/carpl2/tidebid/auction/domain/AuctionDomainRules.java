@@ -91,4 +91,12 @@ final class AuctionDomainRules {
         }
         return normalized;
     }
+
+    static String sha256(String value, String name) {
+        String normalized = value == null ? "" : value.trim();
+        if (!LOWER_HEX_SHA256.matcher(normalized).matches()) {
+            throw new IllegalArgumentException(name + " must be 64 lowercase hexadecimal characters");
+        }
+        return normalized;
+    }
 }

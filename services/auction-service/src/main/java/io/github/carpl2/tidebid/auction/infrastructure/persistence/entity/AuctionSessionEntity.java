@@ -22,6 +22,8 @@ public class AuctionSessionEntity extends VersionedAuditEntity {
     private Long bidCount;
     private Instant startAt;
     private Instant endAt;
+    private Instant originalEndAt;
+    private Integer extensionCount;
     private String status;
     private Long winnerId;
     private Long winningBidId;
@@ -50,6 +52,10 @@ public class AuctionSessionEntity extends VersionedAuditEntity {
     public void setStartAt(Instant startAt) { this.startAt = startAt; }
     public Instant getEndAt() { return endAt; }
     public void setEndAt(Instant endAt) { this.endAt = endAt; }
+    public Instant getOriginalEndAt() { return originalEndAt; }
+    public void setOriginalEndAt(Instant originalEndAt) { this.originalEndAt = originalEndAt; }
+    public Integer getExtensionCount() { return extensionCount; }
+    public void setExtensionCount(Integer extensionCount) { this.extensionCount = extensionCount; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public Long getWinnerId() { return winnerId; }

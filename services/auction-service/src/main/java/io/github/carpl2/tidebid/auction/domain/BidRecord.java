@@ -8,6 +8,8 @@ public record BidRecord(
         long auctionId,
         long bidderId,
         String requestId,
+        BidSource source,
+        Long commandId,
         BigDecimal amount,
         BigDecimal previousPrice,
         long sequenceNo,
@@ -18,6 +20,10 @@ public record BidRecord(
         AuctionDomainRules.positiveId(auctionId, "auctionId");
         AuctionDomainRules.positiveId(bidderId, "bidderId");
         requestId = AuctionDomainRules.requestId(requestId);
+        source = java.util.Objects.requireNonNull(source, "source must not be null");
+        if (commandId != null) {
+            AuctionDomainRules.positiveId(commandId, "commandId");
+        }
         amount = AuctionDomainRules.positiveAmount(amount, "amount");
         if (sequenceNo <= 0) {
             throw new IllegalArgumentException("sequenceNo must be positive");
@@ -32,5 +38,13 @@ public record BidRecord(
             }
         }
         createdAt = AuctionDomainRules.instant(createdAt, "createdAt");
+    }
+
+    public BidRecord(
+            long id, long auctionId, long bidderId, String requestId, BigDecimal amount,
+            BigDecimal previousPrice, long sequenceNo, Instant createdAt
+    ) {
+        this(id, auctionId, bidderId, requestId, BidSource.MANUAL, null,
+                amount, previousPrice, sequenceNo, createdAt);
     }
 }

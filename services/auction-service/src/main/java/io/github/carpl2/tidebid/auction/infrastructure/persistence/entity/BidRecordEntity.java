@@ -17,6 +17,8 @@ public class BidRecordEntity {
     private Long auctionId;
     private Long bidderId;
     private String requestId;
+    private String source;
+    private Long commandId;
     private BigDecimal amount;
     private BigDecimal previousPrice;
     private Long sequenceNo;
@@ -31,6 +33,10 @@ public class BidRecordEntity {
     public void setBidderId(Long bidderId) { this.bidderId = bidderId; }
     public String getRequestId() { return requestId; }
     public void setRequestId(String requestId) { this.requestId = requestId; }
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+    public Long getCommandId() { return commandId; }
+    public void setCommandId(Long commandId) { this.commandId = commandId; }
     public BigDecimal getAmount() { return amount; }
     public void setAmount(BigDecimal amount) { this.amount = amount; }
     public BigDecimal getPreviousPrice() { return previousPrice; }
