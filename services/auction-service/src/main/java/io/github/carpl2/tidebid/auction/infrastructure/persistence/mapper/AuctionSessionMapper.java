@@ -112,4 +112,40 @@ public interface AuctionSessionMapper extends BaseMapper<AuctionSessionEntity> {
             @Param("expectedVersion") long expectedVersion,
             @Param("acceptedAt") Instant acceptedAt
     );
+
+    @Update("""
+            UPDATE auction_session
+            SET current_price = #{amount},
+                current_bidder_id = #{bidderId},
+                bid_count = bid_count + 1,
+                end_at = #{endAt},
+                extension_count = #{extensionCount},
+                updated_at = #{acceptedAt},
+                version = version + 1
+            WHERE id = #{auctionId}
+              AND status = 'OPEN'
+              AND version = #{expectedVersion}
+              AND start_at <= #{acceptedAt}
+              AND end_at > #{acceptedAt}
+              AND ((bid_count = 0
+                    AND current_price IS NULL
+                    AND #{previousPrice} IS NULL
+                    AND #{sequenceNo} = 1
+                    AND #{amount} >= start_price)
+                OR (bid_count > 0
+                    AND current_price = #{previousPrice}
+                    AND #{sequenceNo} = bid_count + 1
+                    AND #{amount} >= current_price + bid_increment))
+            """)
+    int acceptBidWithTiming(
+            @Param("auctionId") long auctionId,
+            @Param("bidderId") long bidderId,
+            @Param("amount") BigDecimal amount,
+            @Param("previousPrice") BigDecimal previousPrice,
+            @Param("sequenceNo") long sequenceNo,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("endAt") Instant endAt,
+            @Param("extensionCount") int extensionCount,
+            @Param("acceptedAt") Instant acceptedAt
+    );
 }

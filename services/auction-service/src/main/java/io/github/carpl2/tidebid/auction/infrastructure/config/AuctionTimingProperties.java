@@ -11,8 +11,22 @@ public record AuctionTimingProperties(
         Duration maximumDuration,
         boolean openingScanEnabled,
         Duration openingScanInterval,
-        int openingScanBatchSize
+        int openingScanBatchSize,
+        Duration antiSnipingWindow,
+        Duration antiSnipingExtension,
+        Duration maxTotalExtension
 ) {
+
+    public AuctionTimingProperties(
+            Duration minimumLeadTime,
+            Duration maximumDuration,
+            boolean openingScanEnabled,
+            Duration openingScanInterval,
+            int openingScanBatchSize
+    ) {
+        this(minimumLeadTime, maximumDuration, openingScanEnabled, openingScanInterval,
+                openingScanBatchSize, Duration.ofSeconds(60), Duration.ofSeconds(60), Duration.ofMinutes(5));
+    }
 
     public AuctionTimingProperties {
         minimumLeadTime = requireBetween(
@@ -23,6 +37,15 @@ public record AuctionTimingProperties(
                 openingScanInterval, Duration.ofMillis(100), Duration.ofMinutes(1), "openingScanInterval");
         if (openingScanBatchSize < 1 || openingScanBatchSize > 1000) {
             throw new IllegalArgumentException("openingScanBatchSize must be between 1 and 1000");
+        }
+        antiSnipingWindow = requireBetween(
+                antiSnipingWindow, Duration.ofSeconds(1), Duration.ofHours(1), "antiSnipingWindow");
+        antiSnipingExtension = requireBetween(
+                antiSnipingExtension, Duration.ofSeconds(1), Duration.ofHours(1), "antiSnipingExtension");
+        maxTotalExtension = requireBetween(
+                maxTotalExtension, Duration.ofSeconds(1), Duration.ofHours(24), "maxTotalExtension");
+        if (maxTotalExtension.compareTo(antiSnipingExtension) < 0) {
+            throw new IllegalArgumentException("maxTotalExtension must be at least antiSnipingExtension");
         }
         if (maximumDuration.compareTo(minimumLeadTime) <= 0) {
             throw new IllegalArgumentException("maximumDuration must be greater than minimumLeadTime");

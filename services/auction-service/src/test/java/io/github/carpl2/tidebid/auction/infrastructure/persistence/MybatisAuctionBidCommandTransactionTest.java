@@ -7,6 +7,8 @@ import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepositor
 import io.github.carpl2.tidebid.auction.domain.AuctionBidCommand;
 import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandType;
+import io.github.carpl2.tidebid.auction.domain.AuctionSession;
+import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
 import io.github.carpl2.tidebid.auction.domain.BidSource;
 import io.github.carpl2.tidebid.auction.infrastructure.messaging.AuctionOutboxEventFactory;
@@ -29,6 +31,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static java.util.Optional.of;
 
 class MybatisAuctionBidCommandTransactionTest {
 
@@ -101,12 +104,50 @@ class MybatisAuctionBidCommandTransactionTest {
                 new AuctionBidCommandTransaction.CommitRequest(
                         processing, completed, null, java.util.List.of(bid), 4L
                 )
-        )).isInstanceOf(AuctionBidCommandTransaction.BidConflictException.class);
+                )).isInstanceOf(AuctionBidCommandTransaction.BidConflictException.class);
 
         verify(commandRepository).insert(processing);
         verify(sessionRepository, never()).insertBid(any());
         verify(outboxRepository, never()).enqueue(any(), any());
         verify(commandRepository, never()).update(any());
+    }
+
+    @Test
+    void acceptedBidNearDeadlineUpdatesTimingAndWritesExtensionAndNewCloseCommand() {
+        AuctionBidCommand processing = processingCommand();
+        AuctionBidCommand completed = completedCommand();
+        BidRecord bid = bid(8L);
+        AuctionSession session = new AuctionSession(
+                1L, 2L, 3L, new BigDecimal("100.00"), new BigDecimal("10.00"),
+                new BigDecimal("50.00"), new BigDecimal("120.00"), 101L, 7L,
+                NOW.minusSeconds(3600), NOW.plusSeconds(30), AuctionSessionStatus.OPEN, 4L,
+                NOW.minusSeconds(3600), NOW.minusSeconds(3600));
+        JdbcAuctionOutboxRepository.NewOutboxEvent bidEvent = event("bid-event", NOW);
+        JdbcAuctionOutboxRepository.NewOutboxEvent extensionEvent = event("extension-event", NOW);
+        JdbcAuctionOutboxRepository.NewOutboxEvent closeEvent = event("close-event", NOW.plusSeconds(60));
+        when(sessionRepository.findSessionById(1L)).thenReturn(of(session));
+        when(sessionMapper.acceptBidWithTiming(1L, 101L, new BigDecimal("200.00"),
+                new BigDecimal("120.00"), 8L, 4L, NOW.plusSeconds(60), 1, NOW)).thenReturn(1);
+        when(sessionRepository.insertBid(bid)).thenReturn(bid);
+        when(eventFactory.bidAccepted(bid)).thenReturn(bidEvent);
+        when(eventFactory.auctionTimeExtended(1L, NOW.plusSeconds(30), NOW.plusSeconds(60), 1, NOW,
+                "request_0001")).thenReturn(extensionEvent);
+        when(eventFactory.closeAuction(1L, NOW.plusSeconds(60), NOW)).thenReturn(closeEvent);
+        when(commandRepository.update(completed)).thenReturn(true);
+
+        transaction.commit(new AuctionBidCommandTransaction.CommitRequest(
+                processing, completed, null, java.util.List.of(bid), 4L));
+
+        verify(sessionMapper).acceptBidWithTiming(1L, 101L, new BigDecimal("200.00"),
+                new BigDecimal("120.00"), 8L, 4L, NOW.plusSeconds(60), 1, NOW);
+        verify(outboxRepository).enqueue(bidEvent, NOW);
+        verify(outboxRepository).enqueue(extensionEvent, NOW);
+        verify(outboxRepository).enqueueIfAbsent(closeEvent, NOW);
+    }
+
+    private static JdbcAuctionOutboxRepository.NewOutboxEvent event(String id, Instant deliverAt) {
+        return new JdbcAuctionOutboxRepository.NewOutboxEvent(
+                id, "AUCTION", "1", "event", 1, "topic", "{}", HASH, deliverAt);
     }
 
     private static AuctionBidCommand processingCommand() {

@@ -79,6 +79,9 @@ tidebid:
       opening-scan-enabled: true
       opening-scan-interval: 1s
       opening-scan-batch-size: 50
+      anti-sniping-window: 60s
+      anti-sniping-extension: 60s
+      max-total-extension: 5m
     registration-recovery:
       enabled: true
       initial-retry-delay: 5s

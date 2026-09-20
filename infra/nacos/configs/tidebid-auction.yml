@@ -26,6 +26,12 @@ logging:
     io.github.carpl2.tidebid.auction: INFO
 
 tidebid:
+  auction:
+    timing:
+      anti-sniping-window: 60s
+      anti-sniping-extension: 60s
+      max-total-extension: 5m
+
   messaging:
     rocketmq:
       topics:

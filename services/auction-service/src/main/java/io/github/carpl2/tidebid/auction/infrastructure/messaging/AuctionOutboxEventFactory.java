@@ -7,6 +7,7 @@ import io.github.carpl2.tidebid.auction.domain.BidRecord;
 import io.github.carpl2.tidebid.contracts.BidAcceptedEvent;
 import io.github.carpl2.tidebid.contracts.AuctionClosedSoldEvent;
 import io.github.carpl2.tidebid.contracts.AuctionClosedUnsoldEvent;
+import io.github.carpl2.tidebid.contracts.AuctionTimeExtendedEvent;
 import io.github.carpl2.tidebid.contracts.CloseAuctionCommand;
 import io.github.carpl2.tidebid.contracts.DepositSettlementRequestedEvent;
 import io.github.carpl2.tidebid.contracts.EventEnvelope;
@@ -76,6 +77,21 @@ public class AuctionOutboxEventFactory {
                 Long.toString(auctionId),
                 RocketMqTopology.SCHEDULED_COMMANDS_TOPIC,
                 expectedEndAt);
+    }
+
+    public JdbcAuctionOutboxRepository.NewOutboxEvent auctionTimeExtended(
+            long auctionId,
+            Instant previousEndAt,
+            Instant endAt,
+            int extensionCount,
+            Instant extendedAt,
+            String traceId
+    ) {
+        AuctionTimeExtendedEvent payload = new AuctionTimeExtendedEvent(
+                auctionId, previousEndAt, endAt, extensionCount, extendedAt);
+        return businessEvent(UUID.randomUUID(), auctionId, payload,
+                AuctionTimeExtendedEvent.EVENT_TYPE, AuctionTimeExtendedEvent.SCHEMA_VERSION,
+                extendedAt, traceId);
     }
 
     public static UUID deterministicCloseEventId(long auctionId, Instant expectedEndAt) {
