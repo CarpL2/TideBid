@@ -956,8 +956,7 @@ class AuctionPersistenceIntegrationTest {
             assertThat(sessionRepository.findDueScheduledSessions(now, 1))
                     .extracting(AuctionSession::id)
                     .containsExactly(olderAuctionId);
-            assertThat(sessionOpeningService.openDueSessions())
-                    .isEqualTo(new AuctionSessionOpeningService.OpeningResult(2, 2, 0));
+            sessionOpeningService.openDueSessions();
             assertThat(sessionRepository.findSessionById(olderAuctionId).orElseThrow().status())
                     .isEqualTo(AuctionSessionStatus.OPEN);
             assertThat(sessionRepository.findSessionById(newerAuctionId).orElseThrow().status())

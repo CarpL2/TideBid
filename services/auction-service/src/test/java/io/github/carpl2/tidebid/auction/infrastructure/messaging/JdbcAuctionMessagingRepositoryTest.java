@@ -43,7 +43,7 @@ class JdbcAuctionMessagingRepositoryTest {
                         .defaultSchema(schema)
                         .cleanDisabled(true)
                         .load();
-                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
 
                 DriverManagerDataSource dataSource =
                         new DriverManagerDataSource(schemaUrl, "root", target.rootPassword());

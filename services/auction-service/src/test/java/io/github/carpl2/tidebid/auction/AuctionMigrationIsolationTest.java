@@ -58,7 +58,7 @@ class AuctionMigrationIsolationTest {
                         .baselineOnMigrate(false)
                         .load();
 
-                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+                assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
                 assertThat(flyway.migrate().migrationsExecuted).isZero();
                 assertThat(readTables(schemaUrl, rootPassword)).containsExactlyElementsOf(EXPECTED_TABLES);
                 assertThat(readColumns(schemaUrl, rootPassword, "auction_session"))
@@ -110,7 +110,7 @@ class AuctionMigrationIsolationTest {
                         .baselineOnMigrate(false)
                         .load();
 
-                assertThat(recoveredFlyway.migrate().migrationsExecuted).isEqualTo(3);
+                assertThat(recoveredFlyway.migrate().migrationsExecuted).isEqualTo(4);
                 assertThat(readTables(schemaUrl, rootPassword)).containsExactlyElementsOf(EXPECTED_TABLES);
             } finally {
                 statement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
@@ -209,6 +209,81 @@ class AuctionMigrationIsolationTest {
     }
 
     @Test
+    void replaysOnlyPreexistingTerminalOutcomeEventsOnce() throws Exception {
+        String host = environmentOrDefault("TIDEBID_MYSQL_HOST", "127.0.0.1");
+        String port = environmentOrDefault("TIDEBID_MYSQL_PORT", "13306");
+        String rootPassword = System.getenv("TIDEBID_MYSQL_ROOT_PASSWORD");
+        String schema = "tidebid_auction_verify_"
+                + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toLowerCase(Locale.ROOT);
+        String serverUrl = jdbcUrl(host, port, "");
+        String schemaUrl = jdbcUrl(host, port, schema);
+
+        try (Connection admin = DriverManager.getConnection(serverUrl, "root", rootPassword);
+             Statement adminStatement = admin.createStatement()) {
+            createSchema(adminStatement, schema);
+            try {
+                Flyway versionThree = Flyway.configure()
+                        .dataSource(schemaUrl, "root", rootPassword)
+                        .locations("classpath:db/migration")
+                        .defaultSchema(schema)
+                        .target("3")
+                        .cleanDisabled(true)
+                        .load();
+                assertThat(versionThree.migrate().migrationsExecuted).isEqualTo(3);
+
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", rootPassword);
+                     Statement statement = connection.createStatement()) {
+                    insertPublishedOutbox(statement, 701,
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e171", "auction.closed-sold");
+                    insertPublishedOutbox(statement, 702,
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e172", "auction.closed-unsold");
+                    insertPublishedOutbox(statement, 703,
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e173", "deposit.settlement-requested");
+                    insertPublishedOutbox(statement, 704,
+                            "019947e0-e9d4-7f21-8d7a-3c74b922e174", "bid.accepted");
+                }
+
+                Flyway latest = Flyway.configure()
+                        .dataSource(schemaUrl, "root", rootPassword)
+                        .locations("classpath:db/migration")
+                        .defaultSchema(schema)
+                        .cleanDisabled(true)
+                        .load();
+                assertThat(latest.migrate().migrationsExecuted).isOne();
+                assertThat(latest.migrate().migrationsExecuted).isZero();
+
+                try (Connection connection = DriverManager.getConnection(schemaUrl, "root", rootPassword);
+                     Statement statement = connection.createStatement();
+                     ResultSet replayed = statement.executeQuery("""
+                             SELECT event_type, status, published_at
+                             FROM auction_outbox
+                             ORDER BY id
+                             """)) {
+                    assertThat(replayed.next()).isTrue();
+                    assertThat(replayed.getString("event_type")).isEqualTo("auction.closed-sold");
+                    assertThat(replayed.getString("status")).isEqualTo("PENDING");
+                    assertThat(replayed.getTimestamp("published_at")).isNull();
+                    assertThat(replayed.next()).isTrue();
+                    assertThat(replayed.getString("event_type")).isEqualTo("auction.closed-unsold");
+                    assertThat(replayed.getString("status")).isEqualTo("PENDING");
+                    assertThat(replayed.getTimestamp("published_at")).isNull();
+                    assertThat(replayed.next()).isTrue();
+                    assertThat(replayed.getString("event_type")).isEqualTo("deposit.settlement-requested");
+                    assertThat(replayed.getString("status")).isEqualTo("PENDING");
+                    assertThat(replayed.getTimestamp("published_at")).isNull();
+                    assertThat(replayed.next()).isTrue();
+                    assertThat(replayed.getString("event_type")).isEqualTo("bid.accepted");
+                    assertThat(replayed.getString("status")).isEqualTo("PUBLISHED");
+                    assertThat(replayed.getTimestamp("published_at")).isNotNull();
+                    assertThat(replayed.next()).isFalse();
+                }
+            } finally {
+                adminStatement.executeUpdate("DROP DATABASE IF EXISTS `" + schema + "`");
+            }
+        }
+    }
+
+    @Test
     void createsServiceLocalOutboxAndInboxWithRequiredConstraintsAndIndexes() throws Exception {
         String host = environmentOrDefault("TIDEBID_MYSQL_HOST", "127.0.0.1");
         String port = environmentOrDefault("TIDEBID_MYSQL_PORT", "13306");
@@ -243,7 +318,7 @@ class AuctionMigrationIsolationTest {
                         .defaultSchema(schema)
                         .cleanDisabled(true)
                         .load();
-                assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+                assertThat(latest.migrate().migrationsExecuted).isEqualTo(2);
 
                 assertThat(readIndexes(schemaUrl, rootPassword, "auction_outbox"))
                         .contains(
@@ -398,6 +473,28 @@ class AuctionMigrationIsolationTest {
                     '2026-09-16 12:00:00.000000', '2026-09-16 12:00:00.000000'
                 )
                 """.formatted(id, eventId, eventId, eventId));
+    }
+
+    private static void insertPublishedOutbox(
+            Statement statement,
+            long id,
+            String eventId,
+            String eventType
+    ) throws SQLException {
+        statement.executeUpdate("""
+                INSERT INTO auction_outbox (
+                    id, event_id, aggregate_type, aggregate_id, event_type, schema_version,
+                    topic, tag, message_key, payload, payload_hash, deliver_at, status,
+                    attempt_count, next_attempt_at, published_at, created_at, updated_at
+                ) VALUES (
+                    %d, '%s', 'AUCTION', '201', '%s', 1,
+                    'tidebid-auction-events', '%s', '%s',
+                    JSON_OBJECT('eventId', '%s'), REPEAT('a', 64),
+                    '2026-09-16 13:00:00.000000', 'PUBLISHED', 1,
+                    '2026-09-16 12:00:00.000000', '2026-09-16 13:00:01.000000',
+                    '2026-09-16 12:00:00.000000', '2026-09-16 13:00:01.000000'
+                )
+                """.formatted(id, eventId, eventType, eventType, eventId, eventId));
     }
 
     private static void insertInbox(

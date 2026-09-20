@@ -2,16 +2,21 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project is currently in the foundation stage. Four shared modules, six executable services, local middleware, registration, login, authenticated profile and virtual-wallet queries are available. The Vue frontend completes the same account flow through the gateway, and checked lifecycle scripts start, verify, and stop the local stack. Bidding remains out of scope for this stage.
+The project currently completes the reliable-trade stage: account security, private auction assets,
+review, deposit-backed registration, concurrent manual bidding, reliable closing, virtual-fund
+settlement, winning orders, simulated payment, payment timeout and seller credit all run end to end.
+Transactional Outbox/Inbox processing and database reconciliation provide recovery across duplicate
+delivery, process restarts and Broker outages. Realtime WebSocket delivery and AI inference remain
+later-stage work; those two services are intentionally health-check skeletons here.
 
 ## Core flow
 
 1. A seller creates an auction item and submits it for review.
 2. A bidder registers for the auction and locks a virtual deposit.
 3. Valid bids are decided by the database with optimistic concurrency control.
-4. Bid changes are broadcast to subscribed clients in real time.
-5. Closing produces a reliable event, creates an order, and releases or deducts virtual funds.
-6. An optional AI assistant can propose item metadata from images without blocking the auction flow.
+4. Accepted bids commit with a reliable Outbox event; stage 03 pages refresh or poll HTTP state.
+5. Closing produces a reliable event, creates an order, and releases or captures virtual deposits.
+6. The winner pays any remaining virtual amount; timeout and seller credit converge asynchronously.
 
 ## Modules
 
@@ -21,8 +26,8 @@ The project is currently in the foundation stage. Four shared modules, six execu
 | `account-service` | Users, roles, virtual wallets, ledgers, and deposits |
 | `auction-service` | Items, review, enrollment, bids, and auction state |
 | `trade-service` | Winning orders, simulated payment, and payment timeout |
-| `realtime-service` | WebSocket sessions, subscriptions, and bid broadcasts |
-| `ai-service` | Optional image understanding and listing suggestions |
+| `realtime-service` | Stage 04 health-check skeleton; WebSocket delivery is not implemented yet |
+| `ai-service` | Stage 05 health-check skeleton; model inference is not implemented yet |
 | `common/*` | Stable response, security, web, and cross-service contract modules |
 | `web` | Vue 3 user and administration interface |
 
@@ -36,7 +41,7 @@ The project is currently in the foundation stage. Four shared modules, six execu
 
 ## Development prerequisites
 
-Install the following tools before running the completed foundation environment:
+Install the following tools before running the completed stage 03 environment:
 
 - JDK 21
 - Maven 3.9 or newer
@@ -85,17 +90,16 @@ pnpm test
 pnpm build
 ```
 
-With Gateway and Account Service running, start the frontend with `pnpm dev` and open
-`http://127.0.0.1:5173`. Register and login requests use the Vite `/api` proxy to Gateway port
-9000. The authenticated dashboard reads the current profile and virtual wallet; later auction,
-order and administration navigation remains visibly disabled in phase 01.
+With the host applications running, start the frontend with `pnpm dev` and open
+`http://127.0.0.1:5173`. All account, auction, order and administration requests use the Vite
+`/api` proxy to Gateway port 9000; the browser does not call a business service directly.
 
 The browser stores the demonstration Access Token in `sessionStorage`, so refreshing the same tab
 restores the session and closing the tab clears it. This is a local portfolio-project tradeoff, not
 a production security recommendation: an XSS payload running in the page could still read the
 Token. A 401 from an authenticated request clears the session and returns the user to login.
 
-## Run the complete foundation stack
+## Run the complete stage 03 stack
 
 After creating `.env`, start the middleware and all host applications from the repository root:
 
@@ -122,7 +126,11 @@ Validate the local application configuration and toolchain without building or s
 
 ```powershell
 .\scripts\start-apps.ps1 -CheckOnly
+.\scripts\check-nacos-registrations.ps1
 ```
+
+The registration check logs into the local Nacos Admin API without printing the access token and
+requires exactly one healthy `TIDEBID_GROUP` instance for Gateway 9000 and services 9101-9105.
 
 PIDs are stored in ignored `.runtime/apps/processes.json`; stdout and stderr are separated under
 `.runtime/apps/logs/<timestamp>/`. Repeating the start command recognizes the same healthy recorded
@@ -263,6 +271,12 @@ unset and Feign resolves `tidebid-account` through service discovery. On startup
 and applies versioned files under `db/migration`; MyBatis-Plus uses the same application data source
 for runtime persistence. `standalone` explicitly disables database and Flyway auto-configuration so
 the no-infrastructure skeleton tests remain useful.
+
+Auction migration V4 performs a one-time replay of already-published closing outcomes and deposit
+settlement requests. This covers upgrades where phase 02 auctions closed before the new Account or
+Trade consumer group first came online. Existing consumers absorb the repeated event IDs through
+their Inbox, while previously missed auctions receive their orders and Hold settlement without
+cross-Schema reads or manual business-row edits.
 
 Account persistence entities stay under `account.infrastructure.persistence` and are never API
 contracts. Tables with one `BIGINT` primary key use MyBatis-Plus application-generated IDs; the
