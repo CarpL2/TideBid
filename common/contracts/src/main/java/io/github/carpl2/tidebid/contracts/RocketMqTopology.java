@@ -16,6 +16,14 @@ public final class RocketMqTopology {
     public static final String TRADE_ACCOUNT_CONSUMER_GROUP = "tidebid-trade-account-v1";
     public static final String TRADE_TIMEOUT_CONSUMER_GROUP = "tidebid-trade-timeout-v1";
     public static final String ACCOUNT_CREDIT_CONSUMER_GROUP = "tidebid-account-credit-v1";
+    public static final String REALTIME_AUCTION_CONSUMER_GROUP = "tidebid-realtime-auction-v1";
+
+    public static final String REALTIME_AUCTION_EVENT_TAGS = String.join("||",
+            BidAcceptedEvent.EVENT_TYPE,
+            AuctionTimeExtendedEvent.EVENT_TYPE,
+            AuctionClosedSoldEvent.EVENT_TYPE,
+            AuctionClosedUnsoldEvent.EVENT_TYPE
+    );
 
     private RocketMqTopology() {
     }

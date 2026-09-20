@@ -15,8 +15,8 @@ class ContractValidationTest {
     private static final Map<Class<?>, String> VERSIONED_TYPES = versionedTypes();
 
     @Test
-    void everyStageThreePayloadHasStableUniqueEventTypeAndVersion() throws Exception {
-        assertThat(VERSIONED_TYPES).hasSize(11);
+    void everyPayloadHasStableUniqueEventTypeAndVersion() throws Exception {
+        assertThat(VERSIONED_TYPES).hasSize(12);
         assertThat(VERSIONED_TYPES.values())
                 .doesNotHaveDuplicates()
                 .allMatch(value -> value.matches("[a-z]+(?:[.-][a-z]+)+"));
@@ -97,6 +97,7 @@ class ContractValidationTest {
     private static Map<Class<?>, String> versionedTypes() {
         Map<Class<?>, String> types = new LinkedHashMap<>();
         types.put(BidAcceptedEvent.class, "auction.bid-accepted");
+        types.put(AuctionTimeExtendedEvent.class, "auction.time-extended");
         types.put(CloseAuctionCommand.class, "auction.close");
         types.put(AuctionClosedSoldEvent.class, "auction.closed-sold");
         types.put(AuctionClosedUnsoldEvent.class, "auction.closed-unsold");

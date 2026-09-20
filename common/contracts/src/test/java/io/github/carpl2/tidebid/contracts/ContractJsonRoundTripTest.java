@@ -47,12 +47,12 @@ class ContractJsonRoundTripTest {
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     @TestFactory
-    Stream<DynamicTest> allStageThreePayloadsRoundTripWithoutPrecisionLoss() {
+    Stream<DynamicTest> allPayloadsRoundTripWithoutPrecisionLoss() {
         return samples().map(sample -> DynamicTest.dynamicTest(sample.name(), () -> verifyRoundTrip(sample)));
     }
 
     @TestFactory
-    Stream<DynamicTest> allStageThreePayloadsExcludeSecretsUrlsAndPii() {
+    Stream<DynamicTest> allPayloadsExcludeSecretsUrlsAndPii() {
         return samples().map(sample -> DynamicTest.dynamicTest(
                 sample.name() + " data minimization",
                 () -> verifySensitiveDataExcluded(sample)
@@ -116,6 +116,8 @@ class ContractJsonRoundTripTest {
         return Stream.of(
                 sample(new BidAcceptedEvent(
                         ID_1, ID_2, ID_3, money("2333.00"), 7, STARTED_AT)),
+                sample(new AuctionTimeExtendedEvent(
+                        ID_1, STARTED_AT, FINISHED_AT, 1, STARTED_AT.plusMillis(500))),
                 sample(new CloseAuctionCommand(ID_1, FINISHED_AT)),
                 sample(new AuctionClosedSoldEvent(
                         ID_1, ID_2, "限量收藏品", ID_3, ID_4, ID_5,

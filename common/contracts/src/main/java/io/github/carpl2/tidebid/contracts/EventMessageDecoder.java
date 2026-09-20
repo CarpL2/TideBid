@@ -21,7 +21,7 @@ public final class EventMessageDecoder {
     private final int maxMessageBytes;
 
     public EventMessageDecoder(ObjectMapper objectMapper) {
-        this(objectMapper, stageThreePayloadTypes(), DEFAULT_MAX_MESSAGE_BYTES);
+        this(objectMapper, supportedPayloadTypes(), DEFAULT_MAX_MESSAGE_BYTES);
     }
 
     public EventMessageDecoder(
@@ -116,9 +116,11 @@ public final class EventMessageDecoder {
         return value.intValue();
     }
 
-    private static Map<String, Map<Integer, Class<?>>> stageThreePayloadTypes() {
+    private static Map<String, Map<Integer, Class<?>>> supportedPayloadTypes() {
         Map<String, Map<Integer, Class<?>>> registry = new LinkedHashMap<>();
         register(registry, BidAcceptedEvent.EVENT_TYPE, BidAcceptedEvent.SCHEMA_VERSION, BidAcceptedEvent.class);
+        register(registry, AuctionTimeExtendedEvent.EVENT_TYPE, AuctionTimeExtendedEvent.SCHEMA_VERSION,
+                AuctionTimeExtendedEvent.class);
         register(registry, CloseAuctionCommand.EVENT_TYPE, CloseAuctionCommand.SCHEMA_VERSION, CloseAuctionCommand.class);
         register(registry, AuctionClosedSoldEvent.EVENT_TYPE, AuctionClosedSoldEvent.SCHEMA_VERSION, AuctionClosedSoldEvent.class);
         register(registry, AuctionClosedUnsoldEvent.EVENT_TYPE, AuctionClosedUnsoldEvent.SCHEMA_VERSION, AuctionClosedUnsoldEvent.class);

@@ -39,6 +39,31 @@ class EventMessageDecoderTest {
     }
 
     @Test
+    void decodesAuctionTimeExtendedEvent() throws Exception {
+        AuctionTimeExtendedEvent payload = new AuctionTimeExtendedEvent(
+                9_007_199_254_740_993L,
+                Instant.parse("2026-09-16T12:30:00Z"),
+                Instant.parse("2026-09-16T12:31:00Z"),
+                1,
+                Instant.parse("2026-09-16T12:29:30Z")
+        );
+        EventEnvelope<AuctionTimeExtendedEvent> envelope = new EventEnvelope<>(
+                UUID.fromString("4ad45898-3486-41cc-81d2-c240cf82aaae"),
+                AuctionTimeExtendedEvent.EVENT_TYPE,
+                AuctionTimeExtendedEvent.SCHEMA_VERSION,
+                Instant.parse("2026-09-16T12:29:30Z"),
+                "tidebid-auction",
+                "trace_20260916-abcdef",
+                payload
+        );
+
+        EventEnvelope<?> decoded = decoder.decode(objectMapper.writeValueAsBytes(envelope));
+
+        assertThat(decoded).isEqualTo(envelope);
+        assertThat(decoded.payload()).isInstanceOf(AuctionTimeExtendedEvent.class);
+    }
+
+    @Test
     void rejectsUnknownEventType() {
         assertRejected(
                 envelopeJson("auction.not-registered", 1, "{\"auctionId\":\"42\"}"),

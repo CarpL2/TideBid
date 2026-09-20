@@ -1,0 +1,15 @@
+package io.github.carpl2.tidebid.contracts;
+
+public enum RealtimeErrorCode {
+    INVALID_MESSAGE,
+    UNSUPPORTED_PROTOCOL,
+    UNAUTHORIZED,
+    FORBIDDEN_ORIGIN,
+    TICKET_EXPIRED,
+    TICKET_REUSED,
+    RATE_LIMITED,
+    SUBSCRIPTION_LIMIT_EXCEEDED,
+    AUCTION_NOT_FOUND,
+    SNAPSHOT_UNAVAILABLE,
+    INTERNAL_ERROR
+}

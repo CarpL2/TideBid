@@ -21,7 +21,8 @@ class RocketMqTopologyTest {
                 RocketMqTopology.TRADE_AUCTION_CONSUMER_GROUP,
                 RocketMqTopology.TRADE_ACCOUNT_CONSUMER_GROUP,
                 RocketMqTopology.TRADE_TIMEOUT_CONSUMER_GROUP,
-                RocketMqTopology.ACCOUNT_CREDIT_CONSUMER_GROUP
+                RocketMqTopology.ACCOUNT_CREDIT_CONSUMER_GROUP,
+                RocketMqTopology.REALTIME_AUCTION_CONSUMER_GROUP
         );
 
         assertThat(topics)
@@ -32,5 +33,12 @@ class RocketMqTopologyTest {
                 .allMatch(name -> name.startsWith("tidebid-") && name.endsWith("-v1"));
         assertThat(RocketMqTopology.SCHEDULED_COMMANDS_TOPIC)
                 .isEqualTo("tidebid-scheduled-commands");
+        assertThat(RocketMqTopology.REALTIME_AUCTION_EVENT_TAGS.split("\\|\\|"))
+                .containsExactly(
+                        BidAcceptedEvent.EVENT_TYPE,
+                        AuctionTimeExtendedEvent.EVENT_TYPE,
+                        AuctionClosedSoldEvent.EVENT_TYPE,
+                        AuctionClosedUnsoldEvent.EVENT_TYPE
+                );
     }
 }
