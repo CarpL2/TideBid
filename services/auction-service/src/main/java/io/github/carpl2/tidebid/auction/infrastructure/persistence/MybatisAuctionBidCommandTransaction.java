@@ -11,6 +11,7 @@ import io.github.carpl2.tidebid.auction.infrastructure.messaging.JdbcAuctionOutb
 import io.github.carpl2.tidebid.auction.infrastructure.persistence.mapper.AuctionSessionMapper;
 import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.DeadlockLoserDataAccessException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -69,6 +70,11 @@ public class MybatisAuctionBidCommandTransaction implements AuctionBidCommandTra
             return new CommittedCommand(request.completedCommand(), request.bids());
         } catch (DuplicateKeyException exception) {
             throw new DuplicateCommandException(exception);
+        } catch (DeadlockLoserDataAccessException exception) {
+            // InnoDB can deadlock when two commands hold command-row FK locks and then
+            // compete for the same auction session. Treat it like a CAS conflict so the
+            // bounded coordinator can reload and re-plan.
+            throw new AuctionBidCommandTransaction.BidConflictException();
         }
     }
 

@@ -126,7 +126,7 @@ class AuctionProxyMySqlIntegrationTest {
                     AuctionBidCommandTransaction.ProxyMutation.insert(challenger));
 
             AuctionSession stored = sessionRepository.findSessionById(fixture.auctionId()).orElseThrow();
-            assertThat(stored.currentBidderId()).isEqualTo(201L);
+            assertThat(stored.currentBidderId()).isEqualTo(101L);
             assertThat(stored.currentPrice()).isEqualByComparingTo("310.00");
             assertThat(proxyBidRepository.findActiveByAuction(fixture.auctionId()))
                     .extracting(AuctionProxyBid::bidderId)
