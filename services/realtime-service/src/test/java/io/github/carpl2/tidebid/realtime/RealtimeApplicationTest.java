@@ -13,6 +13,8 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.core.env.Environment;
 import org.springframework.test.context.ActiveProfiles;
+import io.github.carpl2.tidebid.realtime.application.port.AuctionSnapshotClient;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,6 +47,12 @@ class RealtimeApplicationTest {
         assertThat(context.getBeansOfType(GlobalExceptionHandler.class)).hasSize(1);
         assertThat(environment.getProperty("spring.cloud.nacos.discovery.enabled", Boolean.class)).isFalse();
         assertThat(environment.getProperty("spring.cloud.nacos.config.enabled", Boolean.class)).isFalse();
+        assertThat(environment.getProperty("spring.cloud.openfeign.enabled", Boolean.class)).isFalse();
+        assertThat(environment.getProperty("tidebid.realtime.redis.enabled", Boolean.class)).isFalse();
+        assertThat(environment.getProperty("tidebid.realtime.rocketmq.enabled", Boolean.class)).isFalse();
+        assertThat(environment.getProperty("tidebid.realtime.auction-client.enabled", Boolean.class)).isFalse();
+        assertThat(context.getBeansOfType(AuctionSnapshotClient.class)).isEmpty();
+        assertThat(context.getBeansOfType(RedisConnectionFactory.class)).isEmpty();
     }
 
     @ParameterizedTest

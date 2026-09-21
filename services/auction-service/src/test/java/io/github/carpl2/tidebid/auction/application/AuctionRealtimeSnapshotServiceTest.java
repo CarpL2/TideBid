@@ -62,6 +62,7 @@ class AuctionRealtimeSnapshotServiceTest {
         assertThat(result.session().bidCount()).isEqualTo(2L);
         assertThat(result.currentUserLeading()).isTrue();
         assertThat(result.currentUserHasProxy()).isFalse();
+        assertThat(result.trustedUserId()).isEqualTo(USER_ID);
         assertThat(result.generatedAt()).isEqualTo(NOW);
     }
 

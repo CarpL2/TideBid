@@ -5,4 +5,46 @@ logging:
 info:
   config:
     service-source: nacos:tidebid-realtime.yml
-    revision: foundation-01
+    revision: realtime-proxy-04
+
+spring:
+  data:
+    redis:
+      host: ${TIDEBID_REDIS_HOST:127.0.0.1}
+      port: ${TIDEBID_REDIS_PORT:6379}
+      password: ${TIDEBID_REDIS_PASSWORD:}
+      timeout: 2s
+
+tidebid:
+  realtime:
+    ticket:
+      ttl: 30s
+      rate-limit-window: 60s
+      rate-limit-max-requests: 10
+    connection:
+      max-per-user: 5
+      lease-ttl: 120s
+    subscription:
+      max-per-connection: 20
+      sync-buffer-capacity: 128
+    heartbeat:
+      interval: 30s
+      idle-timeout: 90s
+    queue:
+      send-capacity: 128
+      max-client-message-size: 8KB
+      control-window: 10s
+      control-max-messages: 30
+    auction-client:
+      enabled: true
+      base-url: ""
+      connect-timeout: 2s
+      read-timeout: 3s
+    redis:
+      enabled: true
+    rocketmq:
+      enabled: true
+      endpoints: ${TIDEBID_ROCKETMQ_ENDPOINTS:127.0.0.1:8081}
+      request-timeout: 3s
+      consumer-group: tidebid-realtime-auction-v1
+      auction-events-topic: tidebid-auction-events

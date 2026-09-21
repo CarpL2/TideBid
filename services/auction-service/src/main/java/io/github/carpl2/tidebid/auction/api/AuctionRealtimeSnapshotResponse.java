@@ -27,9 +27,9 @@ public record AuctionRealtimeSnapshotResponse(
                 Long.toString(source.session().id()), source.session().status(),
                 source.session().displayPrice(), source.session().minimumNextBid(), source.session().bidCount(),
                 source.session().endAt(), source.session().extensionCount(), source.session().closedAt(),
-                source.bids().isEmpty() ? source.session().bidCount() : source.bids().getLast().sequenceNo(),
+                source.session().bidCount(),
                 source.currentUserLeading(), source.currentUserHasProxy(), source.generatedAt(),
-                source.bids().stream().map(Bid::from).toList()
+                source.bids().stream().map(bid -> Bid.from(bid, source.trustedUserId())).toList()
         );
     }
 
@@ -38,11 +38,13 @@ public record AuctionRealtimeSnapshotResponse(
             BigDecimal amount,
             BigDecimal previousPrice,
             long sequenceNo,
+            boolean mine,
             Instant acceptedAt
     ) {
-        static Bid from(io.github.carpl2.tidebid.auction.domain.BidRecord source) {
+        static Bid from(io.github.carpl2.tidebid.auction.domain.BidRecord source, Long trustedUserId) {
             return new Bid(Long.toString(source.id()), source.amount(), source.previousPrice(),
-                    source.sequenceNo(), source.createdAt());
+                    source.sequenceNo(), trustedUserId != null && source.bidderId() == trustedUserId,
+                    source.createdAt());
         }
     }
 }

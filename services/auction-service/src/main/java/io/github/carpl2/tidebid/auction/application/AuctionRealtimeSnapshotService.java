@@ -57,7 +57,7 @@ public class AuctionRealtimeSnapshotService {
         boolean hasProxy = trustedUserId != null && proxyBidRepository.findByAuctionAndBidder(auctionId, trustedUserId)
                 .filter(proxy -> proxy.status() == AuctionProxyBidStatus.ACTIVE)
                 .isPresent();
-        return new Snapshot(session, bids, leading, hasProxy, clock.instant());
+        return new Snapshot(session, bids, trustedUserId, leading, hasProxy, clock.instant());
     }
 
     private static void validateBids(AuctionSession session, List<BidRecord> bids, long afterSequenceNo) {
@@ -76,6 +76,7 @@ public class AuctionRealtimeSnapshotService {
     public record Snapshot(
             AuctionSession session,
             List<BidRecord> bids,
+            Long trustedUserId,
             boolean currentUserLeading,
             boolean currentUserHasProxy,
             Instant generatedAt
@@ -83,6 +84,9 @@ public class AuctionRealtimeSnapshotService {
         public Snapshot {
             session = Objects.requireNonNull(session, "session must not be null");
             bids = List.copyOf(Objects.requireNonNull(bids, "bids must not be null"));
+            if (trustedUserId != null && trustedUserId <= 0) {
+                throw new IllegalArgumentException("trustedUserId must be positive");
+            }
             generatedAt = Objects.requireNonNull(generatedAt, "generatedAt must not be null");
         }
     }
