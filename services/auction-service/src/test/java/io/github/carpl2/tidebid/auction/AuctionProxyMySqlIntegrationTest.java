@@ -2,6 +2,7 @@ package io.github.carpl2.tidebid.auction;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import io.github.carpl2.tidebid.auction.application.port.AuctionBidCommandRepository;
+import io.github.carpl2.tidebid.auction.application.AuctionBidService;
 import io.github.carpl2.tidebid.auction.application.port.AuctionBidCommandTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionClosingTransaction;
@@ -72,6 +73,36 @@ class AuctionProxyMySqlIntegrationTest {
     @Autowired private AuctionClosingTransaction closingTransaction;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private Clock clock;
+    @Autowired private AuctionBidService bidService;
+
+    @Test
+    void manualBidServiceReturnsProxyOutcomeAndReplaysWithoutNewRows() {
+        Fixture fixture = fixtureEndingSoon();
+        try {
+            proxyBidRepository.insert(proxy(fixture.auctionId(), 201L, "300.00", 1L));
+            AuctionSession before = sessionRepository.findSessionById(fixture.auctionId()).orElseThrow();
+            AuctionBidService.PlaceBidCommand request = new AuctionBidService.PlaceBidCommand(
+                    101L, fixture.auctionId(), "manual-proxy-integration", new BigDecimal("200.00"));
+
+            AuctionBidService.Result first = bidService.place(request);
+            AuctionBidService.Result replay = bidService.place(request);
+
+            assertThat(first.leading()).isFalse();
+            assertThat(first.outbidByProxy()).isTrue();
+            assertThat(first.extended()).isTrue();
+            assertThat(first.bids()).extracting(BidRecord::source)
+                    .containsExactly(BidSource.MANUAL, BidSource.PROXY);
+            assertThat(first.session().currentPrice()).isEqualByComparingTo("210.00");
+            assertThat(first.session().currentBidderId()).isEqualTo(201L);
+            assertThat(first.session().endAt()).isAfter(before.endAt());
+            assertThat(replay.replayed()).isTrue();
+            assertThat(replay.command()).isEqualTo(first.command());
+            assertThat(replay.bids()).isEqualTo(first.bids());
+            assertThat(countOutbox(fixture.auctionId(), "auction.bid-accepted")).isEqualTo(2L);
+        } finally {
+            cleanup(fixture);
+        }
+    }
 
     @Test
     void manualBidAgainstProxyPersistsTwoPublicBidsAndNeverStoresMaximumInOutboxPayload() {

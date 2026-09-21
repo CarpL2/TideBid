@@ -1,32 +1,43 @@
 package io.github.carpl2.tidebid.auction.application;
 
-import io.github.carpl2.tidebid.auction.application.port.AuctionBidTransaction;
+import io.github.carpl2.tidebid.auction.application.port.AuctionBidCommandRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionBidCommandTransaction;
+import io.github.carpl2.tidebid.auction.application.port.AuctionProxyBidRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommand;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandStatus;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandType;
 import io.github.carpl2.tidebid.auction.domain.AuctionErrorCode;
+import io.github.carpl2.tidebid.auction.domain.AuctionProxyBid;
+import io.github.carpl2.tidebid.auction.domain.AuctionProxyBidStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionRegistration;
 import io.github.carpl2.tidebid.auction.domain.AuctionRegistrationStatus;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
+import io.github.carpl2.tidebid.auction.domain.BidSource;
 import io.github.carpl2.tidebid.core.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,350 +45,186 @@ class AuctionBidServiceTest {
 
     private static final long AUCTION_ID = 101L;
     private static final long BIDDER_ID = 201L;
-    private static final long BID_ID = 301L;
     private static final String REQUEST_ID = "manual-bid-0001";
-    private static final Instant NOW = Instant.parse("2026-09-14T03:00:00.123456789Z");
-    private static final Instant ACCEPTED_AT = Instant.parse("2026-09-14T03:00:00.123456Z");
+    private static final Instant NOW = Instant.parse("2026-09-21T05:00:00.123456Z");
 
-    private AuctionSessionRepository sessionRepository;
-    private AuctionRegistrationRepository registrationRepository;
-    private AuctionSessionLifecycleService lifecycleService;
-    private AuctionBidTransaction bidTransaction;
-    private IdGenerator idGenerator;
+    private AuctionSessionRepository sessions;
+    private AuctionRegistrationRepository registrations;
+    private AuctionProxyBidRepository proxies;
+    private AuctionBidCommandRepository commands;
+    private AuctionBidCommandTransaction transaction;
+    private AuctionSessionLifecycleService lifecycle;
+    private IdGenerator ids;
     private AuctionBidService service;
 
     @BeforeEach
     void setUp() {
-        sessionRepository = mock(AuctionSessionRepository.class);
-        registrationRepository = mock(AuctionRegistrationRepository.class);
-        lifecycleService = mock(AuctionSessionLifecycleService.class);
-        bidTransaction = mock(AuctionBidTransaction.class);
-        idGenerator = mock(IdGenerator.class);
-        service = new AuctionBidService(
-                sessionRepository,
-                registrationRepository,
-                lifecycleService,
-                bidTransaction,
-                idGenerator,
-                Clock.fixed(NOW, ZoneOffset.UTC)
-        );
+        sessions = mock(AuctionSessionRepository.class);
+        registrations = mock(AuctionRegistrationRepository.class);
+        proxies = mock(AuctionProxyBidRepository.class);
+        commands = mock(AuctionBidCommandRepository.class);
+        transaction = mock(AuctionBidCommandTransaction.class);
+        lifecycle = mock(AuctionSessionLifecycleService.class);
+        ids = mock(IdGenerator.class);
+        service = new AuctionBidService(sessions, registrations, proxies, commands, transaction,
+                lifecycle, ids, Clock.fixed(NOW, ZoneOffset.UTC));
+        when(commands.findByActorAndRequest(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.empty());
+        when(registrations.findByAuctionAndBidder(AUCTION_ID, BIDDER_ID)).thenReturn(Optional.of(registration()));
+        when(lifecycle.advanceToCurrentState(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(proxies.findActiveByAuction(AUCTION_ID)).thenReturn(List.of());
+        when(ids.nextId()).thenReturn(301L, 302L, 303L, 304L, 305L, 306L, 307L, 308L);
+        when(transaction.commit(any())).thenAnswer(invocation -> committed(invocation.getArgument(0)));
     }
 
     @Test
-    void validatesThenAcceptsANormalizedBid() {
-        AuctionSession opened = session(null, 0L, 7L);
-        AuctionRegistration registered = registration();
-        arrangeNewBid(opened, registered);
-        when(idGenerator.nextId()).thenReturn(BID_ID);
-        when(bidTransaction.accept(any(), anyLong())).thenAnswer(invocation -> {
-            BidRecord candidate = invocation.getArgument(0);
-            return new AuctionBidTransaction.AcceptedBid(
-                    session(candidate.amount(), candidate.sequenceNo(), 8L), candidate
-            );
-        });
+    void acceptsManualBidThroughUnifiedCommandTransaction() {
+        AuctionSession before = session(null, null, 0, 7, NOW.plusSeconds(300));
+        AuctionSession latest = session(money("100.00"), BIDDER_ID, 1, 8, NOW.plusSeconds(300));
+        when(sessions.findSessionById(AUCTION_ID)).thenReturn(Optional.of(before), Optional.of(latest));
 
-        BidRecord result = service.place(command(AUCTION_ID, new BigDecimal("100")));
+        AuctionBidService.Result result = service.place(command("100.00"));
 
-        assertThat(result.id()).isEqualTo(BID_ID);
-        assertThat(result.amount()).isEqualTo(new BigDecimal("100.00"));
-        assertThat(result.previousPrice()).isNull();
-        assertThat(result.sequenceNo()).isEqualTo(1L);
-        assertThat(result.createdAt()).isEqualTo(ACCEPTED_AT);
-        ArgumentCaptor<BidRecord> bidCaptor = ArgumentCaptor.forClass(BidRecord.class);
-        verify(bidTransaction).accept(bidCaptor.capture(), org.mockito.ArgumentMatchers.eq(7L));
-        assertThat(bidCaptor.getValue()).isEqualTo(result);
-        verify(lifecycleService).advanceToCurrentState(opened);
+        assertThat(result.leading()).isTrue();
+        assertThat(result.outbidByProxy()).isFalse();
+        assertThat(result.bids()).hasSize(1);
+        assertThat(result.bids().getFirst().source()).isEqualTo(BidSource.MANUAL);
+        assertThat(result.session()).isSameAs(latest);
     }
 
     @Test
-    void returnsTheOriginalBidForAnIdempotentRetryWithoutReadingTheAuction() {
-        BidRecord existing = bid(BID_ID, AUCTION_ID, BIDDER_ID, REQUEST_ID, "120.00", "100.00", 2L);
-        when(sessionRepository.findBid(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.of(existing));
+    void reportsImmediateProxyResponseWithoutExposingTheMaximum() {
+        AuctionSession before = session(null, null, 0, 7, NOW.plusSeconds(300));
+        AuctionSession latest = session(money("210.00"), 901L, 2, 9, NOW.plusSeconds(300));
+        when(sessions.findSessionById(AUCTION_ID)).thenReturn(Optional.of(before), Optional.of(latest));
+        when(proxies.findActiveByAuction(AUCTION_ID)).thenReturn(List.of(proxy(901L, "500.00")));
 
-        assertThat(service.place(command(AUCTION_ID, new BigDecimal("120.0")))).isSameAs(existing);
+        AuctionBidService.Result result = service.place(command("200.00"));
 
-        verify(sessionRepository, never()).findSessionById(anyLong());
-        verify(registrationRepository, never()).findByAuctionAndBidder(anyLong(), anyLong());
-        verify(bidTransaction, never()).accept(any(), anyLong());
+        assertThat(result.leading()).isFalse();
+        assertThat(result.outbidByProxy()).isTrue();
+        assertThat(result.bids()).extracting(BidRecord::source)
+                .containsExactly(BidSource.MANUAL, BidSource.PROXY);
+        assertThat(result.bids()).extracting(BidRecord::amount)
+                .containsExactly(money("200.00"), money("210.00"));
     }
 
     @Test
-    void rejectsReusingARequestIdForDifferentPayload() {
-        BidRecord existing = bid(BID_ID, AUCTION_ID, BIDDER_ID, REQUEST_ID, "120.00", "100.00", 2L);
-        when(sessionRepository.findBid(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.of(existing));
+    void retriesCasByReloadingAndReplanning() {
+        AuctionSession first = session(null, null, 0, 7, NOW.plusSeconds(300));
+        AuctionSession second = session(money("110.00"), 901L, 1, 8, NOW.plusSeconds(300));
+        AuctionSession latest = session(money("200.00"), BIDDER_ID, 2, 9, NOW.plusSeconds(300));
+        when(sessions.findSessionById(AUCTION_ID))
+                .thenReturn(Optional.of(first), Optional.of(second), Optional.of(latest));
+        doThrow(new AuctionBidCommandTransaction.BidConflictException())
+                .doAnswer(invocation -> committed(invocation.getArgument(0)))
+                .when(transaction).commit(any());
 
-        assertBusinessError(
-                () -> service.place(command(AUCTION_ID + 1, new BigDecimal("120.00"))),
-                AuctionErrorCode.IDEMPOTENCY_CONFLICT
-        );
-        assertBusinessError(
-                () -> service.place(command(AUCTION_ID, new BigDecimal("121.00"))),
-                AuctionErrorCode.IDEMPOTENCY_CONFLICT
-        );
+        AuctionBidService.Result result = service.place(command("200.00"));
+
+        assertThat(result.leading()).isTrue();
+        assertThat(result.bids().getFirst().previousPrice()).isEqualByComparingTo("110.00");
+        verify(transaction, times(2)).commit(any());
     }
 
     @Test
-    void resolvesAConcurrentDuplicateInsertFromTheWinningIdempotencyRecord() {
-        AuctionSession opened = session(null, 0L, 7L);
-        AuctionRegistration registered = registration();
-        BidRecord winner = bid(BID_ID + 1, AUCTION_ID, BIDDER_ID, REQUEST_ID, "100.00", null, 1L);
-        when(sessionRepository.findBid(BIDDER_ID, REQUEST_ID))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(winner));
-        when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(opened));
-        when(lifecycleService.advanceToCurrentState(opened)).thenReturn(opened);
-        when(registrationRepository.findByAuctionAndBidder(AUCTION_ID, BIDDER_ID))
-                .thenReturn(Optional.of(registered));
-        when(idGenerator.nextId()).thenReturn(BID_ID);
-        when(bidTransaction.accept(any(), anyLong())).thenThrow(
-                new AuctionBidTransaction.DuplicateBidException(new RuntimeException("duplicate"))
-        );
+    void returnsStoredCommandAndBidsForIdempotentReplay() throws Exception {
+        AuctionSession latest = session(money("210.00"), 901L, 2, 9, NOW.plusSeconds(300));
+        AuctionBidCommand stored = new AuctionBidCommand(
+                301L, AUCTION_ID, BIDDER_ID, REQUEST_ID, AuctionBidCommandType.MANUAL_BID,
+                hash(AUCTION_ID + ":200.00"), AuctionBidCommandStatus.SUCCEEDED, 2,
+                money("210.00"), false, 1L, 2L, NOW, NOW);
+        List<BidRecord> bids = List.of(
+                bid(302L, BIDDER_ID, BidSource.MANUAL, "200.00", null, 1L, stored.id()),
+                bid(303L, 901L, BidSource.PROXY, "210.00", "200.00", 2L, stored.id()));
+        when(commands.findByActorAndRequest(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.of(stored));
+        when(sessions.findBidsByCommandId(stored.id())).thenReturn(bids);
+        when(sessions.findSessionById(AUCTION_ID)).thenReturn(Optional.of(latest));
 
-        assertThat(service.place(command(AUCTION_ID, new BigDecimal("100")))).isSameAs(winner);
+        AuctionBidService.Result result = service.place(command("200.00"));
+
+        assertThat(result.replayed()).isTrue();
+        assertThat(result.outbidByProxy()).isTrue();
+        assertThat(result.bids()).isEqualTo(bids);
+        verify(transaction, times(0)).commit(any());
     }
 
     @Test
-    void exposesTheLatestDatabasePriceAfterLosingTheSessionCas() {
-        AuctionSession original = session(null, 0L, 7L);
-        AuctionSession latest = session(new BigDecimal("150.00"), 1L, 8L);
-        arrangeNewBid(original, registration());
-        when(sessionRepository.findSessionById(AUCTION_ID))
-                .thenReturn(Optional.of(original))
-                .thenReturn(Optional.of(latest));
-        when(idGenerator.nextId()).thenReturn(BID_ID);
-        when(bidTransaction.accept(any(), anyLong())).thenThrow(
-                new AuctionBidTransaction.BidConflictException()
-        );
+    void rejectsRequestIdPayloadConflict() throws Exception {
+        AuctionBidCommand stored = new AuctionBidCommand(
+                301L, AUCTION_ID, BIDDER_ID, REQUEST_ID, AuctionBidCommandType.MANUAL_BID,
+                hash(AUCTION_ID + ":100.00"), AuctionBidCommandStatus.SUCCEEDED, 1,
+                money("100.00"), true, 1L, 1L, NOW, NOW);
+        when(commands.findByActorAndRequest(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.of(stored));
 
-        assertThatThrownBy(() -> service.place(command(AUCTION_ID, new BigDecimal("100.00"))))
-                .isInstanceOfSatisfying(AuctionBidConflictException.class, exception -> {
-                    assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.BID_CONFLICT);
-                    assertThat(exception.snapshot().auctionId()).isEqualTo(AUCTION_ID);
-                    assertThat(exception.snapshot().currentPrice()).isEqualByComparingTo("150.00");
-                    assertThat(exception.snapshot().minimumNextBid()).isEqualByComparingTo("160.00");
-                    assertThat(exception.snapshot().bidCount()).isEqualTo(1L);
-                    assertThat(exception.snapshot().version()).isEqualTo(8L);
-                });
+        assertBusinessError(() -> service.place(command("200.00")), AuctionErrorCode.IDEMPOTENCY_CONFLICT);
     }
 
     @Test
-    void resolvesAConcurrentSameRequestAfterLosingTheSessionCas() {
-        AuctionSession original = session(null, 0L, 7L);
-        BidRecord winner = bid(BID_ID + 1, AUCTION_ID, BIDDER_ID, REQUEST_ID, "100.00", null, 1L);
-        arrangeNewBid(original, registration());
-        when(sessionRepository.findBid(BIDDER_ID, REQUEST_ID))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(winner));
-        when(idGenerator.nextId()).thenReturn(BID_ID);
-        when(bidTransaction.accept(any(), anyLong())).thenThrow(
-                new AuctionBidTransaction.BidConflictException()
-        );
+    void rejectsSellerAndUnregisteredBidderBeforeTransaction() {
+        AuctionSession sellerOwned = new AuctionSession(
+                AUCTION_ID, 102L, BIDDER_ID, money("100.00"), money("10.00"), money("50.00"),
+                null, null, 0, NOW.minusSeconds(60), NOW.plusSeconds(300),
+                AuctionSessionStatus.OPEN, 7, NOW.minusSeconds(120), NOW.minusSeconds(1));
+        when(sessions.findSessionById(AUCTION_ID)).thenReturn(Optional.of(sellerOwned));
 
-        assertThat(service.place(command(AUCTION_ID, new BigDecimal("100")))).isSameAs(winner);
+        assertBusinessError(() -> service.place(command("100.00")), AuctionErrorCode.SELLER_CANNOT_PARTICIPATE);
 
-        verify(sessionRepository, org.mockito.Mockito.times(1)).findSessionById(AUCTION_ID);
+        AuctionSession ordinary = session(null, null, 0, 7, NOW.plusSeconds(300));
+        when(sessions.findSessionById(AUCTION_ID)).thenReturn(Optional.of(ordinary));
+        when(registrations.findByAuctionAndBidder(AUCTION_ID, BIDDER_ID)).thenReturn(Optional.empty());
+        assertBusinessError(() -> service.place(command("100.00")), AuctionErrorCode.REGISTRATION_REQUIRED);
     }
 
-    @Test
-    void rejectsInvalidCommandBeforeAccessingPersistence() {
-        assertBusinessError(
-                () -> service.place(command(AUCTION_ID, new BigDecimal("1.001"))),
-                AuctionErrorCode.BID_AMOUNT_INVALID
-        );
-        assertBusinessError(
-                () -> service.place(new AuctionBidService.PlaceBidCommand(
-                        BIDDER_ID, AUCTION_ID, "bad", new BigDecimal("100.00")
-                )),
-                AuctionErrorCode.AUCTION_INVALID
-        );
-        verify(sessionRepository, never()).findBid(anyLong(), any());
-    }
-
-    @Test
-    void rejectsEveryEligibilityFailureBeforeEnteringTheBidTransaction() {
-        AuctionSession opened = session(null, 0L, 7L);
-        assertRejectedBeforeTransaction(opened, null, BIDDER_ID, AuctionErrorCode.REGISTRATION_REQUIRED);
-        assertRejectedBeforeTransaction(
-                opened,
-                registration(AuctionRegistrationStatus.PENDING_HOLD),
-                BIDDER_ID,
-                AuctionErrorCode.REGISTRATION_PENDING
-        );
-        assertRejectedBeforeTransaction(
-                opened,
-                registration(AuctionRegistrationStatus.FAILED),
-                BIDDER_ID,
-                AuctionErrorCode.REGISTRATION_REQUIRED
-        );
-
-        AuctionSession sellerOwned = session(
-                BIDDER_ID,
-                ACCEPTED_AT.minusSeconds(60),
-                ACCEPTED_AT.plusSeconds(60),
-                AuctionSessionStatus.OPEN
-        );
-        assertRejectedBeforeTransaction(
-                sellerOwned,
-                registration(AuctionRegistrationStatus.REGISTERED),
-                BIDDER_ID,
-                AuctionErrorCode.SELLER_CANNOT_PARTICIPATE
-        );
-
-        AuctionSession notStarted = session(
-                401L,
-                ACCEPTED_AT.plusSeconds(1),
-                ACCEPTED_AT.plusSeconds(120),
-                AuctionSessionStatus.SCHEDULED
-        );
-        assertRejectedBeforeTransaction(
-                notStarted,
-                registration(AuctionRegistrationStatus.REGISTERED),
-                BIDDER_ID,
-                AuctionErrorCode.AUCTION_NOT_STARTED
-        );
-
-        AuctionSession ended = session(
-                401L,
-                ACCEPTED_AT.minusSeconds(120),
-                ACCEPTED_AT,
-                AuctionSessionStatus.AWAITING_CLOSE
-        );
-        assertRejectedBeforeTransaction(
-                ended,
-                registration(AuctionRegistrationStatus.REGISTERED),
-                BIDDER_ID,
-                AuctionErrorCode.AUCTION_ENDED
-        );
-
-        verify(bidTransaction, never()).accept(any(), anyLong());
-        verify(idGenerator, never()).nextId();
-    }
-
-    @Test
-    void rejectsWhenTheBidEntryCatchesAStaleOpenSessionUpAtTheExactEndInstant() {
-        AuctionSession staleOpen = session(
-                401L,
-                ACCEPTED_AT.minusSeconds(120),
-                ACCEPTED_AT,
-                AuctionSessionStatus.OPEN
-        );
-        AuctionSession awaitingClose = session(
-                401L,
-                ACCEPTED_AT.minusSeconds(120),
-                ACCEPTED_AT,
-                AuctionSessionStatus.AWAITING_CLOSE
-        );
-        when(sessionRepository.findBid(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.empty());
-        when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(staleOpen));
-        when(lifecycleService.advanceToCurrentState(staleOpen)).thenReturn(awaitingClose);
-        when(registrationRepository.findByAuctionAndBidder(AUCTION_ID, BIDDER_ID))
-                .thenReturn(Optional.of(registration()));
-
-        assertBusinessError(
-                () -> service.place(command(AUCTION_ID, new BigDecimal("100.00"))),
-                AuctionErrorCode.AUCTION_ENDED
-        );
-
-        verify(lifecycleService).advanceToCurrentState(staleOpen);
-        verify(bidTransaction, never()).accept(any(), anyLong());
-        verify(idGenerator, never()).nextId();
-    }
-
-    private void assertRejectedBeforeTransaction(
-            AuctionSession session,
-            AuctionRegistration registration,
-            long bidderId,
-            AuctionErrorCode expected
+    private static AuctionBidCommandTransaction.CommittedCommand committed(
+            AuctionBidCommandTransaction.CommitRequest request
     ) {
-        when(sessionRepository.findBid(bidderId, REQUEST_ID)).thenReturn(Optional.empty());
-        when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(session));
-        when(lifecycleService.advanceToCurrentState(session)).thenReturn(session);
-        when(registrationRepository.findByAuctionAndBidder(AUCTION_ID, bidderId))
-                .thenReturn(Optional.ofNullable(registration));
-
-        assertBusinessError(
-                () -> service.place(new AuctionBidService.PlaceBidCommand(
-                        bidderId, AUCTION_ID, REQUEST_ID, new BigDecimal("100.00")
-                )),
-                expected
-        );
-    }
-
-    private void arrangeNewBid(AuctionSession opened, AuctionRegistration registration) {
-        when(sessionRepository.findBid(BIDDER_ID, REQUEST_ID)).thenReturn(Optional.empty());
-        when(sessionRepository.findSessionById(AUCTION_ID)).thenReturn(Optional.of(opened));
-        when(lifecycleService.advanceToCurrentState(opened)).thenReturn(opened);
-        when(registrationRepository.findByAuctionAndBidder(AUCTION_ID, BIDDER_ID))
-                .thenReturn(Optional.of(registration));
-    }
-
-    private static AuctionBidService.PlaceBidCommand command(long auctionId, BigDecimal amount) {
-        return new AuctionBidService.PlaceBidCommand(BIDDER_ID, auctionId, REQUEST_ID, amount);
-    }
-
-    private static AuctionSession session(BigDecimal currentPrice, long bidCount, long version) {
-        return new AuctionSession(
-                AUCTION_ID, 102L, 401L,
-                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
-                currentPrice, bidCount == 0 ? null : 999L, bidCount,
-                ACCEPTED_AT.minusSeconds(60), ACCEPTED_AT.plusSeconds(60),
-                AuctionSessionStatus.OPEN, version,
-                ACCEPTED_AT.minusSeconds(120), ACCEPTED_AT.minusSeconds(1)
-        );
+        return new AuctionBidCommandTransaction.CommittedCommand(request.completedCommand(), request.bids());
     }
 
     private static AuctionSession session(
-            long sellerId,
-            Instant startAt,
-            Instant endAt,
-            AuctionSessionStatus status
+            BigDecimal currentPrice, Long currentBidder, long bidCount, long version, Instant endAt
     ) {
         return new AuctionSession(
-                AUCTION_ID, 102L, sellerId,
-                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
-                null, null, 0L, startAt, endAt, status, 7L,
-                startAt.minusSeconds(60), ACCEPTED_AT.minusSeconds(1)
-        );
+                AUCTION_ID, 102L, 401L, money("100.00"), money("10.00"), money("50.00"),
+                currentPrice, currentBidder, bidCount, NOW.minusSeconds(60), endAt,
+                AuctionSessionStatus.OPEN, version, NOW.minusSeconds(120), NOW.minusSeconds(1));
     }
 
     private static AuctionRegistration registration() {
-        return registration(AuctionRegistrationStatus.REGISTERED);
+        return new AuctionRegistration(
+                501L, "REGISTRATION:501", AUCTION_ID, BIDDER_ID, money("50.00"),
+                AuctionRegistrationStatus.REGISTERED, null, 1, null, NOW.minusSeconds(30),
+                null, null, NOW.minusSeconds(30), 1, NOW.minusSeconds(60), NOW.minusSeconds(30));
     }
 
-    private static AuctionRegistration registration(AuctionRegistrationStatus status) {
-        String failureCode = status == AuctionRegistrationStatus.FAILED
-                ? "ACCOUNT_WALLET_INSUFFICIENT_BALANCE"
-                : null;
-        Instant registeredAt = status == AuctionRegistrationStatus.REGISTERED
-                ? ACCEPTED_AT.minusSeconds(30)
-                : null;
-        return new AuctionRegistration(
-                501L, "REGISTRATION:501", AUCTION_ID, BIDDER_ID, new BigDecimal("50.00"),
-                status, failureCode, 1, null, ACCEPTED_AT.minusSeconds(30),
-                null, null, registeredAt, 1L,
-                ACCEPTED_AT.minusSeconds(60), ACCEPTED_AT.minusSeconds(30)
-        );
+    private static AuctionProxyBid proxy(long bidderId, String maximum) {
+        return new AuctionProxyBid(801L, AUCTION_ID, bidderId, money(maximum), AuctionProxyBidStatus.ACTIVE,
+                1, 0, null, NOW.minusSeconds(30), NOW.minusSeconds(30));
     }
 
     private static BidRecord bid(
-            long id,
-            long auctionId,
-            long bidderId,
-            String requestId,
-            String amount,
-            String previousPrice,
-            long sequenceNo
+            long id, long bidderId, BidSource source, String amount, String previous, long sequence, long commandId
     ) {
-        return new BidRecord(
-                id, auctionId, bidderId, requestId, new BigDecimal(amount),
-                previousPrice == null ? null : new BigDecimal(previousPrice), sequenceNo, ACCEPTED_AT
-        );
+        return new BidRecord(id, AUCTION_ID, bidderId, REQUEST_ID, source, commandId, money(amount),
+                previous == null ? null : money(previous), sequence, NOW);
+    }
+
+    private static AuctionBidService.PlaceBidCommand command(String amount) {
+        return new AuctionBidService.PlaceBidCommand(BIDDER_ID, AUCTION_ID, REQUEST_ID, money(amount));
+    }
+
+    private static BigDecimal money(String value) {
+        return new BigDecimal(value);
+    }
+
+    private static String hash(String value) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(value.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static void assertBusinessError(Runnable invocation, AuctionErrorCode expected) {
         assertThatThrownBy(invocation::run)
-                .isInstanceOfSatisfying(BusinessException.class, exception ->
-                        assertThat(exception.errorCode()).isEqualTo(expected)
-                );
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.errorCode()).isEqualTo(expected));
     }
 }

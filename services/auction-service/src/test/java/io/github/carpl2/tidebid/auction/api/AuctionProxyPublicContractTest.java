@@ -20,9 +20,11 @@ class AuctionProxyPublicContractTest {
     @Test
     void publicBidResponseAndEventDoNotContainProxyMaximum() throws Exception {
         String responseJson = MAPPER.writeValueAsString(new AuctionBidResponse.Accepted(
-                "88", "1", new BigDecimal("210.00"), new BigDecimal("200.00"), 2,
-                Instant.parse("2026-09-21T01:00:00Z")
-        ));
+                "1", new BigDecimal("200.00"), false, true, new BigDecimal("210.00"),
+                new BigDecimal("220.00"), 2, Instant.parse("2026-09-21T01:05:00Z"),
+                false, false, 2, List.of(new AuctionBidResponse.PublicBid(
+                        "88", new BigDecimal("210.00"), new BigDecimal("200.00"), 2,
+                        BidSource.PROXY, false, Instant.parse("2026-09-21T01:00:00Z")))));
         String eventJson = MAPPER.writeValueAsString(new BidAcceptedEvent(
                 1L, 88L, 201L, new BigDecimal("210.00"), 2,
                 Instant.parse("2026-09-21T01:00:00Z")

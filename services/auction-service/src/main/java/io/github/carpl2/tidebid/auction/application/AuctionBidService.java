@@ -1,9 +1,15 @@
 package io.github.carpl2.tidebid.auction.application;
 
-import io.github.carpl2.tidebid.auction.application.port.AuctionBidTransaction;
+import io.github.carpl2.tidebid.auction.application.port.AuctionBidCommandRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionBidCommandTransaction;
+import io.github.carpl2.tidebid.auction.application.port.AuctionProxyBidRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionRegistrationRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
 import io.github.carpl2.tidebid.auction.application.port.IdGenerator;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommand;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandIdempotency;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandPlanner;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandType;
 import io.github.carpl2.tidebid.auction.domain.AuctionErrorCode;
 import io.github.carpl2.tidebid.auction.domain.AuctionRegistration;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
@@ -13,10 +19,15 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Optional;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 @Service
@@ -24,119 +35,165 @@ import java.util.regex.Pattern;
 public class AuctionBidService {
 
     private static final Pattern SAFE_REQUEST_ID = Pattern.compile("[A-Za-z0-9_-]{8,48}");
+    private static final int MAXIMUM_CAS_ATTEMPTS = 3;
 
     private final AuctionSessionRepository sessionRepository;
     private final AuctionRegistrationRepository registrationRepository;
+    private final AuctionProxyBidRepository proxyRepository;
+    private final AuctionBidCommandRepository commandRepository;
+    private final AuctionBidCommandTransaction commandTransaction;
     private final AuctionSessionLifecycleService lifecycleService;
-    private final AuctionBidTransaction bidTransaction;
     private final IdGenerator idGenerator;
     private final Clock clock;
 
     public AuctionBidService(
             AuctionSessionRepository sessionRepository,
             AuctionRegistrationRepository registrationRepository,
+            AuctionProxyBidRepository proxyRepository,
+            AuctionBidCommandRepository commandRepository,
+            AuctionBidCommandTransaction commandTransaction,
             AuctionSessionLifecycleService lifecycleService,
-            AuctionBidTransaction bidTransaction,
             IdGenerator idGenerator,
             Clock clock
     ) {
         this.sessionRepository = sessionRepository;
         this.registrationRepository = registrationRepository;
+        this.proxyRepository = proxyRepository;
+        this.commandRepository = commandRepository;
+        this.commandTransaction = commandTransaction;
         this.lifecycleService = lifecycleService;
-        this.bidTransaction = bidTransaction;
         this.idGenerator = idGenerator;
         this.clock = clock;
     }
 
-    public BidRecord place(PlaceBidCommand command) {
-        PlaceBidCommand validCommand = requireCommand(command);
-        BigDecimal amount = AuctionBidPolicy.normalizeAmount(validCommand.amount());
-        Optional<BidRecord> existing = sessionRepository.findBid(
-                validCommand.bidderId(), validCommand.requestId()
-        );
-        if (existing.isPresent()) {
-            return requireSamePayload(existing.orElseThrow(), validCommand.auctionId(), amount);
-        }
+    public Result place(PlaceBidCommand command) {
+        PlaceBidCommand valid = requireCommand(command);
+        BigDecimal amount = AuctionBidPolicy.normalizeAmount(valid.amount());
+        AuctionBidCommandIdempotency.Request request = new AuctionBidCommandIdempotency.Request(
+                valid.bidderId(), valid.requestId(), AuctionBidCommandType.MANUAL_BID,
+                payloadHash(valid.auctionId(), amount));
+        Result replay = inspectExisting(valid, request, amount);
+        if (replay != null) return replay;
 
-        AuctionSession session = sessionRepository.findSessionById(validCommand.auctionId())
-                .map(lifecycleService::advanceToCurrentState)
-                .orElseThrow(() -> new BusinessException(AuctionErrorCode.AUCTION_NOT_FOUND));
-        AuctionRegistration registration = registrationRepository
-                .findByAuctionAndBidder(session.id(), validCommand.bidderId())
-                .orElse(null);
-        Instant acceptedAt = now();
-        AuctionBidPolicy.ValidatedBid validated = AuctionBidPolicy.validate(
-                session, registration, validCommand.bidderId(), amount, acceptedAt
-        );
-        BidRecord candidate = new BidRecord(
-                nextId(),
-                session.id(),
-                validCommand.bidderId(),
-                validCommand.requestId(),
-                validated.amount(),
-                validated.previousPrice(),
-                validated.sequenceNo(),
-                acceptedAt
-        );
+        AuctionBidCasRetryCoordinator coordinator = new AuctionBidCasRetryCoordinator(MAXIMUM_CAS_ATTEMPTS);
         try {
-            return bidTransaction.accept(candidate, validated.expectedVersion()).bid();
-        } catch (AuctionBidTransaction.DuplicateBidException exception) {
-            BidRecord concurrentWinner = sessionRepository
-                    .findBid(validCommand.bidderId(), validCommand.requestId())
-                    .orElseThrow(() -> new IllegalStateException(
-                            "Bid uniqueness conflict did not produce an idempotency record",
-                            exception
-                    ));
-            return requireSamePayload(concurrentWinner, validCommand.auctionId(), amount);
-        } catch (AuctionBidTransaction.BidConflictException exception) {
-            Optional<BidRecord> concurrentWinner = sessionRepository.findBid(
-                    validCommand.bidderId(), validCommand.requestId()
-            );
-            if (concurrentWinner.isPresent()) {
-                return requireSamePayload(
-                        concurrentWinner.orElseThrow(), validCommand.auctionId(), amount
-                );
+            AuctionBidCasRetryCoordinator.Outcome<Attempt, AuctionSession> outcome = coordinator.execute(
+                    ignored -> planAndCommit(valid, request, amount),
+                    () -> loadSession(valid.auctionId()));
+            if (outcome.status() == AuctionBidCasRetryCoordinator.Status.EXHAUSTED) {
+                throw new AuctionBidConflictException(outcome.latestSnapshot());
             }
-            AuctionSession latest = sessionRepository.findSessionById(validCommand.auctionId())
-                    .orElseThrow(() -> new IllegalStateException(
-                            "Auction session disappeared after a bid conflict",
-                            exception
-                    ));
-            throw new AuctionBidConflictException(latest);
+            Attempt attempt = outcome.committed();
+            AuctionSession latest = loadStoredSession(valid.auctionId());
+            return result(amount, attempt.committed().command(), attempt.committed().bids(), latest,
+                    latest.endAt().isAfter(attempt.before().endAt()), false);
+        } catch (AuctionBidCommandTransaction.DuplicateCommandException duplicate) {
+            Result concurrentReplay = inspectExisting(valid, request, amount);
+            if (concurrentReplay == null) {
+                throw new BusinessException(AuctionErrorCode.BID_CONFLICT,
+                        "The same request is still being processed");
+            }
+            return concurrentReplay;
         }
     }
 
-    private static BidRecord requireSamePayload(BidRecord existing, long auctionId, BigDecimal amount) {
-        if (existing.auctionId() != auctionId || existing.amount().compareTo(amount) != 0) {
-            throw new BusinessException(AuctionErrorCode.IDEMPOTENCY_CONFLICT);
-        }
-        return existing;
+    private Attempt planAndCommit(
+            PlaceBidCommand command,
+            AuctionBidCommandIdempotency.Request request,
+            BigDecimal amount
+    ) {
+        AuctionSession session = loadSession(command.auctionId());
+        AuctionRegistration registration = registrationRepository
+                .findByAuctionAndBidder(session.id(), command.bidderId()).orElse(null);
+        Instant now = now();
+        AuctionBidPolicy.validate(session, registration, command.bidderId(), amount, now);
+        AuctionBidCommandPlanner.Plan plan = new AuctionBidCommandPlanner().plan(
+                session, proxyRepository.findActiveByAuction(session.id()),
+                AuctionBidCommandPlanner.Command.manualBid(command.bidderId(), amount));
+
+        AuctionBidCommandIdempotency idempotency = new AuctionBidCommandIdempotency();
+        AuctionBidCommand processing = idempotency.start(nextId(), session.id(), request, now);
+        AuctionBidCommand completed = idempotency.complete(processing, plan, now);
+        List<BidRecord> bids = plan.bids().stream().map(bid -> new BidRecord(
+                nextId(), session.id(), bid.bidderId(), command.requestId(), bid.source(), processing.id(),
+                bid.amount(), bid.previousPrice(), bid.sequenceNo(), now)).toList();
+        AuctionBidCommandTransaction.CommittedCommand committed = commandTransaction.commit(
+                new AuctionBidCommandTransaction.CommitRequest(
+                        processing, completed, AuctionBidCommandTransaction.ProxyMutation.none(),
+                        bids, session.version()));
+        return new Attempt(session, committed);
+    }
+
+    private Result inspectExisting(
+            PlaceBidCommand command,
+            AuctionBidCommandIdempotency.Request request,
+            BigDecimal amount
+    ) {
+        AuctionBidCommand existing = commandRepository
+                .findByActorAndRequest(command.bidderId(), command.requestId()).orElse(null);
+        AuctionBidCommandIdempotency.Decision decision = new AuctionBidCommandIdempotency().inspect(existing, request);
+        return switch (decision.type()) {
+            case NEW -> null;
+            case PAYLOAD_CONFLICT -> throw new BusinessException(AuctionErrorCode.IDEMPOTENCY_CONFLICT);
+            case IN_PROGRESS -> throw new BusinessException(AuctionErrorCode.BID_CONFLICT,
+                    "The same request is still being processed");
+            case REPLAY -> result(amount, decision.existing(),
+                    sessionRepository.findBidsByCommandId(decision.existing().id()),
+                    loadStoredSession(command.auctionId()), false, true);
+        };
+    }
+
+    private static Result result(
+            BigDecimal requestedAmount,
+            AuctionBidCommand command,
+            List<BidRecord> bids,
+            AuctionSession session,
+            boolean extended,
+            boolean replayed
+    ) {
+        boolean leading = Boolean.TRUE.equals(command.resultLeading());
+        boolean outbidByProxy = !leading && bids.stream()
+                .anyMatch(bid -> bid.source() == io.github.carpl2.tidebid.auction.domain.BidSource.PROXY);
+        return new Result(command, requestedAmount, bids, session, leading, outbidByProxy, extended, replayed);
+    }
+
+    private AuctionSession loadSession(long auctionId) {
+        return sessionRepository.findSessionById(auctionId)
+                .map(lifecycleService::advanceToCurrentState)
+                .orElseThrow(() -> new BusinessException(AuctionErrorCode.AUCTION_NOT_FOUND));
+    }
+
+    private AuctionSession loadStoredSession(long auctionId) {
+        return sessionRepository.findSessionById(auctionId)
+                .orElseThrow(() -> new IllegalStateException("Auction session disappeared after bid command"));
     }
 
     private static PlaceBidCommand requireCommand(PlaceBidCommand command) {
         if (command == null || command.bidderId() <= 0 || command.auctionId() <= 0) {
-            throw new BusinessException(
-                    AuctionErrorCode.AUCTION_INVALID,
-                    "bidderId and auctionId must be positive"
-            );
+            throw new BusinessException(AuctionErrorCode.AUCTION_INVALID,
+                    "bidderId and auctionId must be positive");
         }
-        String normalizedRequestId = command.requestId() == null ? "" : command.requestId().trim();
-        if (!SAFE_REQUEST_ID.matcher(normalizedRequestId).matches()) {
-            throw new BusinessException(
-                    AuctionErrorCode.AUCTION_INVALID,
-                    "requestId must contain 8 to 48 letters, digits, underscores, or hyphens"
-            );
+        String requestId = command.requestId() == null ? "" : command.requestId().trim();
+        if (!SAFE_REQUEST_ID.matcher(requestId).matches()) {
+            throw new BusinessException(AuctionErrorCode.AUCTION_INVALID,
+                    "requestId must contain 8 to 48 letters, digits, underscores, or hyphens");
         }
-        return new PlaceBidCommand(
-                command.bidderId(), command.auctionId(), normalizedRequestId, command.amount()
-        );
+        return new PlaceBidCommand(command.bidderId(), command.auctionId(), requestId, command.amount());
+    }
+
+    private static String payloadHash(long auctionId, BigDecimal amount) {
+        String payload = auctionId + ":" + amount.toPlainString();
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(payload.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private long nextId() {
         long id = idGenerator.nextId();
-        if (id <= 0) {
-            throw new IllegalStateException("idGenerator returned a non-positive id");
-        }
+        if (id <= 0) throw new IllegalStateException("idGenerator returned a non-positive id");
         return id;
     }
 
@@ -144,11 +201,25 @@ public class AuctionBidService {
         return clock.instant().truncatedTo(ChronoUnit.MICROS);
     }
 
-    public record PlaceBidCommand(
-            long bidderId,
-            long auctionId,
-            String requestId,
-            BigDecimal amount
+    private record Attempt(AuctionSession before, AuctionBidCommandTransaction.CommittedCommand committed) { }
+
+    public record Result(
+            AuctionBidCommand command,
+            BigDecimal requestedAmount,
+            List<BidRecord> bids,
+            AuctionSession session,
+            boolean leading,
+            boolean outbidByProxy,
+            boolean extended,
+            boolean replayed
     ) {
+        public Result {
+            command = Objects.requireNonNull(command, "command must not be null");
+            requestedAmount = Objects.requireNonNull(requestedAmount, "requestedAmount must not be null");
+            bids = List.copyOf(Objects.requireNonNull(bids, "bids must not be null"));
+            session = Objects.requireNonNull(session, "session must not be null");
+        }
     }
+
+    public record PlaceBidCommand(long bidderId, long auctionId, String requestId, BigDecimal amount) { }
 }

@@ -204,6 +204,17 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
                 .toList();
     }
 
+    @Override
+    public List<BidRecord> findBidsByCommandId(long commandId) {
+        MybatisAuctionItemRepository.requirePositive(commandId, "commandId");
+        return bidMapper.selectList(new LambdaQueryWrapper<BidRecordEntity>()
+                        .eq(BidRecordEntity::getCommandId, commandId)
+                        .orderByAsc(BidRecordEntity::getSequenceNo))
+                .stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
+    }
+
     private static void requirePageWindow(int offset, int limit) {
         if (offset < 0 || limit < 1 || limit > 100) {
             throw new IllegalArgumentException("invalid page window");

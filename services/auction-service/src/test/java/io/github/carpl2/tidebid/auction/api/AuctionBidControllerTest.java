@@ -3,6 +3,9 @@ package io.github.carpl2.tidebid.auction.api;
 import io.github.carpl2.tidebid.auction.application.AuctionBidConflictException;
 import io.github.carpl2.tidebid.auction.application.AuctionBidService;
 import io.github.carpl2.tidebid.auction.domain.AuctionErrorCode;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommand;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandStatus;
+import io.github.carpl2.tidebid.auction.domain.AuctionBidCommandType;
 import io.github.carpl2.tidebid.auction.domain.AuctionSession;
 import io.github.carpl2.tidebid.auction.domain.AuctionSessionStatus;
 import io.github.carpl2.tidebid.auction.domain.BidRecord;
@@ -23,6 +26,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -61,10 +65,7 @@ class AuctionBidControllerTest {
 
     @Test
     void placesBidForAuthenticatedIdentityAndReturnsStringIds() throws Exception {
-        when(bidService.place(any())).thenReturn(new BidRecord(
-                BID_ID, AUCTION_ID, 42L, "bid-request-0001", new BigDecimal("110.00"),
-                new BigDecimal("100.00"), 2, NOW
-        ));
+        when(bidService.place(any())).thenReturn(acceptedResult());
 
         mockMvc.perform(post("/api/bids")
                         .header("Authorization", "Bearer user-token")
@@ -81,12 +82,15 @@ class AuctionBidControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(header().string("X-Trace-Id", "bid-trace-0001"))
                 .andExpect(jsonPath("$.code").value("SUCCESS"))
-                .andExpect(jsonPath("$.data.bidId").value("9007199254740993"))
                 .andExpect(jsonPath("$.data.auctionId").value("9007199254740994"))
-                .andExpect(jsonPath("$.data.amount").value(110.00))
-                .andExpect(jsonPath("$.data.previousPrice").value(100.00))
-                .andExpect(jsonPath("$.data.sequenceNo").value(2))
-                .andExpect(jsonPath("$.data.createdAt").value("2026-09-14T08:00:00Z"));
+                .andExpect(jsonPath("$.data.requestedAmount").value(110.00))
+                .andExpect(jsonPath("$.data.leading").value(true))
+                .andExpect(jsonPath("$.data.outbidByProxy").value(false))
+                .andExpect(jsonPath("$.data.displayPrice").value(110.00))
+                .andExpect(jsonPath("$.data.minimumNextBid").value(120.00))
+                .andExpect(jsonPath("$.data.lastSequenceNo").value(2))
+                .andExpect(jsonPath("$.data.acceptedBids[0].bidId").value("9007199254740993"))
+                .andExpect(jsonPath("$.data.acceptedBids[0].mine").value(true));
 
         verify(bidService).place(new AuctionBidService.PlaceBidCommand(
                 42L, AUCTION_ID, "bid-request-0001", new BigDecimal("110.00")
@@ -187,5 +191,23 @@ class AuctionBidControllerTest {
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(bidService);
+    }
+
+    private static AuctionBidService.Result acceptedResult() {
+        BidRecord bid = new BidRecord(
+                BID_ID, AUCTION_ID, 42L, "bid-request-0001", new BigDecimal("110.00"),
+                new BigDecimal("100.00"), 2, NOW);
+        AuctionBidCommand command = new AuctionBidCommand(
+                81L, AUCTION_ID, 42L, "bid-request-0001", AuctionBidCommandType.MANUAL_BID,
+                "a".repeat(64), AuctionBidCommandStatus.SUCCEEDED, 1,
+                new BigDecimal("110.00"), true, 2L, 2L, NOW, NOW);
+        AuctionSession session = new AuctionSession(
+                AUCTION_ID, 91L, 7L, new BigDecimal("100.00"), new BigDecimal("10.00"),
+                new BigDecimal("50.00"), new BigDecimal("110.00"), 42L, 2L,
+                NOW.minusSeconds(300), NOW.plusSeconds(300), AuctionSessionStatus.OPEN, 9L,
+                NOW.minusSeconds(600), NOW);
+        return new AuctionBidService.Result(
+                command, new BigDecimal("110.00"), List.of(bid), session,
+                true, false, false, false);
     }
 }

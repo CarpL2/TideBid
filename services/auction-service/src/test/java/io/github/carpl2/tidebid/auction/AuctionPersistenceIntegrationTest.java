@@ -1383,14 +1383,16 @@ class AuctionPersistenceIntegrationTest {
                     assertThat(exception.errorCode()).isEqualTo(AuctionErrorCode.BID_TOO_LOW));
             assertThat(countAuctionOutbox(auctionId, BidAcceptedEvent.EVENT_TYPE)).isZero();
 
-            BidRecord first = bidService.place(new AuctionBidService.PlaceBidCommand(
+            AuctionBidService.Result first = bidService.place(new AuctionBidService.PlaceBidCommand(
                     bidderId, auctionId, requestId, new BigDecimal("100")
             ));
-            BidRecord repeated = bidService.place(new AuctionBidService.PlaceBidCommand(
+            AuctionBidService.Result repeated = bidService.place(new AuctionBidService.PlaceBidCommand(
                     bidderId, auctionId, requestId, new BigDecimal("100.0")
             ));
 
-            assertThat(repeated).isEqualTo(first);
+            assertThat(repeated.command()).isEqualTo(first.command());
+            assertThat(repeated.bids()).isEqualTo(first.bids());
+            assertThat(repeated.replayed()).isTrue();
             assertThat(bidMapper.selectCount(new LambdaQueryWrapper<BidRecordEntity>()
                     .eq(BidRecordEntity::getAuctionId, auctionId))).isEqualTo(1L);
             AuctionSession stored = sessionRepository.findSessionById(auctionId).orElseThrow();
@@ -1410,6 +1412,7 @@ class AuctionPersistenceIntegrationTest {
             deleteAuctionOutbox(auctionId);
             bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
                     .eq(BidRecordEntity::getAuctionId, auctionId));
+            jdbc.update("DELETE FROM auction_bid_command WHERE auction_id = ?", auctionId);
             registrationMapper.deleteById(registrationId);
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
@@ -1445,12 +1448,16 @@ class AuctionPersistenceIntegrationTest {
             CountDownLatch ready = new CountDownLatch(2);
             CountDownLatch start = new CountDownLatch(1);
             try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
-                Future<BidRecord> first = executor.submit(() -> placeBidConcurrently(ready, start, command));
-                Future<BidRecord> second = executor.submit(() -> placeBidConcurrently(ready, start, command));
+                Future<AuctionBidService.Result> first = executor.submit(
+                        () -> placeBidConcurrently(ready, start, command));
+                Future<AuctionBidService.Result> second = executor.submit(
+                        () -> placeBidConcurrently(ready, start, command));
                 assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
                 start.countDown();
-                assertThat(first.get(10, TimeUnit.SECONDS))
-                        .isEqualTo(second.get(10, TimeUnit.SECONDS));
+                AuctionBidService.Result firstResult = first.get(10, TimeUnit.SECONDS);
+                AuctionBidService.Result secondResult = second.get(10, TimeUnit.SECONDS);
+                assertThat(firstResult.command()).isEqualTo(secondResult.command());
+                assertThat(firstResult.bids()).isEqualTo(secondResult.bids());
             }
 
             assertThat(bidMapper.selectCount(new LambdaQueryWrapper<BidRecordEntity>()
@@ -1463,6 +1470,7 @@ class AuctionPersistenceIntegrationTest {
             deleteAuctionOutbox(auctionId);
             bidMapper.delete(new LambdaQueryWrapper<BidRecordEntity>()
                     .eq(BidRecordEntity::getAuctionId, auctionId));
+            jdbc.update("DELETE FROM auction_bid_command WHERE auction_id = ?", auctionId);
             registrationMapper.deleteById(registrationId);
             sessionMapper.deleteById(auctionId);
             itemMapper.deleteById(itemId);
@@ -2108,7 +2116,7 @@ class AuctionPersistenceIntegrationTest {
         }
     }
 
-    private BidRecord placeBidConcurrently(
+    private AuctionBidService.Result placeBidConcurrently(
             CountDownLatch ready,
             CountDownLatch start,
             AuctionBidService.PlaceBidCommand command
