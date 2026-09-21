@@ -14,6 +14,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.core.env.Environment;
 import org.springframework.test.context.ActiveProfiles;
 import io.github.carpl2.tidebid.realtime.application.port.AuctionSnapshotClient;
+import io.github.carpl2.tidebid.realtime.api.RealtimeTicketController;
+import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketApplicationService;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,6 +55,8 @@ class RealtimeApplicationTest {
         assertThat(environment.getProperty("tidebid.realtime.auction-client.enabled", Boolean.class)).isFalse();
         assertThat(context.getBeansOfType(AuctionSnapshotClient.class)).isEmpty();
         assertThat(context.getBeansOfType(RedisConnectionFactory.class)).isEmpty();
+        assertThat(context.getBeansOfType(RealtimeTicketController.class)).isEmpty();
+        assertThat(context.getBeansOfType(RealtimeTicketApplicationService.class)).isEmpty();
     }
 
     @ParameterizedTest
