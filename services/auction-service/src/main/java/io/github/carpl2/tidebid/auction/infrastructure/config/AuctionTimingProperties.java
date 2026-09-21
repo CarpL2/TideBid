@@ -1,6 +1,7 @@
 package io.github.carpl2.tidebid.auction.infrastructure.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -28,6 +29,7 @@ public record AuctionTimingProperties(
                 openingScanBatchSize, Duration.ofSeconds(60), Duration.ofSeconds(60), Duration.ofMinutes(5));
     }
 
+    @ConstructorBinding
     public AuctionTimingProperties {
         minimumLeadTime = requireBetween(
                 minimumLeadTime, Duration.ofSeconds(1), Duration.ofDays(1), "minimumLeadTime");

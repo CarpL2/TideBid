@@ -71,6 +71,26 @@ class AuctionAntiSnipingCalculatorTest {
     }
 
     @Test
+    void repeatedExtensionsNeverPassTheOriginalEndPlusTotalLimit() {
+        Instant endAt = ORIGINAL_END;
+        int extensionCount = 0;
+        for (int round = 0; round < 10; round++) {
+            AuctionSession session = session(endAt, ORIGINAL_END, extensionCount);
+            var result = CALCULATOR.calculate(
+                    session, endAt.minusSeconds(10), true,
+                    Duration.ofSeconds(60), Duration.ofSeconds(60), Duration.ofSeconds(300));
+            if (!result.extended()) {
+                break;
+            }
+            endAt = result.endAt();
+            extensionCount = result.extensionCount();
+        }
+
+        assertThat(endAt).isEqualTo(ORIGINAL_END.plusSeconds(300));
+        assertThat(extensionCount).isEqualTo(6);
+    }
+
+    @Test
     void endBoundaryIsInsideWindowAndAfterEndBoundaryIsNotAccepted() {
         AuctionSession session = session(ORIGINAL_END, ORIGINAL_END, 0);
 

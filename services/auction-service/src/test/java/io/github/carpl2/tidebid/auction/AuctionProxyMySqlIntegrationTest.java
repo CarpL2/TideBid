@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import io.github.carpl2.tidebid.auction.application.port.AuctionBidCommandRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionBidCommandTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionItemRepository;
+import io.github.carpl2.tidebid.auction.application.port.AuctionClosingTransaction;
 import io.github.carpl2.tidebid.auction.application.port.AuctionProxyBidRepository;
 import io.github.carpl2.tidebid.auction.application.port.AuctionSessionRepository;
 import io.github.carpl2.tidebid.auction.domain.AuctionBidCommand;
@@ -68,6 +69,7 @@ class AuctionProxyMySqlIntegrationTest {
     @Autowired private AuctionProxyBidRepository proxyBidRepository;
     @Autowired private AuctionBidCommandRepository commandRepository;
     @Autowired private AuctionBidCommandTransaction commandTransaction;
+    @Autowired private AuctionClosingTransaction closingTransaction;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private Clock clock;
 
@@ -165,6 +167,51 @@ class AuctionProxyMySqlIntegrationTest {
         }
     }
 
+    @Test
+    void antiSnipingMakesOldCloseCommandStaleAndNewCommandClosesOnlyOnce() {
+        Fixture fixture = fixtureEndingSoon();
+        Instant originalEndAt = sessionRepository.findSessionById(fixture.auctionId()).orElseThrow().endAt();
+        try {
+            AuctionSession session = sessionRepository.findSessionById(fixture.auctionId()).orElseThrow();
+            AuctionBidCommandPlanner.Plan plan = new AuctionBidCommandPlanner().plan(
+                    session, List.of(),
+                    AuctionBidCommandPlanner.Command.manualBid(101L, new BigDecimal("150.00")));
+            commit(fixture.auctionId(), 101L, AuctionBidCommandType.MANUAL_BID, plan, null);
+
+            AuctionSession extended = sessionRepository.findSessionById(fixture.auctionId()).orElseThrow();
+            assertThat(extended.endAt()).isAfterOrEqualTo(originalEndAt.plusSeconds(30));
+            assertThat(extended.endAt()).isBefore(originalEndAt.plusSeconds(60));
+            assertThat(extended.extensionCount()).isEqualTo(1);
+            assertThat(countOutbox(fixture.auctionId(), "auction.bid-accepted")).isOne();
+            assertThat(countOutbox(fixture.auctionId(), "auction.time-extended")).isOne();
+            assertThat(countOutbox(fixture.auctionId(), "auction.close")).isOne();
+            assertThat(outboxPayloads(fixture.auctionId(), "auction.close").getFirst())
+                    .contains(extended.endAt().toString());
+
+            AuctionClosingTransaction.CloseResult stale = closingTransaction.close(
+                    new AuctionClosingTransaction.CloseCommand(
+                            fixture.auctionId(), originalEndAt, extended.endAt().plusSeconds(1),
+                            AuctionClosingTransaction.TriggerSource.MESSAGE, UUID.randomUUID(), "stale-close"));
+            assertThat(stale).isEqualTo(AuctionClosingTransaction.CloseResult.END_TIME_CHANGED);
+            assertThat(sessionRepository.findSessionById(fixture.auctionId()).orElseThrow().status())
+                    .isEqualTo(AuctionSessionStatus.OPEN);
+
+            AuctionClosingTransaction.CloseResult firstClose = closingTransaction.close(
+                    new AuctionClosingTransaction.CloseCommand(
+                            fixture.auctionId(), extended.endAt(), extended.endAt().plusSeconds(1),
+                            AuctionClosingTransaction.TriggerSource.MESSAGE, UUID.randomUUID(), "new-close"));
+            assertThat(firstClose).isEqualTo(AuctionClosingTransaction.CloseResult.CLOSED_SOLD);
+            AuctionClosingTransaction.CloseResult duplicateClose = closingTransaction.close(
+                    new AuctionClosingTransaction.CloseCommand(
+                            fixture.auctionId(), extended.endAt(), extended.endAt().plusSeconds(2),
+                            AuctionClosingTransaction.TriggerSource.DATABASE_SCAN, null, null));
+            assertThat(duplicateClose).isEqualTo(AuctionClosingTransaction.CloseResult.ALREADY_CLOSED);
+            assertThat(countOutbox(fixture.auctionId(), "auction.closed-sold")).isOne();
+        } finally {
+            cleanup(fixture);
+        }
+    }
+
     private String commitConcurrently(
             CountDownLatch ready,
             CountDownLatch start,
@@ -235,6 +282,37 @@ class AuctionProxyMySqlIntegrationTest {
         return new Fixture(itemId, auctionId);
     }
 
+    private Fixture fixtureEndingSoon() {
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        long sellerId = IdWorker.getId();
+        long itemId = IdWorker.getId();
+        long auctionId = IdWorker.getId();
+        long buyerId = 101L;
+        itemRepository.insertItem(new AuctionItem(
+                itemId, sellerId, "Anti-sniping integration item", "Anti-sniping integration item description", "OTHER",
+                AuctionItemCondition.GOOD, AuctionItemReviewStatus.APPROVED, 1, 2,
+                now.minusSeconds(120), now.minusSeconds(60), now.minusSeconds(180), now.minusSeconds(60)
+        ));
+        sessionRepository.insertSession(new AuctionSession(
+                auctionId, itemId, sellerId,
+                new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
+                null, null, 0, now.minusSeconds(60), now.plusSeconds(30),
+                AuctionSessionStatus.OPEN, 0L, now.minusSeconds(180), now.minusSeconds(60)
+        ));
+        long registrationId = IdWorker.getId();
+        String holdNo = "ANTI-SNIPING-" + registrationId;
+        jdbc.update("""
+                INSERT INTO auction_registration
+                    (id, registration_no, auction_id, bidder_id, deposit_amount, status, failure_code,
+                     attempt_count, next_retry_at, last_attempt_at, lease_owner, lease_until,
+                     registered_at, version, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 50.00, 'REGISTERED', NULL, 1, NULL, ?, NULL, NULL, ?, 1, ?, ?)
+                """, registrationId, holdNo, auctionId, buyerId,
+                java.sql.Timestamp.from(now), java.sql.Timestamp.from(now),
+                java.sql.Timestamp.from(now), java.sql.Timestamp.from(now));
+        return new Fixture(itemId, auctionId);
+    }
+
     private AuctionProxyBid proxy(long auctionId, long bidderId, String maximum, long priority) {
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         return new AuctionProxyBid(
@@ -245,12 +323,32 @@ class AuctionProxyMySqlIntegrationTest {
 
     private void cleanup(Fixture fixture) {
         String auctionId = Long.toString(fixture.auctionId());
+        jdbc.update("""
+                UPDATE auction_session
+                SET status = 'OPEN', winner_id = NULL, winning_bid_id = NULL,
+                    final_price = NULL, closed_at = NULL
+                WHERE id = ?
+                """, fixture.auctionId());
         jdbc.update("DELETE FROM bid_record WHERE auction_id = ?", fixture.auctionId());
         jdbc.update("DELETE FROM auction_outbox WHERE aggregate_id = ?", auctionId);
         jdbc.update("DELETE FROM auction_bid_command WHERE auction_id = ?", fixture.auctionId());
         jdbc.update("DELETE FROM auction_proxy_bid WHERE auction_id = ?", fixture.auctionId());
+        jdbc.update("DELETE FROM auction_registration WHERE auction_id = ?", fixture.auctionId());
         jdbc.update("DELETE FROM auction_session WHERE id = ?", fixture.auctionId());
         jdbc.update("DELETE FROM auction_item WHERE id = ?", fixture.itemId());
+    }
+
+    private long countOutbox(long auctionId, String eventType) {
+        Long count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM auction_outbox WHERE aggregate_id = ? AND event_type = ?",
+                Long.class, Long.toString(auctionId), eventType);
+        return count == null ? 0 : count;
+    }
+
+    private List<String> outboxPayloads(long auctionId, String eventType) {
+        return jdbc.queryForList(
+                "SELECT CAST(payload AS CHAR) FROM auction_outbox WHERE aggregate_id = ? AND event_type = ?",
+                String.class, Long.toString(auctionId), eventType);
     }
 
     private record Fixture(long itemId, long auctionId) { }
