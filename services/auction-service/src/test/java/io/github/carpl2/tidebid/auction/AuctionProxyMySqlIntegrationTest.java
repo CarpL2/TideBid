@@ -212,6 +212,64 @@ class AuctionProxyMySqlIntegrationTest {
         }
     }
 
+    @Test
+    void bidAndCloseAtTheDeadlineProduceOnlyOneLegalCasOutcome() throws Exception {
+        Instant originalEndAt = clock.instant().truncatedTo(ChronoUnit.MICROS).minusSeconds(1);
+        Fixture fixture = fixtureAt(originalEndAt);
+        Instant acceptedAt = originalEndAt.minusMillis(1);
+        AuctionSession plannedSession = sessionRepository.findSessionById(fixture.auctionId()).orElseThrow();
+        AuctionBidCommandPlanner.Plan plan = new AuctionBidCommandPlanner().plan(
+                plannedSession, List.of(),
+                AuctionBidCommandPlanner.Command.manualBid(101L, new BigDecimal("150.00")));
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<String> bid = executor.submit(() -> {
+                ready.countDown();
+                assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+                try {
+                    commitAt(fixture.auctionId(), 101L, AuctionBidCommandType.MANUAL_BID, plan, acceptedAt);
+                    return "BID_ACCEPTED";
+                } catch (AuctionBidCommandTransaction.BidConflictException exception) {
+                    return "BID_CONFLICT";
+                }
+            });
+            Future<AuctionClosingTransaction.CloseResult> close = executor.submit(() -> {
+                ready.countDown();
+                assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+                return closingTransaction.close(new AuctionClosingTransaction.CloseCommand(
+                        fixture.auctionId(), originalEndAt, clock.instant(),
+                        AuctionClosingTransaction.TriggerSource.DATABASE_SCAN, null, null));
+            });
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            String bidResult = bid.get(10, TimeUnit.SECONDS);
+            AuctionClosingTransaction.CloseResult closeResult = close.get(10, TimeUnit.SECONDS);
+            AuctionSession finalSession = sessionRepository.findSessionById(fixture.auctionId()).orElseThrow();
+
+            if ("BID_ACCEPTED".equals(bidResult)) {
+                assertThat(finalSession.status()).isEqualTo(AuctionSessionStatus.OPEN);
+                assertThat(finalSession.bidCount()).isEqualTo(1L);
+                assertThat(finalSession.endAt()).isAfter(originalEndAt);
+                assertThat(closeResult).isIn(
+                        AuctionClosingTransaction.CloseResult.END_TIME_CHANGED,
+                        AuctionClosingTransaction.CloseResult.NOT_ELIGIBLE,
+                        AuctionClosingTransaction.CloseResult.LOST_RACE);
+            } else {
+                assertThat(closeResult).isEqualTo(AuctionClosingTransaction.CloseResult.CLOSED_UNSOLD);
+                assertThat(finalSession.status()).isEqualTo(AuctionSessionStatus.CLOSED_UNSOLD);
+                assertThat(finalSession.bidCount()).isZero();
+            }
+            assertThat(countOutbox(fixture.auctionId(), "auction.closed-unsold"))
+                    .isEqualTo("CLOSED_UNSOLD".equals(finalSession.status().name()) ? 1 : 0);
+            assertThat(countOutbox(fixture.auctionId(), "auction.bid-accepted"))
+                    .isEqualTo("BID_ACCEPTED".equals(bidResult) ? 1 : 0);
+        } finally {
+            cleanup(fixture);
+        }
+    }
+
     private String commitConcurrently(
             CountDownLatch ready,
             CountDownLatch start,
@@ -240,6 +298,28 @@ class AuctionProxyMySqlIntegrationTest {
             AuctionBidCommandTransaction.ProxyMutation mutation
     ) {
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        return commitAt(auctionId, actorId, type, plan, mutation, now);
+    }
+
+    private AuctionBidCommandTransaction.CommittedCommand commitAt(
+            long auctionId,
+            long actorId,
+            AuctionBidCommandType type,
+            AuctionBidCommandPlanner.Plan plan,
+            Instant acceptedAt
+    ) {
+        return commitAt(auctionId, actorId, type, plan, null, acceptedAt);
+    }
+
+    private AuctionBidCommandTransaction.CommittedCommand commitAt(
+            long auctionId,
+            long actorId,
+            AuctionBidCommandType type,
+            AuctionBidCommandPlanner.Plan plan,
+            AuctionBidCommandTransaction.ProxyMutation mutation,
+            Instant acceptedAt
+    ) {
+        Instant now = acceptedAt.truncatedTo(ChronoUnit.MICROS);
         String requestId = "mysql_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         String payloadHash = "a".repeat(64);
         long commandId = IdWorker.getId();
@@ -284,6 +364,11 @@ class AuctionProxyMySqlIntegrationTest {
 
     private Fixture fixtureEndingSoon() {
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        return fixtureAt(now.plusSeconds(30));
+    }
+
+    private Fixture fixtureAt(Instant endAt) {
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         long sellerId = IdWorker.getId();
         long itemId = IdWorker.getId();
         long auctionId = IdWorker.getId();
@@ -296,7 +381,7 @@ class AuctionProxyMySqlIntegrationTest {
         sessionRepository.insertSession(new AuctionSession(
                 auctionId, itemId, sellerId,
                 new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("50.00"),
-                null, null, 0, now.minusSeconds(60), now.plusSeconds(30),
+                null, null, 0, now.minusSeconds(60), endAt,
                 AuctionSessionStatus.OPEN, 0L, now.minusSeconds(180), now.minusSeconds(60)
         ));
         long registrationId = IdWorker.getId();
