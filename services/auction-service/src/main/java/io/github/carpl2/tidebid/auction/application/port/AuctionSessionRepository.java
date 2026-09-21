@@ -41,6 +41,8 @@ public interface AuctionSessionRepository {
 
     BidPage findBidsByAuction(long auctionId, int offset, int limit);
 
+    List<BidRecord> findBidsAfterSequence(long auctionId, long afterSequenceNo, int limit);
+
     record LobbySessionPage(List<AuctionSession> sessions, long total) {
         public LobbySessionPage {
             sessions = List.copyOf(sessions);

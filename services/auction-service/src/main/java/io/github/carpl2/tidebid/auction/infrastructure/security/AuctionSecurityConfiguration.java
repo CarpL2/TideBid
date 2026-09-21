@@ -7,6 +7,7 @@ import io.github.carpl2.tidebid.core.ErrorCode;
 import io.github.carpl2.tidebid.core.TraceIds;
 import io.github.carpl2.tidebid.security.JwtAccessTokenVerifier;
 import io.github.carpl2.tidebid.security.SecurityHeaders;
+import io.github.carpl2.tidebid.auction.infrastructure.config.AuctionAccountClientProperties;
 import io.github.carpl2.tidebid.web.TraceIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -14,6 +15,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -35,7 +37,8 @@ public class AuctionSecurityConfiguration {
     SecurityFilterChain auctionSecurityFilterChain(
             HttpSecurity http,
             JwtAccessTokenVerifier tokenVerifier,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ObjectProvider<AuctionAccountClientProperties> internalTokenProperties
     ) throws Exception {
         AuthenticationEntryPoint authenticationEntryPoint = (request, response, exception) ->
                 writeFailure(request, response, objectMapper, CommonErrorCode.UNAUTHENTICATED);
@@ -64,6 +67,12 @@ public class AuctionSecurityConfiguration {
                 .addFilterBefore(
                         new AuctionBearerTokenFilter(tokenVerifier, authenticationEntryPoint),
                         UsernamePasswordAuthenticationFilter.class
+                )
+                .addFilterBefore(
+                        new AuctionInternalServiceTokenFilter(
+                                internalTokenProperties.getIfAvailable(() -> new AuctionAccountClientProperties("")),
+                                objectMapper),
+                        AuctionBearerTokenFilter.class
                 );
         return http.build();
     }

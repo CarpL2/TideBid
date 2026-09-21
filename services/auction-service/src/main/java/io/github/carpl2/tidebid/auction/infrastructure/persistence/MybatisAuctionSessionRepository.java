@@ -188,6 +188,22 @@ public class MybatisAuctionSessionRepository implements AuctionSessionRepository
         return new BidPage(bids, total);
     }
 
+    @Override
+    public List<BidRecord> findBidsAfterSequence(long auctionId, long afterSequenceNo, int limit) {
+        MybatisAuctionItemRepository.requirePositive(auctionId, "auctionId");
+        if (afterSequenceNo < 0 || limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("invalid snapshot window");
+        }
+        return bidMapper.selectList(new LambdaQueryWrapper<BidRecordEntity>()
+                        .eq(BidRecordEntity::getAuctionId, auctionId)
+                        .gt(BidRecordEntity::getSequenceNo, afterSequenceNo)
+                        .orderByAsc(BidRecordEntity::getSequenceNo)
+                        .last("LIMIT " + limit))
+                .stream()
+                .map(AuctionPersistenceMapping::toDomain)
+                .toList();
+    }
+
     private static void requirePageWindow(int offset, int limit) {
         if (offset < 0 || limit < 1 || limit > 100) {
             throw new IllegalArgumentException("invalid page window");

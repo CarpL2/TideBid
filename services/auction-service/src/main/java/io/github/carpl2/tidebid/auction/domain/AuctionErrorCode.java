@@ -27,6 +27,8 @@ public enum AuctionErrorCode implements ErrorCode {
     BID_AMOUNT_INVALID("AUCTION_BID_AMOUNT_INVALID", "Bid amount must be a positive value with at most two decimal places", 400),
     BID_TOO_LOW("AUCTION_BID_TOO_LOW", "Bid amount is below the minimum next bid", 409),
     BID_CONFLICT("AUCTION_BID_CONFLICT", "Auction price changed before the bid was accepted", 409),
+    PROXY_NOT_FOUND("AUCTION_PROXY_NOT_FOUND", "Proxy bidding rule was not found", 404),
+    PROXY_AMOUNT_INVALID("AUCTION_PROXY_AMOUNT_INVALID", "Proxy maximum amount is invalid", 400),
     IDEMPOTENCY_CONFLICT("AUCTION_IDEMPOTENCY_CONFLICT", "Request id was already used with different data", 409),
     ACCOUNT_SERVICE_UNAVAILABLE("AUCTION_ACCOUNT_SERVICE_UNAVAILABLE", "Account service is temporarily unavailable", 503);
 
