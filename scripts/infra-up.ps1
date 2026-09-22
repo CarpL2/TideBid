@@ -149,7 +149,9 @@ function Invoke-DockerCommand {
 
 function Get-ComposeServiceStates {
     $outputLines = @(Invoke-DockerCommand `
-            -Arguments ($script:composeArguments + @('ps', '--all', '--format', 'json')) `
+            -Arguments ($script:composeArguments + @(
+                'ps', '--all', '--format', '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}'
+            )) `
             -FailureMessage 'Could not inspect TideBid containers.' `
             -CaptureOutput)
     $states = @{}
@@ -157,7 +159,21 @@ function Get-ComposeServiceStates {
         if ([string]::IsNullOrWhiteSpace($line)) {
             continue
         }
-        $state = $line | ConvertFrom-Json
+        $parts = ([string]$line).Split('|', 4)
+        if ($parts.Count -ne 4 -or [string]::IsNullOrWhiteSpace($parts[0])) {
+            throw 'Docker Compose returned an invalid service status row.'
+        }
+        $exitCode = 0
+        if (-not [int]::TryParse($parts[3], [Globalization.NumberStyles]::Integer,
+                [Globalization.CultureInfo]::InvariantCulture, [ref]$exitCode)) {
+            throw 'Docker Compose returned an invalid service exit code.'
+        }
+        $state = [pscustomobject]@{
+            Service = $parts[0]
+            State = $parts[1]
+            Health = $parts[2]
+            ExitCode = $exitCode
+        }
         $states[[string]$state.Service] = $state
     }
     return $states

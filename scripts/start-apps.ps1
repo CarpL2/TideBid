@@ -568,7 +568,7 @@ try {
         -Pattern '^v24\.' `
         -Requirement 'Node.js 24 is required.'
     $pnpmCommand = Assert-CommandVersion `
-        -Name 'pnpm.cmd' `
+        -Name 'pnpm' `
         -Arguments @('--version') `
         -Pattern '^11\.' `
         -Requirement 'pnpm 11 is required.'

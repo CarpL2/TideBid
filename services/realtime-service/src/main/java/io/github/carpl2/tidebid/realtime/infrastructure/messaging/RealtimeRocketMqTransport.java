@@ -12,6 +12,7 @@ import org.apache.rocketmq.client.apis.consumer.PushConsumer;
 import org.apache.rocketmq.client.apis.message.MessageView;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -34,6 +35,7 @@ public final class RealtimeRocketMqTransport implements SmartLifecycle {
     private final Map<String, PushConsumer> consumers = new ConcurrentHashMap<>();
     private volatile boolean running;
 
+    @Autowired
     public RealtimeRocketMqTransport(RealtimeProperties properties, RealtimeAuctionEventHandler handler,
                                      MeterRegistry meters) {
         this(properties, handler, meters, ClientServiceProvider.loadService());

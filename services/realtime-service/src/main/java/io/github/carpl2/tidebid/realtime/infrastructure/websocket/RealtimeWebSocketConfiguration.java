@@ -17,10 +17,7 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 import org.springframework.context.annotation.Bean;
 import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 import org.springframework.beans.factory.annotation.Qualifier;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 
 @Configuration(proxyBeanMethods = false)
 @EnableWebSocket
@@ -63,26 +60,6 @@ public class RealtimeWebSocketConfiguration implements WebSocketConfigurer {
         container.setMaxTextMessageBufferSize(limit);
         container.setMaxBinaryMessageBufferSize(limit);
         return container;
-    }
-
-    @Bean(name = "realtimeWebSocketSendExecutor", destroyMethod = "shutdown")
-    Executor realtimeWebSocketSendExecutor() {
-        ThreadFactory factory = runnable -> {
-            Thread thread = new Thread(runnable, "tidebid-realtime-send");
-            thread.setDaemon(true);
-            return thread;
-        };
-        return Executors.newCachedThreadPool(factory);
-    }
-
-    @Bean(name = "realtimeWebSocketHeartbeatExecutor", destroyMethod = "shutdownNow")
-    ScheduledExecutorService realtimeWebSocketHeartbeatExecutor() {
-        ThreadFactory factory = runnable -> {
-            Thread thread = new Thread(runnable, "tidebid-realtime-heartbeat");
-            thread.setDaemon(true);
-            return thread;
-        };
-        return Executors.newSingleThreadScheduledExecutor(factory);
     }
 
     @Bean

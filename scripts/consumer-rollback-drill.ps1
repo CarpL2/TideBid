@@ -60,6 +60,18 @@ $lockReleased = $false
 $originalLockWait = $null
 $drillFailure = $null
 
+function ConvertTo-Sha256Hex {
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha256.ComputeHash($Bytes)
+    } finally {
+        $sha256.Dispose()
+    }
+    return ([BitConverter]::ToString($digest).Replace('-', '')).ToLowerInvariant()
+}
+
 function Invoke-Sql {
     param([Parameter(Mandatory = $true)][string]$Sql)
 
@@ -233,7 +245,7 @@ SELECT ROW_COUNT();
         throw 'Could not read the cloned event payload for hashing.'
     }
     $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($payloadLines[0])
-    $payloadHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($payloadBytes)).ToLowerInvariant()
+    $payloadHash = ConvertTo-Sha256Hex -Bytes $payloadBytes
     $activateResult = @(Invoke-Sql -Sql @"
 UPDATE tidebid_trade.trade_outbox
 SET payload_hash = '$payloadHash', next_attempt_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6)

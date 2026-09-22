@@ -61,6 +61,19 @@ $script:currentStep = 'initialization'
 $script:currentTraceId = 'unavailable'
 $invariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+function ConvertTo-Sha256Hex {
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha256.ComputeHash($Bytes)
+    } finally {
+        $sha256.Dispose()
+    }
+    return ([BitConverter]::ToString($digest).Replace('-', '')).ToLowerInvariant()
+}
+
 if ($ReliableTrade) {
     $AuctionCore = $true
 }
@@ -754,7 +767,7 @@ function New-ApprovedSmokeAuction {
         [Parameter(Mandatory = $true)][byte[]]$ImageBytes
     )
 
-    $checksum = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($ImageBytes)).ToLowerInvariant()
+    $checksum = ConvertTo-Sha256Hex -Bytes $ImageBytes
     $requestToken = "$Label-$($Suffix.Substring(0, 8))"
     $uploadIntent = Invoke-SmokeRequest `
         -Step "$Label-create-upload-intent" `
@@ -970,7 +983,7 @@ try {
     $imageBytes = [Convert]::FromBase64String(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
     )
-    $checksum = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($imageBytes)).ToLowerInvariant()
+    $checksum = ConvertTo-Sha256Hex -Bytes $imageBytes
     $uploadIntent = Invoke-SmokeRequest `
         -Step 'create-upload-intent' `
         -Method POST `
@@ -1161,7 +1174,9 @@ try {
         -Headers @{ Authorization = $buyerOneAuthorization; 'X-Request-Id' = $buyerOneBidRequest } `
         -Body @{ auctionId = $auctionId; amount = '100.00' } `
         -ApiEnvelope
-    Assert-Value -Condition ([long]$buyerOneBid.data.sequenceNo -eq 1) -Message 'buyer1 bid sequence is not 1'
+    Assert-Value -Condition (([long]$buyerOneBid.data.lastSequenceNo -eq 1) -and
+        ([long]$buyerOneBid.data.acceptedBids[0].sequenceNo -eq 1)) `
+        -Message 'buyer1 bid sequence is not 1'
 
     $buyerOneBidReplay = Invoke-SmokeRequest `
         -Step 'replay-buyer1-bid' `
@@ -1171,7 +1186,8 @@ try {
         -Headers @{ Authorization = $buyerOneAuthorization; 'X-Request-Id' = $buyerOneBidRequest } `
         -Body @{ auctionId = $auctionId; amount = '100.00' } `
         -ApiEnvelope
-    Assert-Value -Condition ([string]$buyerOneBidReplay.data.bidId -ceq [string]$buyerOneBid.data.bidId) `
+    Assert-Value -Condition ([string]$buyerOneBidReplay.data.acceptedBids[0].bidId -ceq
+        [string]$buyerOneBid.data.acceptedBids[0].bidId) `
         -Message 'bid replay returned a different bid ID'
 
     $buyerTwoBid = Invoke-SmokeRequest `
@@ -1185,7 +1201,9 @@ try {
         } `
         -Body @{ auctionId = $auctionId; amount = '110.00' } `
         -ApiEnvelope
-    Assert-Value -Condition ([long]$buyerTwoBid.data.sequenceNo -eq 2) -Message 'buyer2 bid sequence is not 2'
+    Assert-Value -Condition (([long]$buyerTwoBid.data.lastSequenceNo -eq 2) -and
+        ([long]$buyerTwoBid.data.acceptedBids[0].sequenceNo -eq 2)) `
+        -Message 'buyer2 bid sequence is not 2'
 
     if ($PauseAfterSecondBid) {
         Write-Host 'Fault-drill checkpoint reached after both bids committed to MySQL.'
@@ -1438,7 +1456,9 @@ try {
         -Headers @{ Authorization = $buyerOneAuthorization; 'X-Request-Id' = "smoke-timeout-bid1-$($suffix.Substring(0, 8))" } `
         -Body @{ auctionId = $timeoutAuction.AuctionId; amount = '100.00' } `
         -ApiEnvelope
-    Assert-Value -Condition ([long]$timeoutBidOne.data.sequenceNo -eq 1) -Message 'timeout buyer1 bid sequence is not 1'
+    Assert-Value -Condition (([long]$timeoutBidOne.data.lastSequenceNo -eq 1) -and
+        ([long]$timeoutBidOne.data.acceptedBids[0].sequenceNo -eq 1)) `
+        -Message 'timeout buyer1 bid sequence is not 1'
     $timeoutBidTwo = Invoke-SmokeRequest `
         -Step 'timeout-buyer2-bid' `
         -Method POST `
@@ -1447,7 +1467,9 @@ try {
         -Headers @{ Authorization = $buyerTwoAuthorization; 'X-Request-Id' = "smoke-timeout-bid2-$($suffix.Substring(0, 8))" } `
         -Body @{ auctionId = $timeoutAuction.AuctionId; amount = '110.00' } `
         -ApiEnvelope
-    Assert-Value -Condition ([long]$timeoutBidTwo.data.sequenceNo -eq 2) -Message 'timeout buyer2 bid sequence is not 2'
+    Assert-Value -Condition (([long]$timeoutBidTwo.data.lastSequenceNo -eq 2) -and
+        ([long]$timeoutBidTwo.data.acceptedBids[0].sequenceNo -eq 2)) `
+        -Message 'timeout buyer2 bid sequence is not 2'
 
     Wait-AuctionTerminal `
         -AuctionId $timeoutAuction.AuctionId `

@@ -26,8 +26,7 @@ function Test-HttpHealth {
     param([Parameter(Mandatory = $true)][string]$Uri)
 
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $Uri -TimeoutSec 2
-        $body = [string]$response.Content | ConvertFrom-Json
+        $body = Invoke-RestMethod -Uri $Uri -TimeoutSec 2
         return [pscustomobject]@{ State = if ([string]$body.status -eq 'UP') { 'UP' } else { 'DOWN' }; Detail = [string]$body.status }
     } catch {
         return [pscustomobject]@{ State = 'DOWN'; Detail = 'unreachable' }
