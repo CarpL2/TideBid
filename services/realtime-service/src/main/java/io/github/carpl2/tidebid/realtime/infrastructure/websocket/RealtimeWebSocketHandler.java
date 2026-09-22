@@ -8,6 +8,7 @@ import io.github.carpl2.tidebid.contracts.RealtimeErrorCode;
 import io.github.carpl2.tidebid.contracts.RealtimeMessageType;
 import io.github.carpl2.tidebid.contracts.RealtimePing;
 import io.github.carpl2.tidebid.contracts.RealtimePong;
+import io.github.carpl2.tidebid.contracts.RealtimeResyncReason;
 import io.github.carpl2.tidebid.contracts.RealtimeServerMessage;
 import io.github.carpl2.tidebid.contracts.RealtimeSubscribe;
 import io.github.carpl2.tidebid.contracts.RealtimeUnsubscribe;
@@ -119,6 +120,14 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
                                     RealtimeWebSocketAttributes.USER_ID, 0L)).longValue();
                             var snapshot = snapshotClient.find(subscribe.auctionId(), subscribe.lastSequenceNo(),
                                     100, userId, decoded.requestId());
+                            RealtimeResyncReason snapshotReason = snapshotResyncReason(
+                                    snapshot, subscribe.auctionId(), subscribe.lastSequenceNo(), 100);
+                            if (snapshotReason != null) {
+                                sessionRegistry.cancelSync(subscribe.auctionId(), session);
+                                sendResync(session, decoded.requestId(), subscribe.auctionId(), snapshotReason,
+                                        subscribe.lastSequenceNo());
+                                break;
+                            }
                             if (!sessionRegistry.sendSnapshot(subscribe.auctionId(), session, snapshot,
                                     decoded.requestId())) {
                                 sessionRegistry.cancelSync(subscribe.auctionId(), session);
@@ -190,11 +199,33 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void sendResync(WebSocketSession session, String requestId, long auctionId,
-                             io.github.carpl2.tidebid.contracts.RealtimeResyncReason reason,
+                             RealtimeResyncReason reason,
                              long lastSequenceNo) throws Exception {
         send(session, new RealtimeServerMessage<>(RealtimeMessageType.RESYNC_REQUIRED, 1,
                 requestId, Instant.now(), new io.github.carpl2.tidebid.contracts.RealtimeResyncRequired(
                         auctionId, reason, lastSequenceNo)));
+    }
+
+    private static RealtimeResyncReason snapshotResyncReason(
+            io.github.carpl2.tidebid.contracts.RealtimeSnapshot snapshot,
+            long requestedAuctionId,
+            long requestedSequenceNo,
+            int limit
+    ) {
+        if (snapshot.auctionId() != requestedAuctionId || snapshot.lastSequenceNo() < requestedSequenceNo) {
+            return RealtimeResyncReason.SNAPSHOT_INCONSISTENT;
+        }
+        long delta = snapshot.lastSequenceNo() - requestedSequenceNo;
+        if (delta > limit) return RealtimeResyncReason.HISTORY_GAP;
+        if (delta == 0) {
+            return snapshot.bids().isEmpty() ? null : RealtimeResyncReason.SNAPSHOT_INCONSISTENT;
+        }
+        if (snapshot.bids().isEmpty()) return RealtimeResyncReason.HISTORY_GAP;
+        long first = snapshot.bids().getFirst().sequenceNo();
+        long last = snapshot.bids().getLast().sequenceNo();
+        if (first != requestedSequenceNo + 1L) return RealtimeResyncReason.HISTORY_GAP;
+        if (last != snapshot.lastSequenceNo()) return RealtimeResyncReason.SNAPSHOT_INCONSISTENT;
+        return null;
     }
 
     private static final class SubscriptionState {

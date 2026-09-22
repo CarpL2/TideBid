@@ -6,8 +6,10 @@ import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeas
 import io.github.carpl2.tidebid.realtime.application.port.AuctionSnapshotClient;
 import io.github.carpl2.tidebid.contracts.RealtimeAuctionStatus;
 import io.github.carpl2.tidebid.contracts.RealtimeSnapshot;
+import io.github.carpl2.tidebid.contracts.RealtimeResyncReason;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimePropertiesTest;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
+import io.github.carpl2.tidebid.realtime.infrastructure.fanout.RealtimeWebSocketSessionRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -114,5 +116,57 @@ class RealtimeWebSocketHandlerTest {
 
         verify(snapshotClient).find(7L, 3L, 100, 42L, "sub-1");
         assertThat(sent).anySatisfy(message -> assertThat(message.getPayload()).contains("\"type\":\"SNAPSHOT\""));
+    }
+
+    @Test
+    void requestsFullResyncWhenIncrementalHistoryExceedsTheSnapshotLimit() throws Exception {
+        RealtimeWebSocketSessionRegistry registry = new RealtimeWebSocketSessionRegistry(
+                new ObjectMapper().findAndRegisterModules());
+        RealtimeWebSocketHandler snapshotHandler = new RealtimeWebSocketHandler(
+                new RealtimeMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new ObjectMapper().findAndRegisterModules(), RealtimePropertiesTest.validProperties(), leaseStore,
+                registry, snapshotClient);
+        attributes.put(RealtimeWebSocketAttributes.USER_ID, 42L);
+        when(snapshotClient.find(7L, 0L, 100, 42L, "sub-gap")).thenReturn(new RealtimeSnapshot(
+                7L, RealtimeAuctionStatus.OPEN, new java.math.BigDecimal("10.00"),
+                new java.math.BigDecimal("11.00"), 101L, Instant.parse("2026-09-22T09:00:00Z"),
+                null, 0, 101L, false, false, java.util.List.of()));
+        snapshotHandler.afterConnectionEstablished(session);
+        snapshotHandler.handleMessage(session, new TextMessage("""
+                {"type":"SUBSCRIBE","protocolVersion":1,"requestId":"sub-gap",
+                 "payload":{"auctionId":"7","lastSequenceNo":0}}
+                """));
+
+        assertThat(sent).anySatisfy(message -> assertThat(message.getPayload())
+                .contains("\"type\":\"RESYNC_REQUIRED\"")
+                .contains(RealtimeResyncReason.HISTORY_GAP.name()));
+        assertThat(sent).noneMatch(message -> message.getPayload().contains("\"type\":\"SNAPSHOT\""));
+    }
+
+    @Test
+    void rejectsSnapshotWithASequenceTailThatDoesNotMatchTheCursor() throws Exception {
+        RealtimeWebSocketSessionRegistry registry = new RealtimeWebSocketSessionRegistry(
+                new ObjectMapper().findAndRegisterModules());
+        RealtimeWebSocketHandler snapshotHandler = new RealtimeWebSocketHandler(
+                new RealtimeMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new ObjectMapper().findAndRegisterModules(), RealtimePropertiesTest.validProperties(), leaseStore,
+                registry, snapshotClient);
+        attributes.put(RealtimeWebSocketAttributes.USER_ID, 42L);
+        when(snapshotClient.find(7L, 3L, 100, 42L, "sub-bad")).thenReturn(new RealtimeSnapshot(
+                7L, RealtimeAuctionStatus.OPEN, new java.math.BigDecimal("10.00"),
+                new java.math.BigDecimal("11.00"), 5L, Instant.parse("2026-09-22T09:00:00Z"),
+                null, 0, 5L, false, false, java.util.List.of(
+                        new io.github.carpl2.tidebid.contracts.RealtimeBidView(
+                                4L, new java.math.BigDecimal("10.00"), 4L, false,
+                                Instant.parse("2026-09-22T09:00:00Z")))));
+        snapshotHandler.afterConnectionEstablished(session);
+        snapshotHandler.handleMessage(session, new TextMessage("""
+                {"type":"SUBSCRIBE","protocolVersion":1,"requestId":"sub-bad",
+                 "payload":{"auctionId":"7","lastSequenceNo":3}}
+                """));
+
+        assertThat(sent).anySatisfy(message -> assertThat(message.getPayload())
+                .contains("\"type\":\"RESYNC_REQUIRED\"")
+                .contains(RealtimeResyncReason.SNAPSHOT_INCONSISTENT.name()));
     }
 }
