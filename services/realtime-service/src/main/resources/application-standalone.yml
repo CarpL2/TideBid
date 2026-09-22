@@ -21,6 +21,8 @@ spring:
 
 tidebid:
   realtime:
+    websocket:
+      enabled: false
     auction-client:
       enabled: false
     redis:

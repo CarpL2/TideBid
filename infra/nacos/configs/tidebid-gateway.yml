@@ -56,7 +56,11 @@ spring:
             - id: realtime-service
               uri: lb://tidebid-realtime
               predicates:
-                - Path=/api/realtime/**,/ws/**
+                - Path=/api/realtime/**
+            - id: realtime-websocket
+              uri: lb:ws://tidebid-realtime
+              predicates:
+                - Path=/ws/auctions
             - id: ai-service
               uri: lb://tidebid-ai
               predicates:

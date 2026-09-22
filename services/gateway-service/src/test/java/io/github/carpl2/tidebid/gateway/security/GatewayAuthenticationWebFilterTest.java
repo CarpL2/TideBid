@@ -141,6 +141,25 @@ class GatewayAuthenticationWebFilterTest {
     }
 
     @Test
+    void websocketHandshakeUsesTicketAtRealtimeAndDoesNotForwardBearerToken() {
+        String token = issuer.issue("alice", 42L, Set.of(Role.USER)).value();
+        MockServerWebExchange input = exchange(
+                MockServerHttpRequest.get("/ws/auctions?ticket=opaque-ticket")
+                        .header(SecurityHeaders.AUTHORIZATION, SecurityHeaders.BEARER_PREFIX + token)
+                        .header(SecurityHeaders.INTERNAL_USER_ID, "999")
+                        .header(SecurityHeaders.INTERNAL_USER_ROLES, "ADMIN")
+                        .header(SecurityHeaders.INTERNAL_SERVICE_TOKEN, "forged-service-token")
+        );
+
+        ServerWebExchange forwarded = forwardedExchange(input);
+
+        assertThat(forwarded.getRequest().getHeaders().containsKey(SecurityHeaders.AUTHORIZATION)).isFalse();
+        assertThat(forwarded.getRequest().getHeaders().containsKey(SecurityHeaders.INTERNAL_USER_ID)).isFalse();
+        assertThat(forwarded.getRequest().getHeaders().containsKey(SecurityHeaders.INTERNAL_USER_ROLES)).isFalse();
+        assertThat(forwarded.getRequest().getHeaders().containsKey(SecurityHeaders.INTERNAL_SERVICE_TOKEN)).isFalse();
+    }
+
+    @Test
     void onlyPostLoginAndRegistrationAreAnonymous() {
         assertBusinessFailure(
                 exchange(MockServerHttpRequest.get("/api/auth/login")),

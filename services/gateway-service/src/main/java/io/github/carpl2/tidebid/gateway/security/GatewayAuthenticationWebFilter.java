@@ -49,8 +49,11 @@ public final class GatewayAuthenticationWebFilter implements WebFilter, Ordered 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
         ServerWebExchange sanitizedExchange = withoutUntrustedBoundaryHeaders(exchange);
-        if (isProtocolPreflight(sanitizedExchange) || isAnonymousEndpoint(sanitizedExchange)) {
-            return chain.filter(sanitizedExchange);
+        if (isProtocolPreflight(sanitizedExchange) || isAnonymousEndpoint(sanitizedExchange)
+                || isWebSocketEndpoint(sanitizedExchange)) {
+            return chain.filter(isWebSocketEndpoint(sanitizedExchange)
+                    ? withoutWebSocketAuthorization(sanitizedExchange)
+                    : sanitizedExchange);
         }
         if (!isProtectedBusinessPath(sanitizedExchange)) {
             return chain.filter(sanitizedExchange);
@@ -109,6 +112,12 @@ public final class GatewayAuthenticationWebFilter implements WebFilter, Ordered 
                 .build();
     }
 
+    private static ServerWebExchange withoutWebSocketAuthorization(ServerWebExchange exchange) {
+        return exchange.mutate()
+                .request(request -> request.headers(headers -> headers.remove(SecurityHeaders.AUTHORIZATION)))
+                .build();
+    }
+
     private static boolean isProtocolPreflight(ServerWebExchange exchange) {
         return exchange.getRequest().getMethod() == HttpMethod.OPTIONS;
     }
@@ -125,6 +134,10 @@ public final class GatewayAuthenticationWebFilter implements WebFilter, Ordered 
         String path = exchange.getRequest().getPath().value();
         return path.equals("/api") || path.startsWith("/api/")
                 || path.equals("/ws") || path.startsWith("/ws/");
+    }
+
+    private static boolean isWebSocketEndpoint(ServerWebExchange exchange) {
+        return exchange.getRequest().getPath().value().equals("/ws/auctions");
     }
 
     private static boolean isAdminPath(ServerWebExchange exchange) {
