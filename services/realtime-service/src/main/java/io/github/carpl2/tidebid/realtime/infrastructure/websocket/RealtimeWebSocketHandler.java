@@ -13,6 +13,7 @@ import io.github.carpl2.tidebid.contracts.RealtimeSubscribe;
 import io.github.carpl2.tidebid.contracts.RealtimeUnsubscribe;
 import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeaseStore;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeProperties;
+import io.github.carpl2.tidebid.realtime.infrastructure.fanout.RealtimeWebSocketSessionRegistry;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -33,15 +34,23 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     private final RealtimeClientMessageDecoder decoder;
     private final RealtimeProperties properties;
     private final RealtimeConnectionLeaseStore leaseStore;
+    private final RealtimeWebSocketSessionRegistry sessionRegistry;
 
     RealtimeWebSocketHandler(RealtimeMetrics metrics, ObjectMapper objectMapper,
                              RealtimeProperties properties, RealtimeConnectionLeaseStore leaseStore) {
+        this(metrics, objectMapper, properties, leaseStore, null);
+    }
+
+    RealtimeWebSocketHandler(RealtimeMetrics metrics, ObjectMapper objectMapper,
+                             RealtimeProperties properties, RealtimeConnectionLeaseStore leaseStore,
+                             RealtimeWebSocketSessionRegistry sessionRegistry) {
         this.metrics = metrics;
         this.objectMapper = objectMapper;
         this.decoder = new RealtimeClientMessageDecoder(
                 objectMapper, Math.toIntExact(properties.queue().maxClientMessageSize().toBytes()));
         this.properties = properties;
         this.leaseStore = leaseStore;
+        this.sessionRegistry = sessionRegistry;
     }
 
     @Override
@@ -82,8 +91,13 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
                         sendError(session, decoded.requestId(), RealtimeErrorCode.SUBSCRIPTION_LIMIT_EXCEEDED,
                                 "subscription limit exceeded", true);
                     }
+                    if (sessionRegistry != null) sessionRegistry.subscribe(subscribe.auctionId(), session);
                 }
-                case UNSUBSCRIBE -> state.unsubscribe(((RealtimeUnsubscribe) decoded.payload()).auctionId());
+                case UNSUBSCRIBE -> {
+                    long auctionId = ((RealtimeUnsubscribe) decoded.payload()).auctionId();
+                    state.unsubscribe(auctionId);
+                    if (sessionRegistry != null) sessionRegistry.unsubscribe(auctionId, session);
+                }
                 default -> throw new IllegalArgumentException("unsupported client message");
             }
         } catch (RealtimeClientMessageDecoder.MessageRejectedException exception) {
@@ -100,6 +114,7 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         metrics.connectionClosed();
+        if (sessionRegistry != null) sessionRegistry.remove(session);
         Object userId = session.getAttributes().get(RealtimeWebSocketHandshakeInterceptor.USER_ID_ATTRIBUTE);
         Object connectionId = session.getAttributes().get(RealtimeWebSocketHandshakeInterceptor.CONNECTION_ID_ATTRIBUTE);
         if (userId instanceof Long user && connectionId instanceof String id) {

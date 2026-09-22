@@ -48,6 +48,7 @@ class RealtimePropertiesBindingTest {
                 "tidebid.realtime.auction-client.connect-timeout=2s",
                 "tidebid.realtime.auction-client.read-timeout=3s",
                 "tidebid.realtime.redis.enabled=false",
+                "tidebid.realtime.redis.event-dedup-ttl=2h",
                 "tidebid.realtime.rocketmq.enabled=false",
                 "tidebid.realtime.rocketmq.endpoints=127.0.0.1:8081",
                 "tidebid.realtime.rocketmq.request-timeout=3s",

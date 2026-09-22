@@ -122,7 +122,12 @@ public record RealtimeProperties(
         }
     }
 
-    public record Redis(boolean enabled) { }
+    public record Redis(boolean enabled, Duration eventDedupTtl) {
+        public Redis {
+            eventDedupTtl = between(eventDedupTtl, Duration.ofMinutes(10), Duration.ofDays(7),
+                    "redis.eventDedupTtl");
+        }
+    }
 
     public record RocketMq(
             boolean enabled,

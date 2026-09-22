@@ -47,6 +47,7 @@ tidebid:
       read-timeout: 3s
     redis:
       enabled: true
+      event-dedup-ttl: 2h
     rocketmq:
       enabled: true
       endpoints: ${TIDEBID_ROCKETMQ_ENDPOINTS:127.0.0.1:8081}

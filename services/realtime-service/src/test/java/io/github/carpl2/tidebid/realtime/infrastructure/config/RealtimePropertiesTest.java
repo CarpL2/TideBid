@@ -52,6 +52,12 @@ public class RealtimePropertiesTest {
                 .hasMessageContaining("TIDEBID_INTERNAL_SERVICE_TOKEN");
     }
 
+    @Test
+    void rejectsUnsafeEventDeduplicationTtl() {
+        assertThatThrownBy(() -> new RealtimeProperties.Redis(true, Duration.ofSeconds(30)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     public static RealtimeProperties validProperties() {
         return new RealtimeProperties(
                 new RealtimeProperties.Ticket(Duration.ofSeconds(30), Duration.ofSeconds(60), 10),
@@ -61,7 +67,7 @@ public class RealtimePropertiesTest {
                 new RealtimeProperties.Queue(128, DataSize.ofKilobytes(8), Duration.ofSeconds(10), 30),
                 new RealtimeProperties.AuctionClient(
                         true, "", "x".repeat(32), Duration.ofSeconds(2), Duration.ofSeconds(3)),
-                new RealtimeProperties.Redis(true),
+                new RealtimeProperties.Redis(true, Duration.ofHours(2)),
                 new RealtimeProperties.RocketMq(
                         true, "127.0.0.1:8081", Duration.ofSeconds(3),
                         "tidebid-realtime-auction-v1", "tidebid-auction-events")

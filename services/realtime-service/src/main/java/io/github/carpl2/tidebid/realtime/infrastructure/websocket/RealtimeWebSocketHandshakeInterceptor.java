@@ -23,10 +23,10 @@ import java.util.UUID;
 
 final class RealtimeWebSocketHandshakeInterceptor implements HandshakeInterceptor {
 
-    static final String USER_ID_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".userId";
-    static final String ROLES_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".roles";
-    static final String ISSUED_AT_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".issuedAt";
-    static final String CONNECTION_ID_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".connectionId";
+    public static final String USER_ID_ATTRIBUTE = RealtimeWebSocketAttributes.USER_ID;
+    static final String ROLES_ATTRIBUTE = RealtimeWebSocketAttributes.ROLES;
+    static final String ISSUED_AT_ATTRIBUTE = RealtimeWebSocketAttributes.ISSUED_AT;
+    static final String CONNECTION_ID_ATTRIBUTE = RealtimeWebSocketAttributes.CONNECTION_ID;
     static final String LEASE_ACQUIRED_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".leaseAcquired";
 
     private final RealtimeTicketApplicationService ticketService;

@@ -2,6 +2,7 @@ package io.github.carpl2.tidebid.realtime.infrastructure.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeaseStore;
+import io.github.carpl2.tidebid.realtime.infrastructure.fanout.RealtimeWebSocketSessionRegistry;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeProperties;
 import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketApplicationService;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeWebSocketProperties;
@@ -12,7 +13,7 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.context.annotation.Bean;
-import org.apache.tomcat.websocket.server.ServletServerContainerFactoryBean;
+import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 
 @Configuration(proxyBeanMethods = false)
 @EnableWebSocket
@@ -29,10 +30,12 @@ public class RealtimeWebSocketConfiguration implements WebSocketConfigurer {
             RealtimeMetrics metrics,
             ObjectMapper objectMapper,
             RealtimeProperties realtimeProperties,
-            RealtimeConnectionLeaseStore leaseStore
+            RealtimeConnectionLeaseStore leaseStore,
+            RealtimeWebSocketSessionRegistry sessionRegistry
     ) {
         this.properties = properties;
-        this.handler = new RealtimeWebSocketHandler(metrics, objectMapper, realtimeProperties, leaseStore);
+        this.handler = new RealtimeWebSocketHandler(
+                metrics, objectMapper, realtimeProperties, leaseStore, sessionRegistry);
         this.interceptor = new RealtimeWebSocketHandshakeInterceptor(
                 ticketService, properties, metrics, realtimeProperties, leaseStore);
     }

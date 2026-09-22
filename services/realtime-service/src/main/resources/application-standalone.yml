@@ -27,5 +27,6 @@ tidebid:
       enabled: false
     redis:
       enabled: false
+      event-dedup-ttl: 2h
     rocketmq:
       enabled: false
