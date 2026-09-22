@@ -223,7 +223,7 @@ describe('auction detail', () => {
     expect(wrapper.text()).toContain('竞价已成交')
     expect(wrapper.text()).toContain('恭喜，你是本场买家')
     expect(wrapper.get('a[href="/orders"]')).toBeTruthy()
-    expect(wrapper.text()).toContain('不提供实时推送')
+    expect(wrapper.text()).toContain('报价、关拍和资金结果仍以 HTTP/MySQL 最终裁决为准')
     wrapper.unmount()
   })
 })

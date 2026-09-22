@@ -12,6 +12,7 @@ import {
 } from '@/api/auction'
 import { normalizeApiError, type ApiError } from '@/api/errors'
 import { createClientRequestId } from '@/api/http'
+import { RealtimeAuctionClient } from '@/features/realtime/client'
 import ApiErrorNotice from '@/components/ApiErrorNotice.vue'
 import AppHeader from '@/components/AppHeader.vue'
 import { validateBidAmount } from '@/features/auction/bid-validation'
@@ -30,6 +31,13 @@ import type {
   AuctionDetail,
   AuctionRegistrationRecord,
 } from '@/types/auction'
+import type {
+  RealtimeAuctionClosed,
+  RealtimeAuctionExtended,
+  RealtimeBidAccepted,
+  RealtimeConnectionState,
+  RealtimeSnapshot,
+} from '@/types/realtime'
 
 const REGISTRATION_POLL_INTERVAL_MS = 2_000
 const MAX_REGISTRATION_POLL_ROUNDS = 5
@@ -48,6 +56,9 @@ const bidValidation = ref<string | null>(null)
 const pageError = ref<ApiError | null>(null)
 const actionError = ref<ApiError | null>(null)
 const lastTraceId = ref<string | null>(null)
+const realtimeState = ref<RealtimeConnectionState>('idle')
+const realtimeDetail = ref<string | null>(null)
+let realtimeClient: RealtimeAuctionClient | null = null
 let registrationPollTimer: ReturnType<typeof setTimeout> | null = null
 let bidAttempt: { amount: string; requestId: string } | null = null
 
@@ -62,6 +73,92 @@ const canBid = computed(
     !detail.value.ownedByCurrentUser &&
     detail.value.myRegistration?.status === 'REGISTERED',
 )
+
+function applyRealtimeSnapshot(snapshot: RealtimeSnapshot): void {
+  if (!detail.value || snapshot.auctionId !== detail.value.auctionId) return
+  detail.value.sessionStatus = snapshot.status
+  detail.value.displayPrice = snapshot.displayPrice
+  detail.value.currentPrice = snapshot.status === 'CLOSED_UNSOLD' ? null : snapshot.displayPrice
+  detail.value.minimumNextBid = snapshot.minimumNextBid
+  detail.value.bidCount = snapshot.bidCount
+  detail.value.endAt = snapshot.endAt
+  detail.value.closedAt = snapshot.closedAt
+  detail.value.finalPrice = snapshot.status === 'CLOSED_SOLD' ? snapshot.displayPrice : null
+  bids.value = snapshot.bids.map((bid) => ({
+    bidId: bid.bidId,
+    amount: bid.amount,
+    previousPrice: null,
+    sequenceNo: bid.sequenceNo,
+    createdAt: bid.acceptedAt,
+    mine: bid.mine,
+  }))
+  bidAmount.value = String(snapshot.minimumNextBid)
+}
+
+function applyRealtimeBid(bid: RealtimeBidAccepted): void {
+  if (!detail.value || bid.auctionId !== detail.value.auctionId) return
+  detail.value.displayPrice = bid.amount
+  detail.value.currentPrice = bid.amount
+  detail.value.bidCount = Math.max(detail.value.bidCount, bid.sequenceNo)
+  detail.value.minimumNextBid = (Number(bid.amount) + Number(detail.value.bidIncrement)).toFixed(2)
+  if (!bids.value.some((item) => item.sequenceNo === bid.sequenceNo || item.bidId === bid.bidId)) {
+    bids.value = [...bids.value, {
+      bidId: bid.bidId,
+      amount: bid.amount,
+      previousPrice: null,
+      sequenceNo: bid.sequenceNo,
+      createdAt: bid.acceptedAt,
+      mine: bid.mine,
+    }].sort((left, right) => left.sequenceNo - right.sequenceNo).slice(-10)
+  }
+  bidAmount.value = String(detail.value.minimumNextBid)
+}
+
+function applyRealtimeExtended(event: RealtimeAuctionExtended): void {
+  if (!detail.value || event.auctionId !== detail.value.auctionId) return
+  detail.value.endAt = event.endAt
+  detail.value.sessionStatus = 'OPEN'
+  ElMessage.info(`反狙击延时至 ${formatShanghaiTime(event.endAt)}`)
+}
+
+function applyRealtimeClosed(event: RealtimeAuctionClosed): void {
+  if (!detail.value || event.auctionId !== detail.value.auctionId) return
+  detail.value.sessionStatus = event.status
+  detail.value.closedAt = event.closedAt
+  detail.value.finalPrice = event.finalPrice
+  detail.value.wonByCurrentUser = event.wonByCurrentUser
+  if (event.status === 'CLOSED_SOLD' && event.finalPrice !== null) {
+    detail.value.displayPrice = event.finalPrice
+    detail.value.currentPrice = event.finalPrice
+  }
+}
+
+function connectRealtime(): void {
+  realtimeClient?.stop()
+  realtimeClient = new RealtimeAuctionClient({
+    onState: (state, message) => {
+      realtimeState.value = state
+      realtimeDetail.value = message ?? null
+    },
+    onSnapshot: applyRealtimeSnapshot,
+    onBidAccepted: applyRealtimeBid,
+    onAuctionExtended: applyRealtimeExtended,
+    onAuctionClosed: applyRealtimeClosed,
+  })
+  realtimeClient.start(auctionId.value, Math.max(0, detail.value?.bidCount ?? 0))
+}
+
+function reconnectRealtime(): void {
+  realtimeClient?.reconnectNow()
+}
+
+function handleBrowserOffline(): void {
+  realtimeClient?.notifyOffline()
+}
+
+function handleBrowserOnline(): void {
+  realtimeClient?.notifyOnline()
+}
 
 function cancelRegistrationPoll(): void {
   if (registrationPollTimer) {
@@ -139,6 +236,14 @@ async function loadDetail(resetRegistrationPolling = true): Promise<void> {
     bidValidation.value = null
     lastTraceId.value = historyResult.traceId ?? detailResult.traceId
     scheduleRegistrationPoll()
+    if (detailResult.data.sessionStatus === 'OPEN') {
+      connectRealtime()
+    } else {
+      realtimeClient?.stop()
+      realtimeClient = null
+      realtimeState.value = 'idle'
+      realtimeDetail.value = null
+    }
   } catch (error) {
     pageError.value = normalizeApiError(error)
   } finally {
@@ -214,9 +319,22 @@ async function placeBid(): Promise<void> {
   }
 }
 
-watch(auctionId, () => void loadDetail())
-onMounted(() => void loadDetail())
-onBeforeUnmount(cancelRegistrationPoll)
+watch(auctionId, () => {
+  realtimeClient?.stop()
+  realtimeClient = null
+  void loadDetail()
+})
+onMounted(() => {
+  window.addEventListener('offline', handleBrowserOffline)
+  window.addEventListener('online', handleBrowserOnline)
+  void loadDetail()
+})
+onBeforeUnmount(() => {
+  cancelRegistrationPoll()
+  window.removeEventListener('offline', handleBrowserOffline)
+  window.removeEventListener('online', handleBrowserOnline)
+  realtimeClient?.stop()
+})
 </script>
 
 <template>
@@ -306,7 +424,15 @@ onBeforeUnmount(cancelRegistrationPoll)
               </template>
             </section>
             <ElButton :loading="loading" plain @click="loadDetail()">手动刷新最终状态</ElButton>
-            <p class="detail-refresh-note">阶段 03 不提供实时推送；价格和关拍结果以手动刷新为准。</p>
+            <div class="realtime-status" :class="`realtime-status--${realtimeState}`">
+              <span class="realtime-status__dot" aria-hidden="true" />
+              <strong>
+                {{ realtimeState === 'live' ? '实时连接' : realtimeState === 'recovering' ? '正在恢复' : realtimeState === 'offline' ? '实时离线' : realtimeState === 'connecting' ? '连接中' : '未连接' }}
+              </strong>
+              <span v-if="realtimeDetail">{{ realtimeDetail }}</span>
+              <ElButton v-if="realtimeState === 'offline'" text type="primary" @click="reconnectRealtime">重新连接</ElButton>
+            </div>
+            <p class="detail-refresh-note">实时消息用于快速更新展示；报价、关拍和资金结果仍以 HTTP/MySQL 最终裁决为准。</p>
           </article>
         </section>
 
