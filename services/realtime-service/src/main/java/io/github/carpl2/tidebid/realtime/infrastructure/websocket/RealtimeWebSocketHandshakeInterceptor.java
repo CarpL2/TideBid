@@ -2,7 +2,11 @@ package io.github.carpl2.tidebid.realtime.infrastructure.websocket;
 
 import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketApplicationService;
 import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketIdentity;
+import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketStoreUnavailableException;
+import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeaseStore;
+import io.github.carpl2.tidebid.realtime.application.service.RealtimeConnectionLeaseStoreUnavailableException;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeWebSocketProperties;
+import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeProperties;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -15,25 +19,34 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 final class RealtimeWebSocketHandshakeInterceptor implements HandshakeInterceptor {
 
     static final String USER_ID_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".userId";
     static final String ROLES_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".roles";
     static final String ISSUED_AT_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".issuedAt";
+    static final String CONNECTION_ID_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".connectionId";
+    static final String LEASE_ACQUIRED_ATTRIBUTE = RealtimeWebSocketHandshakeInterceptor.class.getName() + ".leaseAcquired";
 
     private final RealtimeTicketApplicationService ticketService;
     private final RealtimeWebSocketProperties properties;
     private final RealtimeMetrics metrics;
+    private final RealtimeProperties realtimeProperties;
+    private final RealtimeConnectionLeaseStore leaseStore;
 
     RealtimeWebSocketHandshakeInterceptor(
             RealtimeTicketApplicationService ticketService,
             RealtimeWebSocketProperties properties,
-            RealtimeMetrics metrics
+            RealtimeMetrics metrics,
+            RealtimeProperties realtimeProperties,
+            RealtimeConnectionLeaseStore leaseStore
     ) {
         this.ticketService = ticketService;
         this.properties = properties;
         this.metrics = metrics;
+        this.realtimeProperties = realtimeProperties;
+        this.leaseStore = leaseStore;
     }
 
     @Override
@@ -63,12 +76,24 @@ final class RealtimeWebSocketHandshakeInterceptor implements HandshakeIntercepto
                 return false;
             }
             RealtimeTicketIdentity value = identity.get();
+            String connectionId = UUID.randomUUID().toString();
+            boolean acquired = leaseStore.acquire(
+                    value.userId(), connectionId,
+                    realtimeProperties.connection().maxPerUser(),
+                    realtimeProperties.connection().leaseTtl());
+            if (!acquired) {
+                reject(response, HttpStatus.TOO_MANY_REQUESTS);
+                metrics.websocketHandshakeRejected("connection_limit");
+                return false;
+            }
             attributes.put(USER_ID_ATTRIBUTE, value.userId());
             attributes.put(ROLES_ATTRIBUTE, value.roles());
             attributes.put(ISSUED_AT_ATTRIBUTE, value.issuedAt());
+            attributes.put(CONNECTION_ID_ATTRIBUTE, connectionId);
+            attributes.put(LEASE_ACQUIRED_ATTRIBUTE, Boolean.TRUE);
             metrics.websocketHandshakeAccepted();
             return true;
-        } catch (RuntimeException exception) {
+        } catch (RealtimeConnectionLeaseStoreUnavailableException | RealtimeTicketStoreUnavailableException exception) {
             reject(response, HttpStatus.SERVICE_UNAVAILABLE);
             metrics.websocketHandshakeRejected("store");
             return false;
@@ -78,7 +103,7 @@ final class RealtimeWebSocketHandshakeInterceptor implements HandshakeIntercepto
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                WebSocketHandler wsHandler, Exception exception) {
-        // No ticket or token is copied into the handshake response.
+        // The handler releases a successful lease when the connection closes.
     }
 
     private static Optional<String> ticket(ServerHttpRequest request) {

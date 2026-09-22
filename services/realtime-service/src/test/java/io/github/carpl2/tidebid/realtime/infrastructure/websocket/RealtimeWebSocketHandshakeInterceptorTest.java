@@ -2,6 +2,9 @@ package io.github.carpl2.tidebid.realtime.infrastructure.websocket;
 
 import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketApplicationService;
 import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketIdentity;
+import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeaseStore;
+import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimePropertiesTest;
+import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeProperties;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeWebSocketProperties;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import io.github.carpl2.tidebid.security.Role;
@@ -35,6 +38,9 @@ class RealtimeWebSocketHandshakeInterceptorTest {
     @Mock
     private RealtimeTicketApplicationService ticketService;
 
+    @Mock
+    private RealtimeConnectionLeaseStore leaseStore;
+
     private RealtimeWebSocketHandshakeInterceptor interceptor;
 
     @BeforeEach
@@ -42,7 +48,8 @@ class RealtimeWebSocketHandshakeInterceptorTest {
         interceptor = new RealtimeWebSocketHandshakeInterceptor(
                 ticketService,
                 new RealtimeWebSocketProperties(true, List.of("http://localhost:5173")),
-                new RealtimeMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+                new RealtimeMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                RealtimePropertiesTest.validProperties(), leaseStore);
     }
 
     @Test
@@ -50,6 +57,9 @@ class RealtimeWebSocketHandshakeInterceptorTest {
         Instant issuedAt = Instant.parse("2026-09-22T07:00:00Z");
         RealtimeTicketIdentity identity = new RealtimeTicketIdentity(42L, Set.of(Role.USER), issuedAt);
         when(ticketService.consume("ticket-value")).thenReturn(Optional.of(identity));
+        when(leaseStore.acquire(org.mockito.ArgumentMatchers.eq(42L), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq(5), org.mockito.ArgumentMatchers.eq(java.time.Duration.ofSeconds(120))))
+                .thenReturn(true);
         Map<String, Object> attributes = new HashMap<>();
 
         boolean accepted = interceptor.beforeHandshake(request("ticket-value", "http://localhost:5173"),
@@ -59,7 +69,8 @@ class RealtimeWebSocketHandshakeInterceptorTest {
         assertThat(attributes).containsEntry(RealtimeWebSocketHandshakeInterceptor.USER_ID_ATTRIBUTE, 42L)
                 .containsEntry(RealtimeWebSocketHandshakeInterceptor.ROLES_ATTRIBUTE, Set.of(Role.USER))
                 .containsEntry(RealtimeWebSocketHandshakeInterceptor.ISSUED_AT_ATTRIBUTE, issuedAt)
-                .hasSize(3);
+                .containsEntry(RealtimeWebSocketHandshakeInterceptor.LEASE_ACQUIRED_ATTRIBUTE, Boolean.TRUE)
+                .hasSize(5);
     }
 
     @Test

@@ -1,6 +1,8 @@
 package io.github.carpl2.tidebid.realtime.infrastructure.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeaseStore;
+import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeProperties;
 import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketApplicationService;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeWebSocketProperties;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
@@ -9,6 +11,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
+import org.springframework.context.annotation.Bean;
+import org.apache.tomcat.websocket.server.ServletServerContainerFactoryBean;
 
 @Configuration(proxyBeanMethods = false)
 @EnableWebSocket
@@ -17,15 +21,20 @@ public class RealtimeWebSocketConfiguration implements WebSocketConfigurer {
 
     private final RealtimeWebSocketHandler handler;
     private final RealtimeWebSocketHandshakeInterceptor interceptor;
+    private final RealtimeWebSocketProperties properties;
 
     public RealtimeWebSocketConfiguration(
             RealtimeTicketApplicationService ticketService,
             RealtimeWebSocketProperties properties,
             RealtimeMetrics metrics,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            RealtimeProperties realtimeProperties,
+            RealtimeConnectionLeaseStore leaseStore
     ) {
-        this.handler = new RealtimeWebSocketHandler(metrics, objectMapper);
-        this.interceptor = new RealtimeWebSocketHandshakeInterceptor(ticketService, properties, metrics);
+        this.properties = properties;
+        this.handler = new RealtimeWebSocketHandler(metrics, objectMapper, realtimeProperties, leaseStore);
+        this.interceptor = new RealtimeWebSocketHandshakeInterceptor(
+                ticketService, properties, metrics, realtimeProperties, leaseStore);
     }
 
     @Override
@@ -33,5 +42,14 @@ public class RealtimeWebSocketConfiguration implements WebSocketConfigurer {
         registry.addHandler(handler, "/ws/auctions")
                 .addInterceptors(interceptor)
                 .setAllowedOrigins(properties.allowedOrigins().toArray(String[]::new));
+    }
+
+    @Bean
+    ServletServerContainerFactoryBean webSocketContainer(RealtimeProperties realtimeProperties) {
+        ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
+        int limit = Math.toIntExact(realtimeProperties.queue().maxClientMessageSize().toBytes());
+        container.setMaxTextMessageBufferSize(limit);
+        container.setMaxBinaryMessageBufferSize(limit);
+        return container;
     }
 }
