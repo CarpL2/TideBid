@@ -195,6 +195,11 @@ function Assert-ManagedMessagingConfiguration {
             'account-results: tidebid-trade-account-v1',
             'payment-timeout: tidebid-trade-timeout-v1'
         )
+        'infra\nacos\configs\tidebid-realtime.yml' = @(
+            'consumer-group: tidebid-realtime-auction-v1',
+            'auction-events-topic: tidebid-auction-events',
+            'event-dedup-ttl: 2h'
+        )
         'services\trade-service\src\main\resources\application.yml' = @(
             'payment-window: ${TIDEBID_TRADE_PAYMENT_WINDOW:30m}'
         )
@@ -581,7 +586,7 @@ try {
     if ($CheckOnly) {
         Write-Host 'TideBid application configuration and required tool versions are valid.'
         Write-Host '  Stage 03: Trade datasource and Flyway schema declarations are present.'
-        Write-Host '  Stage 03: RocketMQ endpoint, delayed-message horizon, topics and consumer groups are present.'
+        Write-Host '  Stage 03/04: RocketMQ endpoint, delayed-message horizon, topics and consumer groups are present.'
         Write-Host '  Security: required values were validated without printing their contents.'
         return
     }

@@ -28,7 +28,8 @@ $expectedGroups = @(
     'tidebid-trade-auction-v1',
     'tidebid-trade-account-v1',
     'tidebid-trade-timeout-v1',
-    'tidebid-account-credit-v1'
+    'tidebid-account-credit-v1',
+    'tidebid-realtime-auction-v1'
 )
 
 function Get-RequiredJsonProperty {

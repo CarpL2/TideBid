@@ -79,5 +79,6 @@ upsert_consumer_group tidebid-trade-auction-v1
 upsert_consumer_group tidebid-trade-account-v1
 upsert_consumer_group tidebid-trade-timeout-v1
 upsert_consumer_group tidebid-account-credit-v1
+upsert_consumer_group tidebid-realtime-auction-v1
 
 echo "TideBid RocketMQ topology bootstrap completed successfully."

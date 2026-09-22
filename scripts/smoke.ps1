@@ -14,6 +14,9 @@ param(
     [switch]$AuctionCore,
 
     [Parameter()]
+    [switch]$RealtimeProxy,
+
+    [Parameter()]
     [switch]$ReliableTrade,
 
     [Parameter()]
@@ -59,6 +62,9 @@ $script:currentTraceId = 'unavailable'
 $invariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ($ReliableTrade) {
+    $AuctionCore = $true
+}
+if ($RealtimeProxy) {
     $AuctionCore = $true
 }
 if ($PauseAfterTimeoutPending -and (-not $ReliableTrade -or $ReliableTradeCoverage -ne 'All')) {
@@ -239,6 +245,99 @@ function Assert-Value {
 
     if (-not $Condition) {
         throw $Message
+    }
+}
+
+function Invoke-RealtimeWebSocketCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$Authorization,
+        [Parameter(Mandatory = $true)][string]$AuctionId,
+        [Parameter(Mandatory = $true)][long]$LastSequenceNo
+    )
+
+    $ticketResponse = Invoke-SmokeRequest `
+        -Step 'realtime-ticket' `
+        -Method POST `
+        -Path '/api/realtime/tickets' `
+        -ExpectedStatus 200 `
+        -Headers @{ Authorization = $Authorization } `
+        -ApiEnvelope
+    $ticket = [string]$ticketResponse.data.ticket
+    Assert-Value -Condition (-not [string]::IsNullOrWhiteSpace($ticket)) -Message 'realtime ticket is empty'
+
+    $gatewayUri = [Uri]$GatewayBaseUri
+    $webSocketScheme = if ($gatewayUri.Scheme -eq 'https') { 'wss' } else { 'ws' }
+    $webSocketUri = [Uri]::new(
+        "${webSocketScheme}://$($gatewayUri.Authority)/ws/auctions?ticket=$([Uri]::EscapeDataString($ticket))"
+    )
+    $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+    $socket.Options.SetRequestHeader('Origin', 'http://127.0.0.1:5173')
+    $connectCancellation = [Threading.CancellationTokenSource]::new($RequestTimeoutSeconds * 1000)
+    $receiveCancellation = [Threading.CancellationTokenSource]::new($RequestTimeoutSeconds * 1000)
+    try {
+        $socket.ConnectAsync($webSocketUri, $connectCancellation.Token).GetAwaiter().GetResult()
+        Assert-Value -Condition ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) `
+            -Message 'realtime WebSocket did not reach OPEN state'
+
+        $requestId = New-StepTraceId -Step 'realtime-subscribe'
+        $subscribe = @{
+            type = 'SUBSCRIBE'
+            protocolVersion = 1
+            requestId = $requestId
+            payload = @{ auctionId = $AuctionId; lastSequenceNo = $LastSequenceNo }
+        } | ConvertTo-Json -Compress
+        $bytes = [Text.Encoding]::UTF8.GetBytes($subscribe)
+        $socket.SendAsync(
+            [ArraySegment[byte]]::new($bytes),
+            [System.Net.WebSockets.WebSocketMessageType]::Text,
+            $true,
+            $receiveCancellation.Token
+        ).GetAwaiter().GetResult()
+
+        $receivedTypes = [System.Collections.Generic.HashSet[string]]::new()
+        $buffer = New-Object byte[] 8192
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds($RequestTimeoutSeconds)
+        while ([DateTimeOffset]::UtcNow -lt $deadline -and
+            (-not $receivedTypes.Contains('CONNECTED') -or -not $receivedTypes.Contains('SNAPSHOT'))) {
+            $messageBuffer = [IO.MemoryStream]::new()
+            do {
+                $result = $socket.ReceiveAsync(
+                    [ArraySegment[byte]]::new($buffer), $receiveCancellation.Token
+                ).GetAwaiter().GetResult()
+                if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                    throw 'realtime WebSocket closed before CONNECTED and SNAPSHOT were received'
+                }
+                $messageBuffer.Write($buffer, 0, $result.Count)
+            } while (-not $result.EndOfMessage)
+
+            $message = [Text.Encoding]::UTF8.GetString($messageBuffer.ToArray()) | ConvertFrom-Json
+            $receivedTypes.Add([string]$message.type) | Out-Null
+            if ([string]$message.type -eq 'SNAPSHOT') {
+                Assert-Value -Condition ([string]$message.payload.auctionId -ceq $AuctionId) `
+                    -Message 'realtime snapshot auctionId does not match the smoke auction'
+            }
+            if ([string]$message.type -eq 'ERROR') {
+                throw "realtime subscription returned an error code $([string]$message.payload.code)"
+            }
+        }
+        Assert-Value -Condition ($receivedTypes.Contains('CONNECTED')) -Message 'realtime CONNECTED message was not received'
+        Assert-Value -Condition ($receivedTypes.Contains('SNAPSHOT')) -Message 'realtime SNAPSHOT message was not received'
+        Write-Host '[PASS] realtime-websocket-snapshot'
+    } finally {
+        if ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+            try {
+                $socket.CloseAsync(
+                    [System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure,
+                    'smoke complete',
+                    [Threading.CancellationToken]::None
+                ).GetAwaiter().GetResult()
+            } catch {
+                $socket.Abort()
+            }
+        }
+        $receiveCancellation.Dispose()
+        $connectCancellation.Dispose()
+        $socket.Dispose()
     }
 }
 
@@ -1039,6 +1138,13 @@ try {
     $opened = Wait-AuctionOpen -AuctionId $auctionId -Authorization $buyerOneAuthorization
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $opened.minimumNextBid 'minimumNextBid') -eq [decimal]100.00) `
         -Message 'first minimum bid is not the start price'
+
+    if ($RealtimeProxy) {
+        Invoke-RealtimeWebSocketCheck `
+            -Authorization $buyerOneAuthorization `
+            -AuctionId $auctionId `
+            -LastSequenceNo 0
+    }
 
     if ($PauseBeforeFirstBid) {
         Write-Host 'Fault-drill checkpoint reached before the first bid.'

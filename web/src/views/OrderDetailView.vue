@@ -206,7 +206,7 @@ onBeforeUnmount(cancelPoll)
             <strong v-else-if="order.status === 'PAID'">订单已经支付完成</strong>
             <strong v-else-if="order.status === 'PAYMENT_TIMEOUT'">订单已经超过支付期限</strong>
             <strong v-else>当前订单无需手动支付</strong>
-            <small>页面仅展示服务端状态；阶段 03 使用有限轮询，不提供实时推送。</small>
+            <small>页面仅展示服务端最终状态；支付结果以 HTTP/MySQL 为准，实时竞价推送不替代订单查询。</small>
           </div>
           <div class="order-detail-actions__buttons">
             <ElButton :loading="loading || polling" plain @click="refreshManually">手动刷新</ElButton>

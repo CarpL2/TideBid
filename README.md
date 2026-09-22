@@ -2,19 +2,19 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project currently completes the reliable-trade stage: account security, private auction assets,
+The project currently implements the realtime-proxy stage on top of the reliable-trade flow: account security, private auction assets,
 review, deposit-backed registration, concurrent manual bidding, reliable closing, virtual-fund
 settlement, winning orders, simulated payment, payment timeout and seller credit all run end to end.
 Transactional Outbox/Inbox processing and database reconciliation provide recovery across duplicate
-delivery, process restarts and Broker outages. Realtime WebSocket delivery and AI inference remain
-later-stage work; those two services are intentionally health-check skeletons here.
+delivery, process restarts and Broker outages. Realtime WebSocket delivery, proxy bidding and bounded
+anti-sniping are implemented in stage 04; AI inference remains the stage 05 scope.
 
 ## Core flow
 
 1. A seller creates an auction item and submits it for review.
 2. A bidder registers for the auction and locks a virtual deposit.
 3. Valid bids are decided by the database with optimistic concurrency control.
-4. Accepted bids commit with a reliable Outbox event; stage 03 pages refresh or poll HTTP state.
+4. Accepted bids commit with a reliable Outbox event; Realtime consumes the event and broadcasts it through Redis-backed WebSocket fanout, while HTTP/MySQL remains final truth.
 5. Closing produces a reliable event, creates an order, and releases or captures virtual deposits.
 6. The winner pays any remaining virtual amount; timeout and seller credit converge asynchronously.
 
@@ -26,7 +26,7 @@ later-stage work; those two services are intentionally health-check skeletons he
 | `account-service` | Users, roles, virtual wallets, ledgers, and deposits |
 | `auction-service` | Items, review, enrollment, bids, and auction state |
 | `trade-service` | Winning orders, simulated payment, and payment timeout |
-| `realtime-service` | Stage 04 health-check skeleton; WebSocket delivery is not implemented yet |
+| `realtime-service` | One-time ticket authentication, WebSocket subscriptions, snapshot recovery, RocketMQ consumption and Redis multi-instance fanout |
 | `ai-service` | Stage 05 health-check skeleton; model inference is not implemented yet |
 | `common/*` | Stable response, security, web, and cross-service contract modules |
 | `web` | Vue 3 user and administration interface |
@@ -41,7 +41,7 @@ later-stage work; those two services are intentionally health-check skeletons he
 
 ## Development prerequisites
 
-Install the following tools before running the completed stage 03 environment:
+Install the following tools before running the completed stage 04 local environment:
 
 - JDK 21
 - Maven 3.9 or newer
@@ -99,7 +99,7 @@ restores the session and closing the tab clears it. This is a local portfolio-pr
 a production security recommendation: an XSS payload running in the page could still read the
 Token. A 401 from an authenticated request clears the session and returns the user to login.
 
-## Run the complete stage 03 stack
+## Run the complete local stack
 
 After creating `.env`, start the middleware and all host applications from the repository root:
 
@@ -197,6 +197,19 @@ run; the default `All` is the final acceptance path. `-ReliableTradeTimeoutSecon
 eventual-consistency wait. Every run uses new users and business data; any failed assertion exits
 nonzero.
 
+Run the stage 04 realtime-proxy smoke flow after the same local stack is running:
+
+```powershell
+.\scripts\smoke.ps1 -RealtimeProxy
+```
+
+This includes the auction setup and, after the auction opens, requests a one-time ticket through
+Gateway, performs a WebSocket upgrade with the allowed local Origin, subscribes with sequence 0,
+and verifies both `CONNECTED` and a MySQL-backed `SNAPSHOT`. The script does not print the ticket,
+JWT, internal service token or complete WebSocket URL. It is a protocol/route smoke check, not a
+replacement for the two-browser proxy, Redis outage and dual-Realtime-instance drills in the stage
+04 checklist.
+
 Stop only the application processes recorded by this checkout, then optionally stop middleware:
 
 ```powershell
@@ -226,12 +239,22 @@ docker compose --env-file .env -f infra/compose.yaml ps
 docker compose --env-file .env -f infra/compose.yaml logs <service>
 ```
 
+For a compact application and realtime-middleware status summary, use:
+
+```powershell
+.\scripts\status.ps1
+.\scripts\status.ps1 -AssertHealthy
+```
+
+The status script prints only health/state labels. It does not print JWTs, tickets, internal service
+tokens, OSS credentials or other secret values.
+
 A port-conflict failure is intentional: stop the known owner or choose the correct environment
 instead of allowing the script to terminate an unrecorded process.
 For dependency changes, omit `-SkipBuild`; for Nacos configuration changes, rerun `start-apps.ps1`
 after stopping the applications because managed configuration refresh is intentionally disabled.
 
-## Run a service skeleton
+## Run an individual service
 
 Build from the repository root, then run any executable JAR in a separate terminal:
 
@@ -254,8 +277,8 @@ If your local Maven environment uses a custom settings file, pass it using `mvn 
 | AI | `services/ai-service/target/ai-service.jar` | `tidebid-ai` |
 
 The default profile is `standalone`. It disables Nacos configuration and registration, needs no
-Docker or cloud keys, and binds each service to loopback (`127.0.0.1`). A healthy skeleton does
-not imply database, broker, authentication, or end-to-end readiness.
+Docker or cloud keys, and binds each service to loopback (`127.0.0.1`). A healthy standalone
+service does not imply database, broker, authentication, or end-to-end readiness.
 
 Every service keeps the shared configuration files below:
 
