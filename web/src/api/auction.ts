@@ -6,6 +6,8 @@ import type {
   AuctionAssetPage,
   AuctionBidAccepted,
   AuctionBidHistoryPage,
+  AuctionProxyBidDetail,
+  AuctionProxyBidResult,
   AuctionDetail,
   AuctionDraftResult,
   AuctionLobbyPage,
@@ -20,6 +22,39 @@ import type {
   UploadIntent,
   UploadIntentInput,
 } from '@/types/auction'
+
+export function getMyAuctionProxyBid(
+  auctionId: string,
+): Promise<ApiResult<AuctionProxyBidDetail | null>> {
+  return requestData<AuctionProxyBidDetail | null>({
+    method: 'GET',
+    url: `/auctions/${encodeURIComponent(auctionId)}/proxy-bid`,
+  })
+}
+
+export function upsertAuctionProxyBid(
+  auctionId: string,
+  maxAmount: string,
+  requestId: string,
+): Promise<ApiResult<AuctionProxyBidResult>> {
+  return requestData<AuctionProxyBidResult>({
+    method: 'PUT',
+    url: `/auctions/${encodeURIComponent(auctionId)}/proxy-bid`,
+    headers: { 'X-Request-Id': requestId },
+    data: { maxAmount },
+  })
+}
+
+export function disableAuctionProxyBid(
+  auctionId: string,
+  requestId: string,
+): Promise<ApiResult<AuctionProxyBidResult>> {
+  return requestData<AuctionProxyBidResult>({
+    method: 'DELETE',
+    url: `/auctions/${encodeURIComponent(auctionId)}/proxy-bid`,
+    headers: { 'X-Request-Id': requestId },
+  })
+}
 
 export function getAuctionLobby(page = 1, size = 12): Promise<ApiResult<AuctionLobbyPage>> {
   return requestData<AuctionLobbyPage>({

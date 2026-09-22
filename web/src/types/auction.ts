@@ -127,6 +127,29 @@ export interface AuctionBidHistoryPage {
   items: AuctionBidHistoryItem[]
 }
 
+export type AuctionProxyBidStatus = 'ACTIVE' | 'DISABLED'
+
+export interface AuctionProxyBidDetail {
+  auctionId: string
+  proxyBidId: string
+  maxAmount: DecimalValue
+  status: AuctionProxyBidStatus
+  updatedAt: string
+}
+
+export interface AuctionProxyBidResult {
+  auctionId: string
+  commandStatus: string
+  leading: boolean
+  displayPrice: DecimalValue
+  minimumNextBid: DecimalValue
+  bidCount: number
+  endAt: string
+  extended: boolean
+  bidIds: string[]
+  proxyBid: AuctionProxyBidDetail | null
+}
+
 export interface AuctionAssetImage extends AuctionImage {
   objectKey: string
   originalFilename: string

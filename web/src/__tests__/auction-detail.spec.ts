@@ -16,6 +16,9 @@ const auctionApiMocks = vi.hoisted(() => ({
   getAuctionRegistration: vi.fn<(registrationId: string) => Promise<unknown>>(),
   registerForAuction: vi.fn<(auctionId: string) => Promise<unknown>>(),
   placeAuctionBid: vi.fn<(auctionId: string, amount: string, requestId: string) => Promise<unknown>>(),
+  getMyAuctionProxyBid: vi.fn<(auctionId: string) => Promise<unknown>>(),
+  upsertAuctionProxyBid: vi.fn<(auctionId: string, maxAmount: string, requestId: string) => Promise<unknown>>(),
+  disableAuctionProxyBid: vi.fn<(auctionId: string, requestId: string) => Promise<unknown>>(),
 }))
 const accountApiMocks = vi.hoisted(() => ({
   getCurrentAccount: vi.fn<() => Promise<unknown>>(),
@@ -35,6 +38,9 @@ describe('auction detail', () => {
     auctionApiMocks.getAuctionRegistration.mockReset()
     auctionApiMocks.registerForAuction.mockReset()
     auctionApiMocks.placeAuctionBid.mockReset()
+    auctionApiMocks.getMyAuctionProxyBid.mockReset()
+    auctionApiMocks.upsertAuctionProxyBid.mockReset()
+    auctionApiMocks.disableAuctionProxyBid.mockReset()
     Object.values(accountApiMocks).forEach((mock) => mock.mockReset())
     accountApiMocks.getCurrentAccount.mockResolvedValue({
       traceId: 'trace-account',
@@ -44,6 +50,7 @@ describe('auction detail', () => {
       traceId: 'trace-wallet',
       data: { userId: '7', availableBalance: '9900.00', frozenBalance: '100.00' },
     })
+    auctionApiMocks.getMyAuctionProxyBid.mockResolvedValue({ traceId: 'trace-proxy', data: null })
   })
 
   it('shows immutable auction facts, registration and anonymized bid history', async () => {
@@ -224,6 +231,59 @@ describe('auction detail', () => {
     expect(wrapper.text()).toContain('恭喜，你是本场买家')
     expect(wrapper.get('a[href="/orders"]')).toBeTruthy()
     expect(wrapper.text()).toContain('报价、关拍和资金结果仍以 HTTP/MySQL 最终裁决为准')
+    wrapper.unmount()
+  })
+
+  it('sets and disables a private proxy maximum without exposing it as public bid data', async () => {
+    saveAuthSession({ accessToken: 'signed-token', tokenType: 'Bearer', expiresIn: 60 })
+    auctionApiMocks.getAuctionDetail.mockResolvedValue({
+      traceId: 'trace-detail',
+      data: {
+        itemId: '71', auctionId: '72', title: '代理竞价拍品', description: '代理规则测试。',
+        category: 'ART', itemCondition: 'GOOD', sessionStatus: 'OPEN', startPrice: '100.00',
+        bidIncrement: '10.00', depositAmount: '50.00', currentPrice: '110.00', displayPrice: '110.00',
+        minimumNextBid: '120.00', bidCount: 1, startAt: '2026-09-14T01:00:00Z',
+        endAt: '2099-09-15T04:30:00Z', ownedByCurrentUser: false, images: [],
+        myRegistration: { registrationId: '73', status: 'REGISTERED', failureCode: null, registeredAt: '2026-09-14T00:30:00Z' },
+      },
+    })
+    auctionApiMocks.getAuctionBidHistory.mockResolvedValue({
+      traceId: 'trace-bids', data: { auctionId: '72', page: 1, size: 10, total: 0, totalPages: 0, items: [] },
+    })
+    auctionApiMocks.upsertAuctionProxyBid.mockResolvedValue({
+      traceId: 'trace-proxy-upsert',
+      data: {
+        auctionId: '72', commandStatus: 'SUCCEEDED', leading: true, displayPrice: '110.00',
+        minimumNextBid: '120.00', bidCount: 1, endAt: '2099-09-15T04:30:00Z', extended: false,
+        bidIds: [], proxyBid: { auctionId: '72', proxyBidId: '74', maxAmount: '1500.00', status: 'ACTIVE', updatedAt: '2026-09-14T02:00:00Z' },
+      },
+    })
+    auctionApiMocks.disableAuctionProxyBid.mockResolvedValue({
+      traceId: 'trace-proxy-disable',
+      data: {
+        auctionId: '72', commandStatus: 'SUCCEEDED', leading: true, displayPrice: '110.00',
+        minimumNextBid: '120.00', bidCount: 1, endAt: '2099-09-15T04:30:00Z', extended: false,
+        bidIds: [], proxyBid: { auctionId: '72', proxyBidId: '74', maxAmount: '1500.00', status: 'DISABLED', updatedAt: '2026-09-14T02:01:00Z' },
+      },
+    })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/auctions/72')
+    await router.isReady()
+    const wrapper = mount(AuctionDetailView, { global: { plugins: [createPinia(), router] } })
+    await flushPromises()
+
+    await wrapper.get('#proxy-max-amount').setValue('1500.00')
+    await wrapper.get('[data-test="proxy-bid-panel"] button').trigger('click')
+    await flushPromises()
+
+    expect(auctionApiMocks.upsertAuctionProxyBid).toHaveBeenCalledWith('72', '1500.00', expect.stringMatching(/^web-/))
+    expect(wrapper.text()).toContain('代理有效')
+    expect(wrapper.text()).toContain('当前领先')
+    expect(wrapper.text()).not.toContain('最高价：1500.00')
+
+    await wrapper.get('[data-test="proxy-bid-panel"] button[type="button"]:last-of-type').trigger('click')
+    await flushPromises()
+    expect(auctionApiMocks.disableAuctionProxyBid).toHaveBeenCalledWith('72', expect.stringMatching(/^web-/))
     wrapper.unmount()
   })
 })

@@ -7,6 +7,9 @@ import {
   getAuctionBidHistory,
   getAuctionDetail,
   getAuctionRegistration,
+  getMyAuctionProxyBid,
+  upsertAuctionProxyBid,
+  disableAuctionProxyBid,
   placeAuctionBid,
   registerForAuction,
 } from '@/api/auction'
@@ -30,6 +33,8 @@ import type {
   AuctionBidHistoryItem,
   AuctionDetail,
   AuctionRegistrationRecord,
+  AuctionProxyBidDetail,
+  AuctionProxyBidResult,
 } from '@/types/auction'
 import type {
   RealtimeAuctionClosed,
@@ -53,6 +58,11 @@ const registrationPolling = ref(false)
 const registrationPollRounds = ref(0)
 const bidAmount = ref('')
 const bidValidation = ref<string | null>(null)
+const proxyBid = ref<AuctionProxyBidDetail | null>(null)
+const proxyMaxAmount = ref('')
+const proxyLoading = ref(false)
+const proxyValidation = ref<string | null>(null)
+const proxyLeading = ref(false)
 const pageError = ref<ApiError | null>(null)
 const actionError = ref<ApiError | null>(null)
 const lastTraceId = ref<string | null>(null)
@@ -93,6 +103,10 @@ function applyRealtimeSnapshot(snapshot: RealtimeSnapshot): void {
     mine: bid.mine,
   }))
   bidAmount.value = String(snapshot.minimumNextBid)
+  proxyLeading.value = snapshot.leading
+  if (!snapshot.proxyActive) {
+    proxyBid.value = proxyBid.value?.status === 'ACTIVE' ? proxyBid.value : null
+  }
 }
 
 function applyRealtimeBid(bid: RealtimeBidAccepted): void {
@@ -112,6 +126,7 @@ function applyRealtimeBid(bid: RealtimeBidAccepted): void {
     }].sort((left, right) => left.sequenceNo - right.sequenceNo).slice(-10)
   }
   bidAmount.value = String(detail.value.minimumNextBid)
+  if (proxyBid.value?.status === 'ACTIVE' && bid.mine) proxyLeading.value = true
 }
 
 function applyRealtimeExtended(event: RealtimeAuctionExtended): void {
@@ -130,6 +145,76 @@ function applyRealtimeClosed(event: RealtimeAuctionClosed): void {
   if (event.status === 'CLOSED_SOLD' && event.finalPrice !== null) {
     detail.value.displayPrice = event.finalPrice
     detail.value.currentPrice = event.finalPrice
+  }
+}
+
+function applyProxyResult(result: AuctionProxyBidResult): void {
+  if (!detail.value || result.auctionId !== detail.value.auctionId) return
+  detail.value.displayPrice = result.displayPrice
+  detail.value.currentPrice = result.displayPrice
+  detail.value.minimumNextBid = result.minimumNextBid
+  detail.value.bidCount = result.bidCount
+  detail.value.endAt = result.endAt
+  proxyBid.value = result.proxyBid
+  proxyLeading.value = result.leading
+  proxyMaxAmount.value = result.proxyBid ? String(result.proxyBid.maxAmount) : ''
+  bidAmount.value = String(result.minimumNextBid)
+  if (result.extended) ElMessage.info(`反狙击延时至 ${formatShanghaiTime(result.endAt)}`)
+  ElMessage.success(result.leading ? '代理规则已生效，你当前领先。' : '代理规则已生效，当前展示价已按规则更新。')
+}
+
+async function loadProxyBid(): Promise<void> {
+  if (!detail.value || detail.value.sessionStatus !== 'OPEN' || !detail.value.myRegistration ||
+      detail.value.myRegistration.status !== 'REGISTERED' || typeof getMyAuctionProxyBid !== 'function') return
+  try {
+    const result = await getMyAuctionProxyBid(detail.value.auctionId)
+    proxyBid.value = result.data
+    proxyMaxAmount.value = result.data ? String(result.data.maxAmount) : ''
+  } catch (error) {
+    actionError.value = normalizeApiError(error)
+  }
+}
+
+function validateProxyMax(): string | null {
+  const value = proxyMaxAmount.value.trim()
+  if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return '代理最高价必须是最多两位小数的正数。'
+  if (Number(value) < Number(detail.value?.minimumNextBid ?? 0)) return '代理最高价不能低于当前最低报价。'
+  return null
+}
+
+async function saveProxyBid(): Promise<void> {
+  if (!detail.value || proxyLoading.value || typeof upsertAuctionProxyBid !== 'function') return
+  proxyValidation.value = validateProxyMax()
+  if (proxyValidation.value) return
+  proxyLoading.value = true
+  actionError.value = null
+  try {
+    const result = await upsertAuctionProxyBid(
+      detail.value.auctionId, proxyMaxAmount.value.trim(), createClientRequestId())
+    lastTraceId.value = result.traceId ?? lastTraceId.value
+    applyProxyResult(result.data)
+  } catch (error) {
+    actionError.value = normalizeApiError(error)
+  } finally {
+    proxyLoading.value = false
+  }
+}
+
+async function disableProxyBid(): Promise<void> {
+  if (!detail.value || proxyLoading.value || typeof disableAuctionProxyBid !== 'function') return
+  proxyLoading.value = true
+  actionError.value = null
+  try {
+    const result = await disableAuctionProxyBid(detail.value.auctionId, createClientRequestId())
+    lastTraceId.value = result.traceId ?? lastTraceId.value
+    applyProxyResult(result.data)
+    proxyBid.value = null
+    proxyMaxAmount.value = ''
+    ElMessage.info('代理规则已停用，历史已接受报价不会撤回。')
+  } catch (error) {
+    actionError.value = normalizeApiError(error)
+  } finally {
+    proxyLoading.value = false
   }
 }
 
@@ -238,6 +323,7 @@ async function loadDetail(resetRegistrationPolling = true): Promise<void> {
     scheduleRegistrationPoll()
     if (detailResult.data.sessionStatus === 'OPEN') {
       connectRealtime()
+      void loadProxyBid()
     } else {
       realtimeClient?.stop()
       realtimeClient = null
@@ -420,6 +506,25 @@ onBeforeUnmount(() => {
                   </template>
                   <div v-else-if="detail.sessionStatus === 'SCHEDULED'" class="detail-notice detail-notice--muted">报名已完成，开拍后可手动出价。</div>
                   <div v-else class="detail-notice detail-notice--muted">场次已经结束，不能继续出价。</div>
+                </div>
+                <div v-if="detail.sessionStatus === 'OPEN'" class="proxy-bid-panel" data-test="proxy-bid-panel">
+                  <div class="proxy-bid-panel__heading">
+                    <div>
+                      <strong>代理竞价</strong>
+                      <small>只对你可见。系统会自动用维持领先所需的最小金额出价。</small>
+                    </div>
+                    <ElTag v-if="proxyBid?.status === 'ACTIVE'" type="success" effect="plain">代理有效</ElTag>
+                  </div>
+                  <div class="proxy-bid-panel__row">
+                    <label for="proxy-max-amount">我的最高价</label>
+                    <input id="proxy-max-amount" v-model="proxyMaxAmount" class="native-field" inputmode="decimal" autocomplete="off" placeholder="例如 1500.00" />
+                    <ElButton :loading="proxyLoading" type="primary" @click="saveProxyBid">{{ proxyBid?.status === 'ACTIVE' ? '更新代理' : '启用代理' }}</ElButton>
+                    <ElButton v-if="proxyBid?.status === 'ACTIVE'" :loading="proxyLoading" plain type="danger" @click="disableProxyBid">停用</ElButton>
+                  </div>
+                  <p v-if="proxyValidation" class="admin-review-validation">{{ proxyValidation }}</p>
+                  <p v-if="proxyBid?.status === 'ACTIVE'" class="proxy-bid-panel__result">
+                    {{ proxyLeading ? '当前领先；新的有效报价会触发最小必要反击。' : '报价有效但被代理超过；代理仍有效，直到达到你的最高价。' }}
+                  </p>
                 </div>
               </template>
             </section>
