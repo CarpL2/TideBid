@@ -131,6 +131,19 @@ Validate the local application configuration and toolchain without building or s
 
 The registration check logs into the local Nacos Admin API without printing the access token and
 requires exactly one healthy `TIDEBID_GROUP` instance for Gateway 9000 and services 9101-9105.
+For the phase 04 multi-instance drill, start a second Realtime process on port 9204 and check both
+registrations with:
+
+```powershell
+.\scripts\realtime-instance.ps1 -Action Start
+.\scripts\check-nacos-registrations.ps1 -ExpectedRealtimeInstances 2
+.\scripts\realtime-instance.ps1 -Action Stop -AcknowledgeImpact
+```
+
+The secondary process uses the same Nacos service name, Redis fan-out and RocketMQ consumer group;
+its PID and logs stay under the ignored `.runtime/realtime-instances/` directory. To rehearse the
+Redis failure path without deleting containers or volumes, use `redis-outage.ps1` with `Status`,
+`Suspend -AcknowledgeImpact`, and `Resume`.
 
 PIDs are stored in ignored `.runtime/apps/processes.json`; stdout and stderr are separated under
 `.runtime/apps/logs/<timestamp>/`. Repeating the start command recognizes the same healthy recorded

@@ -5,7 +5,11 @@ param(
 
     [Parameter()]
     [ValidateRange(5, 120)]
-    [int]$TimeoutSeconds = 30
+    [int]$TimeoutSeconds = 30,
+
+    [Parameter()]
+    [ValidateSet(1, 2)]
+    [int]$ExpectedRealtimeInstances = 1
 )
 
 Set-StrictMode -Version Latest
@@ -108,17 +112,21 @@ foreach ($entry in $expected.GetEnumerator()) {
         throw "Nacos rejected the instance query for $($entry.Key)."
     }
     $instances = @($response.data)
-    if ($instances.Count -ne 1) {
-        throw "Expected one Nacos instance for $($entry.Key), found $($instances.Count)."
+    $expectedCount = if ($entry.Key -eq 'tidebid-realtime') { $ExpectedRealtimeInstances } else { 1 }
+    if ($instances.Count -ne $expectedCount) {
+        throw "Expected $expectedCount Nacos instance(s) for $($entry.Key), found $($instances.Count)."
     }
-    $instance = $instances[0]
-    if ([string]$instance.ip -cne '127.0.0.1' -or [int]$instance.port -ne [int]$entry.Value -or
-        -not [bool]$instance.healthy -or -not [bool]$instance.enabled -or
-        -not [bool]$instance.ephemeral -or [string]$instance.clusterName -cne 'DEFAULT' -or
-        [string]$instance.metadata.'preserved.register.source' -cne 'SPRING_CLOUD') {
-        throw "Nacos instance metadata for $($entry.Key) does not match the local TideBid baseline."
+    foreach ($instance in $instances) {
+        $allowedPorts = if ($entry.Key -eq 'tidebid-realtime' -and $ExpectedRealtimeInstances -eq 2) { @(9104, 9204) } else { @([int]$entry.Value) }
+        if ([string]$instance.ip -cne '127.0.0.1' -or [int]$instance.port -notin $allowedPorts -or
+            -not [bool]$instance.healthy -or -not [bool]$instance.enabled -or
+            -not [bool]$instance.ephemeral -or [string]$instance.clusterName -cne 'DEFAULT' -or
+            [string]$instance.metadata.'preserved.register.source' -cne 'SPRING_CLOUD') {
+            throw "Nacos instance metadata for $($entry.Key) does not match the local TideBid baseline."
+        }
     }
-    Write-Host "  $($entry.Key): 127.0.0.1:$($entry.Value) / healthy / ephemeral"
+    $ports = (($instances | Sort-Object {[int]$_.port} | ForEach-Object { "127.0.0.1:$([int]$_.port)" }) -join ', ')
+    Write-Host "  $($entry.Key): $ports / healthy / ephemeral"
 }
 
-Write-Host '[PASS] All six TideBid Java services have exactly one healthy Nacos registration.'
+Write-Host "[PASS] TideBid Java service registrations match the expected baseline (Realtime instances: $ExpectedRealtimeInstances)."
