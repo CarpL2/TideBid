@@ -30,6 +30,21 @@ public final class RedisRealtimeConnectionLeaseStore implements RealtimeConnecti
             if redis.call('ZCARD', key) == 0 then redis.call('DEL', key) end
             return 1
             """, Long.class);
+    private static final DefaultRedisScript<Long> RENEW_SCRIPT = new DefaultRedisScript<>("""
+            local key = KEYS[1]
+            local member = ARGV[1]
+            local now = tonumber(ARGV[2])
+            local expiresAt = now + tonumber(ARGV[3])
+            local currentExpiry = redis.call('ZSCORE', key, member)
+            if currentExpiry == false or tonumber(currentExpiry) <= now then
+                redis.call('ZREM', key, member)
+                if redis.call('ZCARD', key) == 0 then redis.call('DEL', key) end
+                return 0
+            end
+            redis.call('ZADD', key, expiresAt, member)
+            redis.call('EXPIRE', key, math.ceil(tonumber(ARGV[3]) / 1000))
+            return 1
+            """, Long.class);
 
     private final StringRedisTemplate redisTemplate;
 
@@ -50,6 +65,25 @@ public final class RedisRealtimeConnectionLeaseStore implements RealtimeConnecti
             if (result == null) {
                 throw new RealtimeConnectionLeaseStoreUnavailableException(
                         new IllegalStateException("Redis lease script returned null"));
+            }
+            return result == 1L;
+        } catch (DataAccessException exception) {
+            throw new RealtimeConnectionLeaseStoreUnavailableException(exception);
+        }
+    }
+
+    @Override
+    public boolean renew(long userId, String connectionId, Duration ttl) {
+        try {
+            Long result = redisTemplate.execute(
+                    RENEW_SCRIPT,
+                    List.of(userKey(userId)),
+                    connectionId,
+                    Long.toString(System.currentTimeMillis()),
+                    Long.toString(ttl.toMillis()));
+            if (result == null) {
+                throw new RealtimeConnectionLeaseStoreUnavailableException(
+                        new IllegalStateException("Redis lease renewal script returned null"));
             }
             return result == 1L;
         } catch (DataAccessException exception) {

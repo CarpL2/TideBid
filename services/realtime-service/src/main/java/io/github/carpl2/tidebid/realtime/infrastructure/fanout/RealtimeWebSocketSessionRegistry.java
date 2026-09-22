@@ -11,11 +11,13 @@ import io.github.carpl2.tidebid.contracts.RealtimeAuctionExtended;
 import io.github.carpl2.tidebid.contracts.RealtimeAuctionStatus;
 import io.github.carpl2.tidebid.contracts.RealtimeBidAccepted;
 import io.github.carpl2.tidebid.contracts.RealtimeMessageType;
+import io.github.carpl2.tidebid.contracts.RealtimeResyncReason;
+import io.github.carpl2.tidebid.contracts.RealtimeResyncRequired;
 import io.github.carpl2.tidebid.contracts.RealtimeServerMessage;
 import io.github.carpl2.tidebid.contracts.RealtimeSnapshot;
 import io.github.carpl2.tidebid.contracts.RealtimeBidView;
 import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketAttributes;
-import org.springframework.web.socket.TextMessage;
+import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketSendQueue;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.time.Instant;
@@ -24,16 +26,73 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.HashSet;
+import java.util.UUID;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
+import org.springframework.web.socket.CloseStatus;
 
 public final class RealtimeWebSocketSessionRegistry {
 
     private final ObjectMapper objectMapper;
+    private final Executor executor;
+    private final int sendCapacity;
     private final Map<Long, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
     private final Map<WebSocketSession, Map<Long, SyncBuffer>> syncing = new ConcurrentHashMap<>();
+    private final Map<WebSocketSession, RealtimeWebSocketSendQueue> sendQueues = new ConcurrentHashMap<>();
 
     public RealtimeWebSocketSessionRegistry(ObjectMapper objectMapper) {
+        this(objectMapper, 128, Runnable::run);
+    }
+
+    public RealtimeWebSocketSessionRegistry(ObjectMapper objectMapper, Executor executor) {
+        this(objectMapper, 128, executor);
+    }
+
+    public RealtimeWebSocketSessionRegistry(ObjectMapper objectMapper, int sendCapacity, Executor executor) {
         this.objectMapper = objectMapper;
+        if (sendCapacity < 1) throw new IllegalArgumentException("sendCapacity must be positive");
+        this.sendCapacity = sendCapacity;
+        this.executor = executor;
+    }
+
+    public void register(WebSocketSession session) {
+        sendQueues.computeIfAbsent(session, value -> new RealtimeWebSocketSendQueue(
+                value, objectMapper, sendCapacity, executor));
+    }
+
+    public void touch(WebSocketSession session) {
+        RealtimeWebSocketSendQueue queue = sendQueues.get(session);
+        if (queue != null) queue.touch();
+    }
+
+    public boolean send(WebSocketSession session, RealtimeServerMessage<?> message) {
+        register(session);
+        RealtimeWebSocketSendQueue queue = sendQueues.get(session);
+        if (queue.offer(message)) return true;
+        queue.close(new CloseStatus(1013, "try again later"));
+        return false;
+    }
+
+    public void heartbeat(Duration interval, Duration idleTimeout) {
+        long now = System.currentTimeMillis();
+        for (Map.Entry<WebSocketSession, RealtimeWebSocketSendQueue> entry : sendQueues.entrySet()) {
+            WebSocketSession session = entry.getKey();
+            RealtimeWebSocketSendQueue queue = entry.getValue();
+            if (!session.isOpen()) {
+                remove(session);
+                continue;
+            }
+            if (queue.isIdle(now, idleTimeout.toMillis())) {
+                queue.close(new CloseStatus(1000, "idle timeout"));
+                remove(session);
+                continue;
+            }
+            if (queue.shouldHeartbeat(now, interval.toMillis()) && !queue.offerHeartbeat()) {
+                queue.close(new CloseStatus(1013, "try again later"));
+            }
+        }
     }
 
     public void subscribe(long auctionId, WebSocketSession session) {
@@ -51,7 +110,7 @@ public final class RealtimeWebSocketSessionRegistry {
         if (buffer == null) return false;
         try {
             synchronized (buffer) {
-                send(session, server(RealtimeMessageType.SNAPSHOT, requestId, snapshot));
+                if (!send(session, server(RealtimeMessageType.SNAPSHOT, requestId, snapshot))) return false;
                 if (buffer.overflowed) return false;
                 Set<Long> replayedSequences = new HashSet<>();
                 for (RealtimeBidView bid : snapshot.bids()) replayedSequences.add(bid.sequenceNo());
@@ -62,7 +121,7 @@ public final class RealtimeWebSocketSessionRegistry {
                             && (bid.sequenceNo() <= snapshot.lastSequenceNo()
                             || !replayedSequences.add(bid.sequenceNo()))) continue;
                     Object message = toMessage(event, session);
-                    if (message != null) send(session, (RealtimeServerMessage<?>) message);
+                    if (message != null && !send(session, (RealtimeServerMessage<?>) message)) return false;
                 }
                 buffer.live = true;
                 Map<Long, SyncBuffer> values = syncing.get(session);
@@ -94,6 +153,8 @@ public final class RealtimeWebSocketSessionRegistry {
         sessions.values().forEach(values -> values.remove(session));
         sessions.entrySet().removeIf(entry -> entry.getValue().isEmpty());
         syncing.remove(session);
+        RealtimeWebSocketSendQueue queue = sendQueues.remove(session);
+        if (queue != null) queue.close(CloseStatus.NORMAL);
     }
 
     public void broadcast(EventEnvelope<?> envelope) {
@@ -114,8 +175,23 @@ public final class RealtimeWebSocketSessionRegistry {
                 }
             }
             Object message = toMessage(envelope, session);
-            if (message != null) send(session, (RealtimeServerMessage<?>) message);
+            if (message != null) {
+                long sequenceNo = envelope.payload() instanceof BidAcceptedEvent bid ? bid.sequenceNo() : 0L;
+                enqueueEvent(session, (RealtimeServerMessage<?>) message, auctionId, sequenceNo);
+            }
         }
+    }
+
+    private void enqueueEvent(WebSocketSession session, RealtimeServerMessage<?> message,
+                              long auctionId, long sequenceNo) {
+        register(session);
+        RealtimeWebSocketSendQueue queue = sendQueues.get(session);
+        if (queue.offer(message)) return;
+        RealtimeServerMessage<?> recovery = server(
+                RealtimeMessageType.RESYNC_REQUIRED,
+                UUID.randomUUID().toString(),
+                new RealtimeResyncRequired(auctionId, RealtimeResyncReason.BUFFER_OVERFLOW, sequenceNo));
+        queue.overflow(recovery);
     }
 
     private Object toMessage(EventEnvelope<?> envelope, WebSocketSession session) {
@@ -149,14 +225,18 @@ public final class RealtimeWebSocketSessionRegistry {
         return new RealtimeServerMessage<>(type, 1, requestId, Instant.now(), payload);
     }
 
-    private void send(WebSocketSession session, RealtimeServerMessage<?> message) {
-        try {
-            synchronized (session) {
-                session.sendMessage(new TextMessage(objectMapper.writeValueAsString(message)));
-            }
-        } catch (Exception ignored) {
-            // A disconnected or slow session is removed by the next broadcast/close callback.
-        }
+    public void close() {
+        sendQueues.values().forEach(queue -> queue.close(CloseStatus.GOING_AWAY));
+        if (executor instanceof ExecutorService service) service.shutdownNow();
+    }
+
+    public void close(WebSocketSession session, CloseStatus status) {
+        RealtimeWebSocketSendQueue queue = sendQueues.get(session);
+        if (queue != null) queue.close(status);
+    }
+
+    public Set<WebSocketSession> sessions() {
+        return Set.copyOf(sendQueues.keySet());
     }
 
     private static long auctionId(Object payload) {

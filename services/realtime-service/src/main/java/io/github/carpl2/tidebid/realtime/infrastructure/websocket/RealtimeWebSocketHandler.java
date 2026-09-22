@@ -18,6 +18,7 @@ import io.github.carpl2.tidebid.realtime.application.port.AuctionSnapshotClient;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.PongMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
@@ -66,6 +67,7 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         metrics.connectionOpened();
+        if (sessionRegistry != null) sessionRegistry.register(session);
         String connectionId = String.valueOf(session.getAttributes()
                 .get(RealtimeWebSocketHandshakeInterceptor.CONNECTION_ID_ATTRIBUTE));
         RealtimeServerMessage<?> connected = new RealtimeServerMessage<>(
@@ -80,6 +82,7 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        if (sessionRegistry != null) sessionRegistry.touch(session);
         SubscriptionState state = state(session);
         if (!state.allowControl()) {
             sendError(session, "", RealtimeErrorCode.RATE_LIMITED, "control message rate exceeded", false);
@@ -150,6 +153,11 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
+    protected void handlePongMessage(WebSocketSession session, PongMessage message) {
+        if (sessionRegistry != null) sessionRegistry.touch(session);
+    }
+
+    @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         metrics.connectionClosed();
         if (sessionRegistry != null) sessionRegistry.remove(session);
@@ -165,6 +173,10 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void send(WebSocketSession session, RealtimeServerMessage<?> message) throws Exception {
+        if (sessionRegistry != null) {
+            sessionRegistry.send(session, message);
+            return;
+        }
         synchronized (session) {
             session.sendMessage(new TextMessage(objectMapper.writeValueAsString(message)));
         }

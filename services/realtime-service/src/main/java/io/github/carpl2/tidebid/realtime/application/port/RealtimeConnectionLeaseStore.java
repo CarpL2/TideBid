@@ -9,5 +9,8 @@ public interface RealtimeConnectionLeaseStore {
     boolean acquire(long userId, String connectionId, int maxConnections, Duration ttl)
             throws RealtimeConnectionLeaseStoreUnavailableException;
 
+    boolean renew(long userId, String connectionId, Duration ttl)
+            throws RealtimeConnectionLeaseStoreUnavailableException;
+
     void release(long userId, String connectionId) throws RealtimeConnectionLeaseStoreUnavailableException;
 }

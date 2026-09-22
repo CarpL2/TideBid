@@ -9,6 +9,8 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.listener.PatternTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.beans.factory.annotation.Qualifier;
+import java.util.concurrent.Executor;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "tidebid.realtime.redis", name = "enabled", havingValue = "true")
@@ -20,9 +22,13 @@ public class RealtimeRedisFanoutConfiguration {
         return new RedisRealtimeEventPublisher(redisTemplate, properties.redis().eventDedupTtl());
     }
 
-    @Bean
-    RealtimeWebSocketSessionRegistry realtimeWebSocketSessionRegistry(ObjectMapper objectMapper) {
-        return new RealtimeWebSocketSessionRegistry(objectMapper);
+    @Bean(destroyMethod = "close")
+    RealtimeWebSocketSessionRegistry realtimeWebSocketSessionRegistry(ObjectMapper objectMapper,
+                                                                       RealtimeProperties properties,
+                                                                       @Qualifier("realtimeWebSocketSendExecutor")
+                                                                       Executor realtimeWebSocketSendExecutor) {
+        return new RealtimeWebSocketSessionRegistry(objectMapper,
+                properties.queue().sendCapacity(), realtimeWebSocketSendExecutor);
     }
 
     @Bean

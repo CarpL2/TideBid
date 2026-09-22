@@ -46,6 +46,7 @@ class RealtimeWebSocketHandlerTest {
         attributes = new ConcurrentHashMap<>();
         sent = new ArrayList<>();
         when(session.getAttributes()).thenReturn(attributes);
+        lenient().when(session.isOpen()).thenReturn(true);
         doAnswer(invocation -> {
             sent.add(invocation.getArgument(0));
             return null;
