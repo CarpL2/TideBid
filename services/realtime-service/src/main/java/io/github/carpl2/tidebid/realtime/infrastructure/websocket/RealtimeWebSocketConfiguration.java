@@ -3,12 +3,14 @@ package io.github.carpl2.tidebid.realtime.infrastructure.websocket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeaseStore;
 import io.github.carpl2.tidebid.realtime.infrastructure.fanout.RealtimeWebSocketSessionRegistry;
+import io.github.carpl2.tidebid.realtime.application.port.AuctionSnapshotClient;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeProperties;
 import io.github.carpl2.tidebid.realtime.application.service.RealtimeTicketApplicationService;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeWebSocketProperties;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
@@ -31,11 +33,12 @@ public class RealtimeWebSocketConfiguration implements WebSocketConfigurer {
             ObjectMapper objectMapper,
             RealtimeProperties realtimeProperties,
             RealtimeConnectionLeaseStore leaseStore,
-            RealtimeWebSocketSessionRegistry sessionRegistry
+            RealtimeWebSocketSessionRegistry sessionRegistry,
+            ObjectProvider<AuctionSnapshotClient> snapshotClients
     ) {
         this.properties = properties;
         this.handler = new RealtimeWebSocketHandler(
-                metrics, objectMapper, realtimeProperties, leaseStore, sessionRegistry);
+                metrics, objectMapper, realtimeProperties, leaseStore, sessionRegistry, snapshotClients.getIfAvailable());
         this.interceptor = new RealtimeWebSocketHandshakeInterceptor(
                 ticketService, properties, metrics, realtimeProperties, leaseStore);
     }

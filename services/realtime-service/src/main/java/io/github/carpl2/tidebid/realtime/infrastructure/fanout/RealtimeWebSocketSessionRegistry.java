@@ -12,6 +12,8 @@ import io.github.carpl2.tidebid.contracts.RealtimeAuctionStatus;
 import io.github.carpl2.tidebid.contracts.RealtimeBidAccepted;
 import io.github.carpl2.tidebid.contracts.RealtimeMessageType;
 import io.github.carpl2.tidebid.contracts.RealtimeServerMessage;
+import io.github.carpl2.tidebid.contracts.RealtimeSnapshot;
+import io.github.carpl2.tidebid.contracts.RealtimeBidView;
 import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketAttributes;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -19,13 +21,16 @@ import org.springframework.web.socket.WebSocketSession;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class RealtimeWebSocketSessionRegistry {
 
     private final ObjectMapper objectMapper;
     private final Map<Long, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
+    private final Map<WebSocketSession, Map<Long, SyncBuffer>> syncing = new ConcurrentHashMap<>();
 
     public RealtimeWebSocketSessionRegistry(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -33,6 +38,48 @@ public final class RealtimeWebSocketSessionRegistry {
 
     public void subscribe(long auctionId, WebSocketSession session) {
         sessions.computeIfAbsent(auctionId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
+    }
+
+    public void beginSync(long auctionId, WebSocketSession session, int capacity) {
+        syncing.computeIfAbsent(session, ignored -> new ConcurrentHashMap<>())
+                .put(auctionId, new SyncBuffer(capacity));
+    }
+
+    public boolean sendSnapshot(long auctionId, WebSocketSession session, RealtimeSnapshot snapshot,
+                                String requestId) {
+        SyncBuffer buffer = syncing.getOrDefault(session, Map.of()).get(auctionId);
+        if (buffer == null) return false;
+        try {
+            synchronized (buffer) {
+                send(session, server(RealtimeMessageType.SNAPSHOT, requestId, snapshot));
+                if (buffer.overflowed) return false;
+                Set<Long> replayedSequences = new HashSet<>();
+                for (RealtimeBidView bid : snapshot.bids()) replayedSequences.add(bid.sequenceNo());
+                Set<java.util.UUID> replayedEvents = new HashSet<>();
+                for (EventEnvelope<?> event : buffer.events) {
+                    if (!replayedEvents.add(event.eventId())) continue;
+                    if (event.payload() instanceof BidAcceptedEvent bid
+                            && (bid.sequenceNo() <= snapshot.lastSequenceNo()
+                            || !replayedSequences.add(bid.sequenceNo()))) continue;
+                    Object message = toMessage(event, session);
+                    if (message != null) send(session, (RealtimeServerMessage<?>) message);
+                }
+                buffer.live = true;
+                Map<Long, SyncBuffer> values = syncing.get(session);
+                if (values != null) {
+                    values.remove(auctionId, buffer);
+                    if (values.isEmpty()) syncing.remove(session, values);
+                }
+            }
+            return true;
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    public void cancelSync(long auctionId, WebSocketSession session) {
+        Map<Long, SyncBuffer> values = syncing.get(session);
+        if (values != null) values.remove(auctionId);
     }
 
     public void unsubscribe(long auctionId, WebSocketSession session) {
@@ -46,6 +93,7 @@ public final class RealtimeWebSocketSessionRegistry {
     public void remove(WebSocketSession session) {
         sessions.values().forEach(values -> values.remove(session));
         sessions.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+        syncing.remove(session);
     }
 
     public void broadcast(EventEnvelope<?> envelope) {
@@ -55,6 +103,15 @@ public final class RealtimeWebSocketSessionRegistry {
             if (!session.isOpen()) {
                 remove(session);
                 continue;
+            }
+            SyncBuffer buffer = syncing.getOrDefault(session, Map.of()).get(auctionId);
+            if (buffer != null) {
+                synchronized (buffer) {
+                    if (!buffer.live) {
+                        buffer.add(envelope);
+                        continue;
+                    }
+                }
             }
             Object message = toMessage(envelope, session);
             if (message != null) send(session, (RealtimeServerMessage<?>) message);
@@ -108,5 +165,18 @@ public final class RealtimeWebSocketSessionRegistry {
         if (payload instanceof AuctionClosedSoldEvent event) return event.auctionId();
         if (payload instanceof AuctionClosedUnsoldEvent event) return event.auctionId();
         throw new IllegalArgumentException("unsupported realtime event payload");
+    }
+
+    private static final class SyncBuffer {
+        private final int capacity;
+        private final List<EventEnvelope<?>> events = new ArrayList<>();
+        private boolean overflowed;
+        private boolean live;
+
+        private SyncBuffer(int capacity) { this.capacity = capacity; }
+        private synchronized void add(EventEnvelope<?> event) {
+            if (events.size() >= capacity) overflowed = true;
+            else events.add(event);
+        }
     }
 }

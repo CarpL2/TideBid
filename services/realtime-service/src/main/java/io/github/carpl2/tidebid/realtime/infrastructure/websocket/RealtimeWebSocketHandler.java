@@ -14,6 +14,7 @@ import io.github.carpl2.tidebid.contracts.RealtimeUnsubscribe;
 import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeaseStore;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeProperties;
 import io.github.carpl2.tidebid.realtime.infrastructure.fanout.RealtimeWebSocketSessionRegistry;
+import io.github.carpl2.tidebid.realtime.application.port.AuctionSnapshotClient;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -35,6 +36,7 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     private final RealtimeProperties properties;
     private final RealtimeConnectionLeaseStore leaseStore;
     private final RealtimeWebSocketSessionRegistry sessionRegistry;
+    private final AuctionSnapshotClient snapshotClient;
 
     RealtimeWebSocketHandler(RealtimeMetrics metrics, ObjectMapper objectMapper,
                              RealtimeProperties properties, RealtimeConnectionLeaseStore leaseStore) {
@@ -44,6 +46,13 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     RealtimeWebSocketHandler(RealtimeMetrics metrics, ObjectMapper objectMapper,
                              RealtimeProperties properties, RealtimeConnectionLeaseStore leaseStore,
                              RealtimeWebSocketSessionRegistry sessionRegistry) {
+        this(metrics, objectMapper, properties, leaseStore, sessionRegistry, null);
+    }
+
+    RealtimeWebSocketHandler(RealtimeMetrics metrics, ObjectMapper objectMapper,
+                             RealtimeProperties properties, RealtimeConnectionLeaseStore leaseStore,
+                             RealtimeWebSocketSessionRegistry sessionRegistry,
+                             AuctionSnapshotClient snapshotClient) {
         this.metrics = metrics;
         this.objectMapper = objectMapper;
         this.decoder = new RealtimeClientMessageDecoder(
@@ -51,6 +60,7 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
         this.properties = properties;
         this.leaseStore = leaseStore;
         this.sessionRegistry = sessionRegistry;
+        this.snapshotClient = snapshotClient;
     }
 
     @Override
@@ -90,8 +100,36 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
                     if (!state.subscribe(subscribe.auctionId())) {
                         sendError(session, decoded.requestId(), RealtimeErrorCode.SUBSCRIPTION_LIMIT_EXCEEDED,
                                 "subscription limit exceeded", true);
+                        break;
                     }
-                    if (sessionRegistry != null) sessionRegistry.subscribe(subscribe.auctionId(), session);
+                    if (sessionRegistry != null) {
+                        sessionRegistry.subscribe(subscribe.auctionId(), session);
+                        if (snapshotClient == null) {
+                            sendError(session, decoded.requestId(), RealtimeErrorCode.SNAPSHOT_UNAVAILABLE,
+                                    "snapshot is unavailable", true);
+                            break;
+                        }
+                        sessionRegistry.beginSync(subscribe.auctionId(), session,
+                                properties.subscription().syncBufferCapacity());
+                        try {
+                            long userId = ((Number) session.getAttributes().getOrDefault(
+                                    RealtimeWebSocketAttributes.USER_ID, 0L)).longValue();
+                            var snapshot = snapshotClient.find(subscribe.auctionId(), subscribe.lastSequenceNo(),
+                                    100, userId, decoded.requestId());
+                            if (!sessionRegistry.sendSnapshot(subscribe.auctionId(), session, snapshot,
+                                    decoded.requestId())) {
+                                sessionRegistry.cancelSync(subscribe.auctionId(), session);
+                                sendResync(session, decoded.requestId(), subscribe.auctionId(),
+                                        io.github.carpl2.tidebid.contracts.RealtimeResyncReason.BUFFER_OVERFLOW,
+                                        subscribe.lastSequenceNo());
+                            }
+                        } catch (RuntimeException exception) {
+                            sessionRegistry.cancelSync(subscribe.auctionId(), session);
+                            sendResync(session, decoded.requestId(), subscribe.auctionId(),
+                                    io.github.carpl2.tidebid.contracts.RealtimeResyncReason.SNAPSHOT_INCONSISTENT,
+                                    subscribe.lastSequenceNo());
+                        }
+                    }
                 }
                 case UNSUBSCRIBE -> {
                     long auctionId = ((RealtimeUnsubscribe) decoded.payload()).auctionId();
@@ -137,6 +175,14 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
         send(session, new RealtimeServerMessage<>(RealtimeMessageType.ERROR, 1,
                 requestId.isBlank() ? UUID.randomUUID().toString() : requestId,
                 Instant.now(), new RealtimeError(code, message, recoverable)));
+    }
+
+    private void sendResync(WebSocketSession session, String requestId, long auctionId,
+                             io.github.carpl2.tidebid.contracts.RealtimeResyncReason reason,
+                             long lastSequenceNo) throws Exception {
+        send(session, new RealtimeServerMessage<>(RealtimeMessageType.RESYNC_REQUIRED, 1,
+                requestId, Instant.now(), new io.github.carpl2.tidebid.contracts.RealtimeResyncRequired(
+                        auctionId, reason, lastSequenceNo)));
     }
 
     private static final class SubscriptionState {

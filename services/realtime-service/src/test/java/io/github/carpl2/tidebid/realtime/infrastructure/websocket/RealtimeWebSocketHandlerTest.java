@@ -3,6 +3,9 @@ package io.github.carpl2.tidebid.realtime.infrastructure.websocket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import io.github.carpl2.tidebid.realtime.application.port.RealtimeConnectionLeaseStore;
+import io.github.carpl2.tidebid.realtime.application.port.AuctionSnapshotClient;
+import io.github.carpl2.tidebid.contracts.RealtimeAuctionStatus;
+import io.github.carpl2.tidebid.contracts.RealtimeSnapshot;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimePropertiesTest;
 import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.util.ArrayList;
 import java.util.Map;
+import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,6 +33,9 @@ class RealtimeWebSocketHandlerTest {
 
     @Mock
     private RealtimeConnectionLeaseStore leaseStore;
+
+    @Mock
+    private AuctionSnapshotClient snapshotClient;
 
     private RealtimeWebSocketHandler handler;
     private Map<String, Object> attributes;
@@ -83,5 +90,28 @@ class RealtimeWebSocketHandlerTest {
         handler.handleMessage(session, new TextMessage("x".repeat(9_000)));
 
         verify(session).close(new CloseStatus(1009, "message too large"));
+    }
+
+    @Test
+    void subscribesThroughSnapshotBeforeLiveEvents() throws Exception {
+        RealtimeWebSocketHandler snapshotHandler = new RealtimeWebSocketHandler(
+                new RealtimeMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS),
+                RealtimePropertiesTest.validProperties(), leaseStore,
+                new io.github.carpl2.tidebid.realtime.infrastructure.fanout.RealtimeWebSocketSessionRegistry(
+                        new ObjectMapper().findAndRegisterModules()), snapshotClient);
+        attributes.put(RealtimeWebSocketAttributes.USER_ID, 42L);
+        when(snapshotClient.find(7L, 3L, 100, 42L, "sub-1")).thenReturn(new RealtimeSnapshot(
+                7L, RealtimeAuctionStatus.OPEN, new java.math.BigDecimal("10.00"),
+                new java.math.BigDecimal("11.00"), 1L, Instant.parse("2026-09-22T09:00:00Z"),
+                null, 0, 3L, true, false, java.util.List.of()));
+        snapshotHandler.afterConnectionEstablished(session);
+        snapshotHandler.handleMessage(session, new TextMessage("""
+                {"type":"SUBSCRIBE","protocolVersion":1,"requestId":"sub-1",
+                 "payload":{"auctionId":"7","lastSequenceNo":3}}
+                """));
+
+        verify(snapshotClient).find(7L, 3L, 100, 42L, "sub-1");
+        assertThat(sent).anySatisfy(message -> assertThat(message.getPayload()).contains("\"type\":\"SNAPSHOT\""));
     }
 }
