@@ -111,4 +111,55 @@ describe('RealtimeAuctionClient', () => {
     FakeWebSocket.instances[1]!.onerror?.()
     expect(states).toContain('offline')
   })
+
+  it('pauses hidden-page sockets and resumes with the latest sequence cursor', async () => {
+    const timers: TimerHandler[] = []
+    const client = new RealtimeAuctionClient({
+      onState: () => undefined,
+    }, {
+      ticketProvider: async () => 'ticket-value',
+      webSocketFactory: (url: string) => new FakeWebSocket(url) as unknown as WebSocket,
+      setTimeout: ((callback: TimerHandler) => {
+        timers.push(callback)
+        return timers.length as unknown as ReturnType<typeof setTimeout>
+      }) as unknown as typeof setTimeout,
+      clearTimeout: (() => undefined) as unknown as typeof clearTimeout,
+    })
+
+    client.start('42', 4)
+    await Promise.resolve()
+    const first = FakeWebSocket.instances[0]!
+    first.open()
+    client.setSequenceNo(7)
+    client.pause()
+    expect(client.currentState).toBe('offline')
+    client.resume()
+    const resume = timers[timers.length - 1]
+    if (typeof resume === 'function') resume()
+    await Promise.resolve()
+    const second = FakeWebSocket.instances[1]
+    expect(second).toBeDefined()
+    second!.open()
+    const subscribe = JSON.parse(second!.sent[0]!) as { payload: { lastSequenceNo: number } }
+    expect(subscribe.payload.lastSequenceNo).toBe(7)
+  })
+
+  it('does not create a socket when a pending ticket resolves after pause', async () => {
+    let resolveTicket!: (ticket: string) => void
+    const ticket = new Promise<string>((resolve) => {
+      resolveTicket = resolve
+    })
+    const client = new RealtimeAuctionClient({}, {
+      ticketProvider: () => ticket,
+      webSocketFactory: (url: string) => new FakeWebSocket(url) as unknown as WebSocket,
+    })
+
+    client.start('42')
+    client.pause()
+    resolveTicket('ticket-value')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(FakeWebSocket.instances).toHaveLength(0)
+  })
 })

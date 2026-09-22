@@ -69,6 +69,7 @@ export class RealtimeAuctionClient {
   private reconnectAttempts = 0
   private state: RealtimeConnectionState = 'idle'
   private terminal = false
+  private paused = false
 
   constructor(handlers: RealtimeAuctionUpdateHandlers = {}, options: RealtimeAuctionClientOptions = {}) {
     this.handlers = handlers
@@ -95,6 +96,7 @@ export class RealtimeAuctionClient {
     this.sequenceNo = Math.max(0, lastSequenceNo)
     this.reconnectAttempts = 0
     this.terminal = false
+    this.paused = false
     this.stopped = false
     this.connect()
   }
@@ -120,14 +122,35 @@ export class RealtimeAuctionClient {
     this.socket?.close(1001, 'offline')
   }
 
+  pause(): void {
+    if (this.stopped || this.terminal || this.paused) return
+    this.paused = true
+    this.clearReconnectTimer()
+    this.clearPingTimer()
+    this.socket?.close(1001, 'page hidden')
+    this.socket = null
+    this.setState('offline', '页面已暂停实时连接')
+  }
+
+  resume(): void {
+    if (this.stopped || this.terminal || !this.paused) return
+    this.paused = false
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      this.setState('offline', '网络已离线')
+      return
+    }
+    this.reconnectAttempts = 0
+    this.scheduleReconnect(0)
+  }
+
   notifyOnline(): void {
-    if (this.stopped || this.terminal || this.socket?.readyState === WebSocket.OPEN) return
+    if (this.stopped || this.terminal || this.paused || this.socket?.readyState === WebSocket.OPEN) return
     this.reconnectAttempts = 0
     this.scheduleReconnect(0)
   }
 
   reconnectNow(): void {
-    if (this.stopped || this.terminal) return
+    if (this.stopped || this.terminal || this.paused) return
     this.reconnectAttempts = 0
     this.clearReconnectTimer()
     this.socket?.close(1000, 'reconnect')
@@ -135,11 +158,11 @@ export class RealtimeAuctionClient {
   }
 
   private async connect(): Promise<void> {
-    if (this.stopped || !this.auctionId) return
+    if (this.stopped || this.paused || !this.auctionId) return
     this.setState(this.reconnectAttempts > 0 ? 'recovering' : 'connecting')
     try {
       const ticket = await this.ticketProvider()
-      if (this.stopped) return
+      if (this.stopped || this.paused) return
       const url = `${this.websocketUrl}/ws/auctions?ticket=${encodeURIComponent(ticket)}`
       const socket = this.webSocketFactory(url)
       this.socket = socket
@@ -153,7 +176,7 @@ export class RealtimeAuctionClient {
   }
 
   private handleOpen(socket: WebSocket): void {
-    if (this.stopped || socket !== this.socket) return
+    if (this.stopped || this.paused || socket !== this.socket) return
     this.reconnectAttempts = 0
     this.sendSubscribe()
     this.clearPingTimer()
@@ -246,7 +269,7 @@ export class RealtimeAuctionClient {
   }
 
   private handleFailure(detail: string): void {
-    if (this.stopped || this.terminal) return
+    if (this.stopped || this.terminal || this.paused) return
     this.socket = null
     this.clearPingTimer()
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -263,7 +286,7 @@ export class RealtimeAuctionClient {
     if (socket !== this.socket) return
     this.socket = null
     this.clearPingTimer()
-    if (!this.stopped && !this.terminal) this.handleFailure('实时连接已断开')
+    if (!this.stopped && !this.terminal && !this.paused) this.handleFailure('实时连接已断开')
   }
 
   private scheduleReconnect(delay: number): void {
@@ -294,4 +317,3 @@ export class RealtimeAuctionClient {
     return result.data.ticket
   }
 }
-

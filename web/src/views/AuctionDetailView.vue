@@ -230,7 +230,11 @@ function connectRealtime(): void {
     onAuctionExtended: applyRealtimeExtended,
     onAuctionClosed: applyRealtimeClosed,
   })
-  realtimeClient.start(auctionId.value, Math.max(0, detail.value?.bidCount ?? 0))
+  const lastKnownSequenceNo = Math.max(
+    detail.value?.bidCount ?? 0,
+    ...bids.value.map((bid) => bid.sequenceNo),
+  )
+  realtimeClient.start(auctionId.value, Math.max(0, lastKnownSequenceNo))
 }
 
 function reconnectRealtime(): void {
@@ -243,6 +247,14 @@ function handleBrowserOffline(): void {
 
 function handleBrowserOnline(): void {
   realtimeClient?.notifyOnline()
+}
+
+function handleVisibilityChange(): void {
+  if (document.visibilityState === 'hidden') {
+    realtimeClient?.pause()
+  } else {
+    realtimeClient?.resume()
+  }
 }
 
 function cancelRegistrationPoll(): void {
@@ -413,12 +425,14 @@ watch(auctionId, () => {
 onMounted(() => {
   window.addEventListener('offline', handleBrowserOffline)
   window.addEventListener('online', handleBrowserOnline)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   void loadDetail()
 })
 onBeforeUnmount(() => {
   cancelRegistrationPoll()
   window.removeEventListener('offline', handleBrowserOffline)
   window.removeEventListener('online', handleBrowserOnline)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   realtimeClient?.stop()
 })
 </script>
