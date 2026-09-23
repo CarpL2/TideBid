@@ -137,6 +137,7 @@ registrations with:
 ```powershell
 .\scripts\realtime-instance.ps1 -Action Start
 .\scripts\check-nacos-registrations.ps1 -ExpectedRealtimeInstances 2
+.\scripts\smoke.ps1 -RealtimeMultiInstance
 .\scripts\realtime-instance.ps1 -Action Stop -AcknowledgeImpact
 ```
 
@@ -144,6 +145,9 @@ The secondary process uses the same Nacos service name, Redis fan-out and Rocket
 its PID and logs stay under the ignored `.runtime/realtime-instances/` directory. To rehearse the
 Redis failure path without deleting containers or volumes, use `redis-outage.ps1` with `Status`,
 `Suspend -AcknowledgeImpact`, and `Resume`.
+
+`-RealtimeMultiInstance` connects directly to both local Realtime ports, subscribes the same auction,
+submits one bid through Gateway, and verifies both sockets receive the same `eventId` and sequence.
 
 PIDs are stored in ignored `.runtime/apps/processes.json`; stdout and stderr are separated under
 `.runtime/apps/logs/<timestamp>/`. Repeating the start command recognizes the same healthy recorded
