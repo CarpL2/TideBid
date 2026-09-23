@@ -93,7 +93,7 @@
 - [x] 先发 SNAPSHOT，再按 sequence/eventId 刷新同步期间缓冲并进入 LIVE。（2026-09-22：Snapshot 在同一 session 锁内先发送；同步期间事件按 eventId 去重，已包含在 snapshot 的 bid sequence 被丢弃，剩余事件按到达顺序补发后释放缓冲。）
 - [x] 实现断线携带 lastSequenceNo 恢复、历史超限和不一致时 RESYNC_REQUIRED。（2026-09-22：服务端 SUBSCRIBE 校验客户端 lastSequenceNo 与 Snapshot 游标；超过 100 条返回 `HISTORY_GAP`，首尾 sequence 不连续、auctionId/游标倒退返回 `SNAPSHOT_INCONSISTENT`，不发送不完整 Snapshot。浏览器自动重连和页面状态机留在第 10 节。）
 - [x] 实现单 session 串行发送与 128 条有界发送队列。（2026-09-22：每个 session 使用独立 ArrayBlockingQueue，发送由单个 drain 串行执行，容量由 `queue.send-capacity` 配置，默认 128。）
-- [x] 慢消费者或缓冲溢出发送恢复提示并以 1013 关闭，不影响其他 session。（2026-09-22：队列满时清空待发消息，仅发送 `RESYNC_REQUIRED(BUFFER_OVERFLOW)`，随后以 1013 `TRY_AGAIN_LATER` 关闭；每个连接独立队列。）
+- [x] 慢消费者或缓冲溢出发送恢复提示并以 1013 关闭，不影响其他 session。（2026-09-22：队列满时清空待发消息，仅发送 `RESYNC_REQUIRED(BUFFER_OVERFLOW)`，随后以 1013 `TRY_AGAIN_LATER` 关闭；每个连接独立队列。2026-09-24：新增受控 Executor 单测，慢连接溢出只关闭慢连接，健康连接仍可发送。）
 - [x] 实现 30 秒心跳、90 秒空闲关闭和应用有界优雅停机。（2026-09-22：心跳协调器按配置发送 WebSocket Ping，客户端文本/Pong 刷新活动时间；租约按周期续期，空闲连接关闭，Bean 销毁时停止调度器和发送执行器。）
 - [x] 使用 fake session 覆盖并发广播、重复/乱序、关闭竞态和发送异常。（2026-09-22：Snapshot/广播 fake session 测试通过；handler 覆盖连接打开状态、PING/PONG、关闭和异常路径，完整 Realtime 模块测试通过。）
 
@@ -133,7 +133,7 @@
 - [x] 验证 Realtime 停止期间 Auction/Trade 主链路正常，恢复后 snapshot 收敛。（2026-09-24：`smoke.ps1 -RealtimeRestartRecovery` 停止 9204 后，9104 在 Consumer Group 重平衡后继续收到报价；9204 重启后新连接通过 Snapshot 恢复最新 `lastSequenceNo/bidCount`，后续报价和历史校验通过。）
 - [x] 验证 Redis 停止时新 ticket 返回 503、MQ 不丢 ACK，恢复后重新连接成功。（2026-09-23：预先取得 JWT 后暂停 Redis，`POST /api/realtime/tickets` 返回 503；`redis-outage.ps1 -Action Resume` 恢复健康，随后 Realtime smoke 通过。）
 - [x] 验证一个 Realtime 实例重启，另一个实例连接继续收到广播。（2026-09-24：同一 `-RealtimeRestartRecovery` 场景覆盖 9204 停止、9104 继续推送、9204 重启和 Snapshot 恢复。）
-- [ ] 验证慢消费者被隔离，正常消费者仍持续收到有序消息。
+- [x] 验证慢消费者被隔离，正常消费者仍持续收到有序消息。（2026-09-24：`RealtimeWebSocketSessionRegistryTest#slowConsumerOverflowDoesNotCloseHealthyConsumer` 通过，验证慢连接 `1013`/恢复消息和健康连接独立发送。）
 - [ ] 使用两个浏览器用户演示代理反击、反狙击延时、断线恢复和最终订单。
 - [x] 运行根目录 `mvn clean verify`，所有模块和真实 MySQL 核心测试通过。（2026-09-24：停止应用进程后执行 `mvn clean verify`，11 个 Reactor 模块 BUILD SUCCESS；真实 MySQL 核心链路另由 `-ReliableTrade`、`-RealtimeBrokerRecovery` 等整栈 smoke 覆盖。）
 - [x] 运行前端 lint、类型检查、全部测试和生产构建。（2026-09-24：`pnpm lint`、`pnpm type-check`、`pnpm test` 通过，20 个测试文件/56 项测试全通过，`pnpm build-only` 成功。）

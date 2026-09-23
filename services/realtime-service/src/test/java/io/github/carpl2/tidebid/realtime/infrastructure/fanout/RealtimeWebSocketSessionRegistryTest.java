@@ -4,14 +4,23 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.contracts.BidAcceptedEvent;
 import io.github.carpl2.tidebid.contracts.EventEnvelope;
 import io.github.carpl2.tidebid.contracts.RealtimeAuctionStatus;
+import io.github.carpl2.tidebid.contracts.RealtimeConnected;
+import io.github.carpl2.tidebid.contracts.RealtimeMessageType;
+import io.github.carpl2.tidebid.contracts.RealtimeResyncReason;
+import io.github.carpl2.tidebid.contracts.RealtimeResyncRequired;
+import io.github.carpl2.tidebid.contracts.RealtimeServerMessage;
 import io.github.carpl2.tidebid.contracts.RealtimeSnapshot;
 import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketAttributes;
+import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketSendQueue;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -76,6 +85,42 @@ class RealtimeWebSocketSessionRegistryTest {
         assertThat(captor.getAllValues().get(0).getPayload()).contains("\"type\":\"SNAPSHOT\"");
         assertThat(captor.getAllValues().get(1).getPayload()).contains("\"bidId\":\"11\"")
                 .doesNotContain("\"bidId\":\"10\"");
+    }
+
+    @Test
+    void slowConsumerOverflowDoesNotCloseHealthyConsumer() throws Exception {
+        WebSocketSession slow = mock(WebSocketSession.class);
+        WebSocketSession healthy = mock(WebSocketSession.class);
+        when(slow.isOpen()).thenReturn(true);
+        when(healthy.isOpen()).thenReturn(true);
+
+        List<Runnable> drains = new ArrayList<>();
+        RealtimeServerMessage<RealtimeConnected> connected = new RealtimeServerMessage<>(
+                RealtimeMessageType.CONNECTED, 1, "connected-1", Instant.parse("2026-09-24T00:00:00Z"),
+                new RealtimeConnected("connection-1", Instant.parse("2026-09-24T00:00:00Z"), 15));
+        RealtimeWebSocketSendQueue slowQueue = new RealtimeWebSocketSendQueue(
+                slow, new ObjectMapper().findAndRegisterModules(), 1, drains::add);
+        RealtimeWebSocketSendQueue healthyQueue = new RealtimeWebSocketSendQueue(
+                healthy, new ObjectMapper().findAndRegisterModules(), 1, drains::add);
+
+        assertThat(slowQueue.offer(connected)).isTrue();
+        assertThat(healthyQueue.offer(connected)).isTrue();
+        drains.get(1).run();
+        assertThat(healthyQueue.offer(connected)).isTrue();
+        assertThat(slowQueue.offer(connected)).isFalse();
+
+        RealtimeServerMessage<RealtimeResyncRequired> recovery = new RealtimeServerMessage<>(
+                RealtimeMessageType.RESYNC_REQUIRED, 1, "recovery-1", Instant.parse("2026-09-24T00:00:01Z"),
+                new RealtimeResyncRequired(42L, RealtimeResyncReason.BUFFER_OVERFLOW, 7L));
+        slowQueue.overflow(recovery);
+        drains.get(0).run();
+
+        verify(slow).sendMessage(any(TextMessage.class));
+        org.mockito.ArgumentCaptor<CloseStatus> slowClose = org.mockito.ArgumentCaptor.forClass(CloseStatus.class);
+        verify(slow).close(slowClose.capture());
+        assertThat(slowClose.getValue().getCode()).isEqualTo(1013);
+        verify(healthy).sendMessage(any(TextMessage.class));
+        verify(healthy, never()).close(any(CloseStatus.class));
     }
 
     private static EventEnvelope<BidAcceptedEvent> bidEvent(long bidId, long sequenceNo, long bidderId,

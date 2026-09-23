@@ -190,7 +190,7 @@
 - [x] 停一个 Realtime 实例后另一实例连接不受影响，原连接可重连恢复。（2026-09-24：`smoke.ps1 -RealtimeRestartRecovery` 验证 9204 停止期间 9104 收到报价，9204 重启后新连接 Snapshot 收敛。）
 - [ ] 停全部 Realtime 时 Auction 报价、延时、关拍、订单和支付继续正确。
 - [ ] 人工制造重复 MQ、乱序 Pub/Sub 和 sequence gap，页面最终与 MySQL 一致。
-- [ ] 慢客户端被关闭，正常客户端仍持续接收。
+- [x] 慢客户端被关闭，正常客户端仍持续接收。（2026-09-24：Realtime 定向测试验证慢连接队列溢出后只发送 `RESYNC_REQUIRED(BUFFER_OVERFLOW)` 并关闭 1013，健康连接未被关闭且仍发送消息。）
 - [ ] 重启整栈后代理规则、动态 endAt、报价和终态保持一致。
 - [ ] 全程未执行 `docker compose down -v` 或删除用户数据卷。
 
