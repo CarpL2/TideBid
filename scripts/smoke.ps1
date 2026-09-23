@@ -20,6 +20,9 @@ param(
     [switch]$RealtimeMultiInstance,
 
     [Parameter()]
+    [switch]$RealtimeRestartRecovery,
+
+    [Parameter()]
     [switch]$ReliableTrade,
 
     [Parameter()]
@@ -80,7 +83,7 @@ function ConvertTo-Sha256Hex {
 if ($ReliableTrade) {
     $AuctionCore = $true
 }
-if ($RealtimeProxy -or $RealtimeMultiInstance) {
+if ($RealtimeProxy -or $RealtimeMultiInstance -or $RealtimeRestartRecovery) {
     $AuctionCore = $true
 }
 if ($PauseAfterTimeoutPending -and (-not $ReliableTrade -or $ReliableTradeCoverage -ne 'All')) {
@@ -529,6 +532,109 @@ function Invoke-RealtimeMultiInstanceCheck {
                     ).GetAwaiter().GetResult()
                 } catch { $entry.Socket.Abort() }
             }
+            $entry.Socket.Dispose()
+        }
+    }
+}
+
+function Invoke-RealtimeRestartRecoveryCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$Authorization,
+        [Parameter(Mandatory = $true)][string]$AuctionId
+    )
+
+    $secondaryScript = Join-Path $PSScriptRoot 'realtime-instance.ps1'
+    $sockets = [System.Collections.Generic.List[object]]::new()
+    try {
+        foreach ($port in @(9104, 9204)) {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/actuator/health" -TimeoutSec 3
+            Assert-Value -Condition ([string]$health.status -eq 'UP') `
+                -Message "Realtime instance $port is not healthy"
+            $ticketResponse = Invoke-SmokeRequest `
+                -Step "realtime-restart-ticket-$port" -Method POST `
+                -Path '/api/realtime/tickets' -ExpectedStatus 200 `
+                -Headers @{ Authorization = $Authorization } -ApiEnvelope -Quiet
+            $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.SetRequestHeader('Origin', 'http://127.0.0.1:5173')
+            $connectCancellation = [Threading.CancellationTokenSource]::new($RequestTimeoutSeconds * 1000)
+            try {
+                $uri = [Uri]::new("ws://127.0.0.1:$port/ws/auctions?ticket=$([Uri]::EscapeDataString([string]$ticketResponse.data.ticket))")
+                $socket.ConnectAsync($uri, $connectCancellation.Token).GetAwaiter().GetResult()
+            } finally { $connectCancellation.Dispose() }
+            Assert-Value -Condition ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) `
+                -Message "Realtime instance $port WebSocket did not open"
+            $sockets.Add([pscustomobject]@{ Port = $port; Socket = $socket })
+        }
+
+        foreach ($entry in $sockets) {
+            $subscribe = @{
+                type = 'SUBSCRIBE'; protocolVersion = 1; requestId = New-StepTraceId -Step "restart-subscribe-$($entry.Port)"
+                payload = @{ auctionId = $AuctionId; lastSequenceNo = 0 }
+            } | ConvertTo-Json -Compress
+            $bytes = [Text.Encoding]::UTF8.GetBytes($subscribe)
+            $entry.Socket.SendAsync([ArraySegment[byte]]::new($bytes),
+                [System.Net.WebSockets.WebSocketMessageType]::Text, $true,
+                [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+            $messages = @()
+            while ((@($messages | ForEach-Object { [string]$_.type }) -notcontains 'SNAPSHOT')) {
+                $messages += Receive-RealtimeMessage -Socket $entry.Socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+            }
+        }
+
+        & $secondaryScript -Action Stop -AcknowledgeImpact
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(20)
+        do {
+            $secondaryUp = $false
+            try { $secondaryUp = ([string](Invoke-RestMethod http://127.0.0.1:9204/actuator/health -TimeoutSec 1).status -eq 'UP') } catch { }
+            if (-not $secondaryUp) { break }
+            Start-Sleep -Milliseconds 500
+        } while ([DateTimeOffset]::UtcNow -lt $deadline)
+        # Allow Nacos/RocketMQ consumer-group rebalancing to move the partition to 9104.
+        Start-Sleep -Seconds 8
+
+        $bid = Invoke-SmokeRequest -Step 'restart-recovery-bid' -Method POST -Path '/api/bids' `
+            -ExpectedStatus 200 -Headers @{ Authorization = $Authorization; 'X-Request-Id' = "smoke-restart-bid-$([Guid]::NewGuid().ToString('N').Substring(0, 16))" } `
+            -Body @{ auctionId = $AuctionId; amount = '100.00' } -ApiEnvelope
+        Assert-Value -Condition ([long]$bid.data.lastSequenceNo -eq 1) -Message 'restart recovery bid sequence is not 1'
+
+        $primary = @($sockets | Where-Object { $_.Port -eq 9104 })[0]
+        $primaryEvent = $null
+        while ($null -eq $primaryEvent) {
+            $candidate = Receive-RealtimeMessage -Socket $primary.Socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+            if ([string]$candidate.type -eq 'BID_ACCEPTED') { $primaryEvent = $candidate }
+        }
+        Assert-Value -Condition ([long]$primaryEvent.payload.sequenceNo -eq 1) `
+            -Message 'primary Realtime did not receive the bid while secondary was stopped'
+
+        & $secondaryScript -Action Start
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(45)
+        do {
+            try { $secondaryUp = ([string](Invoke-RestMethod http://127.0.0.1:9204/actuator/health -TimeoutSec 1).status -eq 'UP') } catch { $secondaryUp = $false }
+            if ($secondaryUp) { break }
+            Start-Sleep -Milliseconds 750
+        } while ([DateTimeOffset]::UtcNow -lt $deadline)
+        Assert-Value -Condition $secondaryUp -Message 'secondary Realtime did not recover'
+
+        $ticketResponse = Invoke-SmokeRequest -Step 'restart-recovery-ticket' -Method POST `
+            -Path '/api/realtime/tickets' -ExpectedStatus 200 -Headers @{ Authorization = $Authorization } -ApiEnvelope -Quiet
+        $recovered = [System.Net.WebSockets.ClientWebSocket]::new()
+        $recovered.Options.SetRequestHeader('Origin', 'http://127.0.0.1:5173')
+        $recovered.ConnectAsync([Uri]::new("ws://127.0.0.1:9204/ws/auctions?ticket=$([Uri]::EscapeDataString([string]$ticketResponse.data.ticket))"),
+            [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        $subscribe = @{ type = 'SUBSCRIBE'; protocolVersion = 1; requestId = New-StepTraceId -Step 'restart-recovery-subscribe'; payload = @{ auctionId = $AuctionId; lastSequenceNo = 0 } } | ConvertTo-Json -Compress
+        $recovered.SendAsync([ArraySegment[byte]]::new([Text.Encoding]::UTF8.GetBytes($subscribe)), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        $snapshot = $null
+        while ($null -eq $snapshot) {
+            $message = Receive-RealtimeMessage -Socket $recovered -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+            if ([string]$message.type -eq 'SNAPSHOT') { $snapshot = $message }
+        }
+        Assert-Value -Condition ([long]$snapshot.payload.lastSequenceNo -ge 1 -and [long]$snapshot.payload.bidCount -ge 1) `
+            -Message 'restarted Realtime did not recover the latest Auction snapshot'
+        Write-Host '[PASS] realtime-restart-snapshot-recovery'
+        $recovered.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, 'restart recovery complete', [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+    } finally {
+        foreach ($entry in $sockets) {
+            if ($entry.Socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) { try { $entry.Socket.Abort() } catch { } }
             $entry.Socket.Dispose()
         }
     }
@@ -1332,7 +1438,11 @@ try {
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $opened.minimumNextBid 'minimumNextBid') -eq [decimal]100.00) `
         -Message 'first minimum bid is not the start price'
 
-    if ($RealtimeMultiInstance) {
+    if ($RealtimeRestartRecovery) {
+        Invoke-RealtimeRestartRecoveryCheck `
+            -Authorization $buyerOneAuthorization `
+            -AuctionId $auctionId
+    } elseif ($RealtimeMultiInstance) {
         $buyerOneBid = Invoke-RealtimeMultiInstanceCheck `
             -Authorization $buyerOneAuthorization `
             -AuctionId $auctionId
@@ -1349,7 +1459,7 @@ try {
         Wait-SmokeCheckpoint -Prompt 'Submit the bid after completing the external fault action.'
     }
 
-    if (-not $RealtimeMultiInstance) {
+    if (-not ($RealtimeMultiInstance -or $RealtimeRestartRecovery)) {
         $buyerOneBidRequest = "smoke-bid1-$($suffix.Substring(0, 12))"
         $buyerOneBid = Invoke-SmokeRequest `
             -Step 'buyer1-bid' `
