@@ -17,6 +17,9 @@ param(
     [switch]$RealtimeProxy,
 
     [Parameter()]
+    [switch]$RealtimeMultiInstance,
+
+    [Parameter()]
     [switch]$ReliableTrade,
 
     [Parameter()]
@@ -77,7 +80,7 @@ function ConvertTo-Sha256Hex {
 if ($ReliableTrade) {
     $AuctionCore = $true
 }
-if ($RealtimeProxy) {
+if ($RealtimeProxy -or $RealtimeMultiInstance) {
     $AuctionCore = $true
 }
 if ($PauseAfterTimeoutPending -and (-not $ReliableTrade -or $ReliableTradeCoverage -ne 'All')) {
@@ -351,6 +354,183 @@ function Invoke-RealtimeWebSocketCheck {
         $receiveCancellation.Dispose()
         $connectCancellation.Dispose()
         $socket.Dispose()
+    }
+}
+
+function Receive-RealtimeMessage {
+    param(
+        [Parameter(Mandatory = $true)][System.Net.WebSockets.ClientWebSocket]$Socket,
+        [Parameter(Mandatory = $true)][int]$TimeoutMilliseconds
+    )
+
+    $cancellation = [Threading.CancellationTokenSource]::new($TimeoutMilliseconds)
+    try {
+        $buffer = New-Object byte[] 8192
+        $messageBuffer = [IO.MemoryStream]::new()
+        do {
+            $result = $Socket.ReceiveAsync(
+                [ArraySegment[byte]]::new($buffer), $cancellation.Token
+            ).GetAwaiter().GetResult()
+            if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                throw 'Realtime WebSocket closed while waiting for the multi-instance event.'
+            }
+            $messageBuffer.Write($buffer, 0, $result.Count)
+        } while (-not $result.EndOfMessage)
+        return [Text.Encoding]::UTF8.GetString($messageBuffer.ToArray()) | ConvertFrom-Json
+    } finally {
+        $cancellation.Dispose()
+    }
+}
+
+function Invoke-RealtimeMultiInstanceCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$Authorization,
+        [Parameter(Mandatory = $true)][string]$AuctionId
+    )
+
+    foreach ($port in @(9104, 9204)) {
+        try {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/actuator/health" -TimeoutSec 2
+            Assert-Value -Condition ([string]$health.status -eq 'UP') `
+                -Message "Realtime instance $port is not healthy"
+        } catch {
+            throw "Realtime multi-instance check requires healthy instances on ports 9104 and 9204. Instance $port is unavailable."
+        }
+    }
+
+    $sockets = [System.Collections.Generic.List[object]]::new()
+    try {
+        foreach ($port in @(9104, 9204)) {
+            $ticketResponse = Invoke-SmokeRequest `
+                -Step "realtime-ticket-$port" `
+                -Method POST `
+                -Path '/api/realtime/tickets' `
+                -ExpectedStatus 200 `
+                -Headers @{ Authorization = $Authorization } `
+                -ApiEnvelope `
+                -Quiet
+            $ticket = [string]$ticketResponse.data.ticket
+            Assert-Value -Condition (-not [string]::IsNullOrWhiteSpace($ticket)) `
+                -Message "realtime ticket for instance $port is empty"
+
+            $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.SetRequestHeader('Origin', 'http://127.0.0.1:5173')
+            $connectCancellation = [Threading.CancellationTokenSource]::new($RequestTimeoutSeconds * 1000)
+            try {
+                $uri = [Uri]::new(
+                    "ws://127.0.0.1:$port/ws/auctions?ticket=$([Uri]::EscapeDataString($ticket))"
+                )
+                $socket.ConnectAsync($uri, $connectCancellation.Token).GetAwaiter().GetResult()
+            } finally {
+                $connectCancellation.Dispose()
+            }
+            Assert-Value -Condition ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) `
+                -Message "Realtime instance $port WebSocket did not open"
+            $sockets.Add([pscustomobject]@{ Port = $port; Socket = $socket })
+        }
+
+        foreach ($entry in $sockets) {
+            $requestId = New-StepTraceId -Step "realtime-subscribe-$($entry.Port)"
+            $subscribe = @{
+                type = 'SUBSCRIBE'
+                protocolVersion = 1
+                requestId = $requestId
+                payload = @{ auctionId = $AuctionId; lastSequenceNo = 0 }
+            } | ConvertTo-Json -Compress
+            $bytes = [Text.Encoding]::UTF8.GetBytes($subscribe)
+            $entry.Socket.SendAsync(
+                [ArraySegment[byte]]::new($bytes),
+                [System.Net.WebSockets.WebSocketMessageType]::Text,
+                $true,
+                [Threading.CancellationToken]::None
+            ).GetAwaiter().GetResult()
+        }
+
+        foreach ($entry in $sockets) {
+            $received = @()
+            while ($received.Count -lt 2 -or $received.type -notcontains 'CONNECTED' -or
+                $received.type -notcontains 'SNAPSHOT') {
+                $received += Receive-RealtimeMessage -Socket $entry.Socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+            }
+            Assert-Value -Condition ($received.type -contains 'CONNECTED' -and $received.type -contains 'SNAPSHOT') `
+                -Message "Realtime instance $($entry.Port) did not return CONNECTED and SNAPSHOT"
+            $snapshot = @($received | Where-Object { $_.type -eq 'SNAPSHOT' })[0]
+            Assert-Value -Condition ([string]$snapshot.payload.auctionId -ceq $AuctionId) `
+                -Message "Realtime instance $($entry.Port) snapshot auctionId mismatch"
+        }
+
+        $bidRequestId = "smoke-multi-bid-$([Guid]::NewGuid().ToString('N').Substring(0, 16))"
+        $bid = Invoke-SmokeRequest `
+            -Step 'multi-instance-bid' `
+            -Method POST `
+            -Path '/api/bids' `
+            -ExpectedStatus 200 `
+            -Headers @{ Authorization = $Authorization; 'X-Request-Id' = $bidRequestId } `
+            -Body @{ auctionId = $AuctionId; amount = '100.00' } `
+            -ApiEnvelope
+        Assert-Value -Condition ([long]$bid.data.lastSequenceNo -eq 1) `
+            -Message 'multi-instance bid sequence is not 1'
+        $receiveOperations = foreach ($entry in $sockets) {
+            $buffer = New-Object byte[] 8192
+            $cancellation = [Threading.CancellationTokenSource]::new($RequestTimeoutSeconds * 1000)
+            [pscustomobject]@{
+                Port = [int]$entry.Port
+                Socket = $entry.Socket
+                Buffer = $buffer
+                Cancellation = $cancellation
+                Task = $entry.Socket.ReceiveAsync(
+                    [ArraySegment[byte]]::new($buffer), $cancellation.Token)
+            }
+        }
+        $events = @{}
+        foreach ($operation in $receiveOperations) {
+            try {
+                $result = $operation.Task.GetAwaiter().GetResult()
+                $messageBuffer = [IO.MemoryStream]::new()
+                $messageBuffer.Write($operation.Buffer, 0, $result.Count)
+                while (-not $result.EndOfMessage) {
+                    $result = $operation.Socket.ReceiveAsync(
+                        [ArraySegment[byte]]::new($operation.Buffer),
+                        $operation.Cancellation.Token).GetAwaiter().GetResult()
+                    $messageBuffer.Write($operation.Buffer, 0, $result.Count)
+                }
+                $candidate = [Text.Encoding]::UTF8.GetString($messageBuffer.ToArray()) | ConvertFrom-Json
+                if ([string]$candidate.type -eq 'BID_ACCEPTED') {
+                    $events[$operation.Port] = $candidate
+                } elseif ([string]$candidate.type -eq 'ERROR') {
+                    throw "Realtime instance $($operation.Port) returned error $($candidate.payload.code)"
+                }
+            } finally {
+                $operation.Cancellation.Dispose()
+            }
+        }
+        $eventIds = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($entry in $sockets) {
+            $event = $events[[int]$entry.Port]
+            Assert-Value -Condition ($null -ne $event) `
+                -Message "Realtime instance $($entry.Port) did not receive BID_ACCEPTED"
+            Assert-Value -Condition ([string]$event.payload.auctionId -ceq $AuctionId -and
+                [long]$event.payload.sequenceNo -eq 1) `
+                -Message "Realtime instance $($entry.Port) returned an invalid BID_ACCEPTED"
+            $eventIds.Add([string]$event.payload.eventId) | Out-Null
+        }
+        Assert-Value -Condition ($eventIds.Count -eq 1) `
+            -Message 'The two Realtime instances did not fan out the same eventId'
+        Write-Host '[PASS] realtime-multi-instance-fanout'
+        return $bid
+    } finally {
+        foreach ($entry in $sockets) {
+            if ($entry.Socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                try {
+                    $entry.Socket.CloseAsync(
+                        [System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure,
+                        'multi-instance smoke complete',
+                        [Threading.CancellationToken]::None
+                    ).GetAwaiter().GetResult()
+                } catch { $entry.Socket.Abort() }
+            }
+            $entry.Socket.Dispose()
+        }
     }
 }
 
@@ -1152,7 +1332,11 @@ try {
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $opened.minimumNextBid 'minimumNextBid') -eq [decimal]100.00) `
         -Message 'first minimum bid is not the start price'
 
-    if ($RealtimeProxy) {
+    if ($RealtimeMultiInstance) {
+        $buyerOneBid = Invoke-RealtimeMultiInstanceCheck `
+            -Authorization $buyerOneAuthorization `
+            -AuctionId $auctionId
+    } elseif ($RealtimeProxy) {
         Invoke-RealtimeWebSocketCheck `
             -Authorization $buyerOneAuthorization `
             -AuctionId $auctionId `
@@ -1165,30 +1349,32 @@ try {
         Wait-SmokeCheckpoint -Prompt 'Submit the bid after completing the external fault action.'
     }
 
-    $buyerOneBidRequest = "smoke-bid1-$($suffix.Substring(0, 12))"
-    $buyerOneBid = Invoke-SmokeRequest `
-        -Step 'buyer1-bid' `
-        -Method POST `
-        -Path '/api/bids' `
-        -ExpectedStatus 200 `
-        -Headers @{ Authorization = $buyerOneAuthorization; 'X-Request-Id' = $buyerOneBidRequest } `
-        -Body @{ auctionId = $auctionId; amount = '100.00' } `
-        -ApiEnvelope
-    Assert-Value -Condition (([long]$buyerOneBid.data.lastSequenceNo -eq 1) -and
-        ([long]$buyerOneBid.data.acceptedBids[0].sequenceNo -eq 1)) `
-        -Message 'buyer1 bid sequence is not 1'
+    if (-not $RealtimeMultiInstance) {
+        $buyerOneBidRequest = "smoke-bid1-$($suffix.Substring(0, 12))"
+        $buyerOneBid = Invoke-SmokeRequest `
+            -Step 'buyer1-bid' `
+            -Method POST `
+            -Path '/api/bids' `
+            -ExpectedStatus 200 `
+            -Headers @{ Authorization = $buyerOneAuthorization; 'X-Request-Id' = $buyerOneBidRequest } `
+            -Body @{ auctionId = $auctionId; amount = '100.00' } `
+            -ApiEnvelope
+        Assert-Value -Condition (([long]$buyerOneBid.data.lastSequenceNo -eq 1) -and
+            ([long]$buyerOneBid.data.acceptedBids[0].sequenceNo -eq 1)) `
+            -Message 'buyer1 bid sequence is not 1'
 
-    $buyerOneBidReplay = Invoke-SmokeRequest `
-        -Step 'replay-buyer1-bid' `
-        -Method POST `
-        -Path '/api/bids' `
-        -ExpectedStatus 200 `
-        -Headers @{ Authorization = $buyerOneAuthorization; 'X-Request-Id' = $buyerOneBidRequest } `
-        -Body @{ auctionId = $auctionId; amount = '100.00' } `
-        -ApiEnvelope
-    Assert-Value -Condition ([string]$buyerOneBidReplay.data.acceptedBids[0].bidId -ceq
-        [string]$buyerOneBid.data.acceptedBids[0].bidId) `
-        -Message 'bid replay returned a different bid ID'
+        $buyerOneBidReplay = Invoke-SmokeRequest `
+            -Step 'replay-buyer1-bid' `
+            -Method POST `
+            -Path '/api/bids' `
+            -ExpectedStatus 200 `
+            -Headers @{ Authorization = $buyerOneAuthorization; 'X-Request-Id' = $buyerOneBidRequest } `
+            -Body @{ auctionId = $auctionId; amount = '100.00' } `
+            -ApiEnvelope
+        Assert-Value -Condition ([string]$buyerOneBidReplay.data.acceptedBids[0].bidId -ceq
+            [string]$buyerOneBid.data.acceptedBids[0].bidId) `
+            -Message 'bid replay returned a different bid ID'
+    }
 
     $buyerTwoBid = Invoke-SmokeRequest `
         -Step 'buyer2-bid' `
