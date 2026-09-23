@@ -23,6 +23,9 @@ param(
     [switch]$RealtimeRestartRecovery,
 
     [Parameter()]
+    [switch]$RealtimeBrokerRecovery,
+
+    [Parameter()]
     [switch]$ReliableTrade,
 
     [Parameter()]
@@ -83,7 +86,7 @@ function ConvertTo-Sha256Hex {
 if ($ReliableTrade) {
     $AuctionCore = $true
 }
-if ($RealtimeProxy -or $RealtimeMultiInstance -or $RealtimeRestartRecovery) {
+if ($RealtimeProxy -or $RealtimeMultiInstance -or $RealtimeRestartRecovery -or $RealtimeBrokerRecovery) {
     $AuctionCore = $true
 }
 if ($PauseAfterTimeoutPending -and (-not $ReliableTrade -or $ReliableTradeCoverage -ne 'All')) {
@@ -636,6 +639,58 @@ function Invoke-RealtimeRestartRecoveryCheck {
         foreach ($entry in $sockets) {
             if ($entry.Socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) { try { $entry.Socket.Abort() } catch { } }
             $entry.Socket.Dispose()
+        }
+    }
+}
+
+function Invoke-RealtimeBrokerRecoveryCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$Authorization,
+        [Parameter(Mandatory = $true)][string]$AuctionId
+    )
+
+    $rocketMqScript = Join-Path $PSScriptRoot 'rocketmq-outage.ps1'
+    $socket = $null
+    $brokerSuspended = $false
+    try {
+        $ticket = Invoke-SmokeRequest -Step 'realtime-broker-ticket' -Method POST `
+            -Path '/api/realtime/tickets' -ExpectedStatus 200 -Headers @{ Authorization = $Authorization } -ApiEnvelope -Quiet
+        $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+        $socket.Options.SetRequestHeader('Origin', 'http://127.0.0.1:5173')
+        $socket.ConnectAsync([Uri]::new("ws://127.0.0.1:9104/ws/auctions?ticket=$([Uri]::EscapeDataString([string]$ticket.data.ticket))"),
+            [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        $subscribe = @{ type = 'SUBSCRIBE'; protocolVersion = 1; requestId = New-StepTraceId -Step 'broker-recovery-subscribe'; payload = @{ auctionId = $AuctionId; lastSequenceNo = 0 } } | ConvertTo-Json -Compress
+        $socket.SendAsync([ArraySegment[byte]]::new([Text.Encoding]::UTF8.GetBytes($subscribe)), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        $snapshot = $null
+        while ($null -eq $snapshot) {
+            $message = Receive-RealtimeMessage -Socket $socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+            if ([string]$message.type -eq 'SNAPSHOT') { $snapshot = $message }
+        }
+
+        & $rocketMqScript -Action Suspend -AcknowledgeImpact
+        $brokerSuspended = $true
+        $bid = Invoke-SmokeRequest -Step 'broker-recovery-bid' -Method POST -Path '/api/bids' `
+            -ExpectedStatus 200 -Headers @{ Authorization = $Authorization; 'X-Request-Id' = "smoke-broker-recovery-$([Guid]::NewGuid().ToString('N').Substring(0, 16))" } `
+            -Body @{ auctionId = $AuctionId; amount = '100.00' } -ApiEnvelope
+        Assert-Value -Condition ([long]$bid.data.lastSequenceNo -eq 1) -Message 'broker recovery bid sequence is not 1'
+
+        & $rocketMqScript -Action Resume
+        $brokerSuspended = $false
+        $event = $null
+        while ($null -eq $event) {
+            $message = Receive-RealtimeMessage -Socket $socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+            if ([string]$message.type -eq 'BID_ACCEPTED') { $event = $message }
+        }
+        Assert-Value -Condition ([string]$event.payload.auctionId -ceq $AuctionId -and
+            [long]$event.payload.sequenceNo -eq 1) `
+            -Message 'connected Realtime client did not receive the Broker-recovered BID_ACCEPTED event'
+        Write-Host '[PASS] realtime-broker-backlog-recovery'
+        return $bid
+    } finally {
+        if ($brokerSuspended) { try { & $rocketMqScript -Action Resume } catch { } }
+        if ($null -ne $socket) {
+            if ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) { try { $socket.Abort() } catch { } }
+            $socket.Dispose()
         }
     }
 }
@@ -1438,7 +1493,11 @@ try {
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $opened.minimumNextBid 'minimumNextBid') -eq [decimal]100.00) `
         -Message 'first minimum bid is not the start price'
 
-    if ($RealtimeRestartRecovery) {
+    if ($RealtimeBrokerRecovery) {
+        $buyerOneBid = Invoke-RealtimeBrokerRecoveryCheck `
+            -Authorization $buyerOneAuthorization `
+            -AuctionId $auctionId
+    } elseif ($RealtimeRestartRecovery) {
         Invoke-RealtimeRestartRecoveryCheck `
             -Authorization $buyerOneAuthorization `
             -AuctionId $auctionId
@@ -1459,7 +1518,7 @@ try {
         Wait-SmokeCheckpoint -Prompt 'Submit the bid after completing the external fault action.'
     }
 
-    if (-not ($RealtimeMultiInstance -or $RealtimeRestartRecovery)) {
+    if (-not ($RealtimeMultiInstance -or $RealtimeRestartRecovery -or $RealtimeBrokerRecovery)) {
         $buyerOneBidRequest = "smoke-bid1-$($suffix.Substring(0, 12))"
         $buyerOneBid = Invoke-SmokeRequest `
             -Step 'buyer1-bid' `
