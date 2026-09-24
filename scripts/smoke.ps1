@@ -26,6 +26,9 @@ param(
     [switch]$RealtimeBrokerRecovery,
 
     [Parameter()]
+    [switch]$RealtimeProxyDemo,
+
+    [Parameter()]
     [switch]$ReliableTrade,
 
     [Parameter()]
@@ -86,7 +89,7 @@ function ConvertTo-Sha256Hex {
 if ($ReliableTrade) {
     $AuctionCore = $true
 }
-if ($RealtimeProxy -or $RealtimeMultiInstance -or $RealtimeRestartRecovery -or $RealtimeBrokerRecovery) {
+if ($RealtimeProxy -or $RealtimeMultiInstance -or $RealtimeRestartRecovery -or $RealtimeBrokerRecovery -or $RealtimeProxyDemo) {
     $AuctionCore = $true
 }
 if ($PauseAfterTimeoutPending -and (-not $ReliableTrade -or $ReliableTradeCoverage -ne 'All')) {
@@ -186,7 +189,7 @@ function Get-HttpFailureDetails {
 function Invoke-SmokeRequest {
     param(
         [Parameter(Mandatory = $true)][string]$Step,
-        [Parameter(Mandatory = $true)][ValidateSet('GET', 'POST')][string]$Method,
+        [Parameter(Mandatory = $true)][ValidateSet('GET', 'POST', 'PUT', 'DELETE')][string]$Method,
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][int]$ExpectedStatus,
         [Parameter()][hashtable]$Headers = @{},
@@ -691,6 +694,154 @@ function Invoke-RealtimeBrokerRecoveryCheck {
         if ($null -ne $socket) {
             if ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) { try { $socket.Abort() } catch { } }
             $socket.Dispose()
+        }
+    }
+}
+
+function Invoke-RealtimeProxyDemoCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$BuyerOneAuthorization,
+        [Parameter(Mandatory = $true)][string]$BuyerTwoAuthorization,
+        [Parameter(Mandatory = $true)][string]$AuctionId,
+        [Parameter(Mandatory = $true)][string]$Suffix
+    )
+
+    $sockets = [System.Collections.Generic.List[object]]::new()
+    $reconnected = $null
+    $gatewayUri = [Uri]$GatewayBaseUri
+    $webSocketScheme = if ($gatewayUri.Scheme -eq 'https') { 'wss' } else { 'ws' }
+    try {
+        foreach ($entry in @(
+            [pscustomobject]@{ Label = 'buyer1'; Authorization = $BuyerOneAuthorization },
+            [pscustomobject]@{ Label = 'buyer2'; Authorization = $BuyerTwoAuthorization }
+        )) {
+            $ticketResponse = Invoke-SmokeRequest `
+                -Step "proxy-demo-$($entry.Label)-ticket" -Method POST -Path '/api/realtime/tickets' `
+                -ExpectedStatus 200 -Headers @{ Authorization = $entry.Authorization } -ApiEnvelope -Quiet
+            $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.SetRequestHeader('Origin', 'http://127.0.0.1:5173')
+            $socketUri = [Uri]::new(
+                "${webSocketScheme}://$($gatewayUri.Authority)/ws/auctions?ticket=$([Uri]::EscapeDataString([string]$ticketResponse.data.ticket))"
+            )
+            $socket.ConnectAsync($socketUri, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+            $subscribe = @{
+                type = 'SUBSCRIBE'; protocolVersion = 1; requestId = New-StepTraceId -Step "proxy-demo-$($entry.Label)-subscribe"
+                payload = @{ auctionId = $AuctionId; lastSequenceNo = 0 }
+            } | ConvertTo-Json -Compress
+            $socket.SendAsync(
+                [ArraySegment[byte]]::new([Text.Encoding]::UTF8.GetBytes($subscribe)),
+                [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None
+            ).GetAwaiter().GetResult()
+            $sockets.Add([pscustomobject]@{ Label = $entry.Label; Socket = $socket; LastSequenceNo = 0L })
+        }
+
+        foreach ($entry in $sockets) {
+            $snapshot = $null
+            while ($null -eq $snapshot) {
+                $message = Receive-RealtimeMessage -Socket $entry.Socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+                if ([string]$message.type -eq 'SNAPSHOT') { $snapshot = $message }
+            }
+            Assert-Value -Condition ([string]$snapshot.payload.auctionId -ceq $AuctionId) `
+                -Message "$($entry.Label) proxy demo snapshot auctionId mismatch"
+        }
+
+        $proxy = Invoke-SmokeRequest `
+            -Step 'proxy-demo-buyer1-proxy' -Method PUT -Path "/api/auctions/$AuctionId/proxy-bid" `
+            -ExpectedStatus 200 -Headers @{ Authorization = $BuyerOneAuthorization; 'X-Request-Id' = "proxy-demo-upsert-$($Suffix.Substring(0, 12))" } `
+            -Body @{ maxAmount = '150.00' } -ApiEnvelope
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $proxy.data.displayPrice 'proxy displayPrice') -eq [decimal]100.00) `
+            -Message 'first proxy rule exposed its maximum as display price'
+        Assert-Value -Condition ([bool]$proxy.data.extended) -Message 'first successful proxy bid did not trigger anti-sniping extension'
+        $proxySequence = [long]$proxy.data.bidCount
+
+        $firstEvents = @{}
+        $extensionSeen = @{}
+        foreach ($entry in $sockets) {
+            $event = $null
+            $extendedEvent = $false
+            while ($null -eq $event -or -not $extendedEvent) {
+                $message = Receive-RealtimeMessage -Socket $entry.Socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+                if ([string]$message.type -eq 'AUCTION_EXTENDED') { $extendedEvent = $true }
+                if ([string]$message.type -eq 'BID_ACCEPTED') { $event = $message }
+            }
+            $firstEvents[$entry.Label] = $event
+            $extensionSeen[$entry.Label] = $extendedEvent
+        }
+        Assert-Value -Condition ([string]$firstEvents['buyer1'].payload.eventId -ceq [string]$firstEvents['buyer2'].payload.eventId) `
+            -Message 'both proxy demo clients did not receive the same first event'
+        Assert-Value -Condition ([bool]$extensionSeen['buyer1'] -and [bool]$extensionSeen['buyer2']) `
+            -Message 'anti-sniping extension was not delivered to both proxy demo clients'
+
+        $buyerTwoBid = Invoke-SmokeRequest `
+            -Step 'proxy-demo-buyer2-bid' -Method POST -Path '/api/bids' -ExpectedStatus 200 `
+            -Headers @{ Authorization = $BuyerTwoAuthorization; 'X-Request-Id' = "proxy-demo-bid2-$($Suffix.Substring(0, 12))" } `
+            -Body @{ auctionId = $AuctionId; amount = '110.00' } -ApiEnvelope
+        $secondSequence = [long]$buyerTwoBid.data.lastSequenceNo
+        Assert-Value -Condition ($secondSequence -gt $proxySequence) -Message 'proxy counter-bid did not advance sequence'
+
+        $secondEvents = @{}
+        foreach ($entry in $sockets) {
+            $event = $null
+            while ($null -eq $event) {
+                $message = Receive-RealtimeMessage -Socket $entry.Socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+                if ([string]$message.type -eq 'BID_ACCEPTED' -and [long]$message.payload.sequenceNo -ge $secondSequence) { $event = $message }
+            }
+            $secondEvents[$entry.Label] = $event
+        }
+        Assert-Value -Condition ([string]$secondEvents['buyer1'].payload.eventId -ceq [string]$secondEvents['buyer2'].payload.eventId) `
+            -Message 'proxy counter-bid was not identical on both clients'
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $secondEvents['buyer1'].payload.amount 'proxy counter amount') -eq [decimal]120.00) `
+            -Message 'proxy counter-bid did not use the minimum necessary amount'
+
+        $buyerTwoSocket = $sockets | Where-Object { $_.Label -eq 'buyer2' }
+        $buyerTwoSocket.Socket.Abort()
+        $buyerTwoSocket.Socket.Dispose()
+        $sockets.Remove($buyerTwoSocket)
+
+        $buyerOneBid = Invoke-SmokeRequest `
+            -Step 'proxy-demo-buyer1-disconnected-bid' -Method POST -Path '/api/bids' -ExpectedStatus 200 `
+            -Headers @{ Authorization = $BuyerOneAuthorization; 'X-Request-Id' = "proxy-demo-bid3-$($Suffix.Substring(0, 12))" } `
+            -Body @{ auctionId = $AuctionId; amount = '130.00' } -ApiEnvelope
+        $thirdSequence = [long]$buyerOneBid.data.lastSequenceNo
+        Assert-Value -Condition ($thirdSequence -gt $secondSequence) -Message 'online bid did not advance beyond disconnected clients'
+        $onlineEvent = $null
+        while ($null -eq $onlineEvent) {
+            $message = Receive-RealtimeMessage -Socket ($sockets[0].Socket) -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+            if ([string]$message.type -eq 'BID_ACCEPTED' -and [long]$message.payload.sequenceNo -ge $thirdSequence) { $onlineEvent = $message }
+        }
+
+        $reconnectTicket = Invoke-SmokeRequest -Step 'proxy-demo-buyer2-reconnect-ticket' -Method POST `
+            -Path '/api/realtime/tickets' -ExpectedStatus 200 -Headers @{ Authorization = $BuyerTwoAuthorization } -ApiEnvelope -Quiet
+        $reconnected = [System.Net.WebSockets.ClientWebSocket]::new()
+        $reconnected.Options.SetRequestHeader('Origin', 'http://127.0.0.1:5173')
+        $reconnected.ConnectAsync(
+            [Uri]::new("${webSocketScheme}://$($gatewayUri.Authority)/ws/auctions?ticket=$([Uri]::EscapeDataString([string]$reconnectTicket.data.ticket))"),
+            [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        $resubscribe = @{
+            type = 'SUBSCRIBE'; protocolVersion = 1; requestId = New-StepTraceId -Step 'proxy-demo-buyer2-resubscribe'
+            payload = @{ auctionId = $AuctionId; lastSequenceNo = $secondSequence }
+        } | ConvertTo-Json -Compress
+        $reconnected.SendAsync(
+            [ArraySegment[byte]]::new([Text.Encoding]::UTF8.GetBytes($resubscribe)),
+            [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None
+        ).GetAwaiter().GetResult()
+        $recovery = $null
+        while ($null -eq $recovery) {
+            $message = Receive-RealtimeMessage -Socket $reconnected -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+            if ([string]$message.type -eq 'SNAPSHOT') { $recovery = $message }
+        }
+        Assert-Value -Condition ([long]$recovery.payload.lastSequenceNo -ge $thirdSequence) `
+            -Message 'reconnected client snapshot did not recover the latest sequence'
+        Write-Host "[PASS] realtime-proxy-demo firstSequence=$proxySequence counterSequence=$secondSequence recoveredSequence=$([long]$recovery.payload.lastSequenceNo)"
+        return [pscustomobject]@{ BidCount = [long]$recovery.payload.bidCount; DisplayPrice = $recovery.payload.displayPrice }
+    } finally {
+        foreach ($entry in $sockets) {
+            if ($entry.Socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) { try { $entry.Socket.Abort() } catch { } }
+            $entry.Socket.Dispose()
+        }
+        if ($null -ne $reconnected) {
+            if ($reconnected.State -eq [System.Net.WebSockets.WebSocketState]::Open) { try { $reconnected.Abort() } catch { } }
+            $reconnected.Dispose()
         }
     }
 }
@@ -1350,13 +1501,14 @@ try {
         -RequiredHeaders $uploadIntent.data.requiredHeaders `
         -Content $imageBytes
 
-    $startAt = if ($ReliableTrade) {
+    $startAt = if ($ReliableTrade -or $RealtimeProxyDemo) {
         [DateTimeOffset]::UtcNow.AddSeconds(75)
     } else {
         [DateTimeOffset]::UtcNow.AddMinutes(2)
     }
-    $endAt = if ($ReliableTrade) {
-        $startAt.AddSeconds($ReliableTradeAuctionDurationSeconds)
+    $endAt = if ($ReliableTrade -or $RealtimeProxyDemo) {
+        $duration = if ($RealtimeProxyDemo -and -not $ReliableTrade) { 45 } else { $ReliableTradeAuctionDurationSeconds }
+        $startAt.AddSeconds($duration)
     } else {
         $startAt.AddMinutes(10)
     }
@@ -1493,7 +1645,14 @@ try {
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $opened.minimumNextBid 'minimumNextBid') -eq [decimal]100.00) `
         -Message 'first minimum bid is not the start price'
 
-    if ($RealtimeBrokerRecovery) {
+    if ($RealtimeProxyDemo) {
+        $proxyDemoOutputs = @(Invoke-RealtimeProxyDemoCheck `
+            -BuyerOneAuthorization $buyerOneAuthorization `
+            -BuyerTwoAuthorization $buyerTwoAuthorization `
+            -AuctionId $auctionId `
+            -Suffix $suffix)
+        $proxyDemo = $proxyDemoOutputs[$proxyDemoOutputs.Count - 1]
+    } elseif ($RealtimeBrokerRecovery) {
         $buyerOneBid = Invoke-RealtimeBrokerRecoveryCheck `
             -Authorization $buyerOneAuthorization `
             -AuctionId $auctionId
@@ -1518,7 +1677,7 @@ try {
         Wait-SmokeCheckpoint -Prompt 'Submit the bid after completing the external fault action.'
     }
 
-    if (-not ($RealtimeMultiInstance -or $RealtimeRestartRecovery -or $RealtimeBrokerRecovery)) {
+    if (-not ($RealtimeMultiInstance -or $RealtimeRestartRecovery -or $RealtimeBrokerRecovery -or $RealtimeProxyDemo)) {
         $buyerOneBidRequest = "smoke-bid1-$($suffix.Substring(0, 12))"
         $buyerOneBid = Invoke-SmokeRequest `
             -Step 'buyer1-bid' `
@@ -1545,6 +1704,15 @@ try {
             -Message 'bid replay returned a different bid ID'
     }
 
+    if ($RealtimeProxyDemo) {
+        $finalDetail = Invoke-SmokeRequest `
+            -Step 'verify-proxy-demo-auction' -Method GET -Path "/api/auctions/$auctionId" `
+            -ExpectedStatus 200 -Headers @{ Authorization = $buyerTwoAuthorization } -ApiEnvelope
+        Assert-Value -Condition ([long]$finalDetail.data.bidCount -ge [long]$proxyDemo.BidCount) `
+            -Message 'proxy demo final bid count regressed after reconnect'
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $finalDetail.data.currentPrice 'proxy demo currentPrice') -ge [decimal]120.00) `
+            -Message 'proxy demo final price did not include automatic counter-bid'
+    } else {
     $buyerTwoBid = Invoke-SmokeRequest `
         -Step 'buyer2-bid' `
         -Method POST `
@@ -1596,6 +1764,7 @@ try {
         -Message 'latest bid amount is not 110.00'
     Assert-Value -Condition ([long]$historyItems[1].sequenceNo -eq 1 -and -not [bool]$historyItems[1].mine) `
         -Message 'buyer1 bid history entry is missing or incorrectly exposed'
+    }
 
     if (-not $ReliableTrade) {
         Write-Host "TideBid auction-core smoke test passed. itemId=$itemId auctionId=$auctionId sellerId=$userId buyer1Id=$($buyerOne.UserId) buyer2Id=$($buyerTwo.UserId)."
