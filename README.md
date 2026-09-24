@@ -227,6 +227,20 @@ JWT, internal service token or complete WebSocket URL. It is a protocol/route sm
 replacement for the two-browser proxy, Redis outage and dual-Realtime-instance drills in the stage
 04 checklist.
 
+For the repeatable two-client proxy/recovery demonstration, run:
+
+```powershell
+.\scripts\smoke.ps1 -RealtimeProxyDemo
+```
+
+This verifies proxy auto-counterbids, anti-sniping, a disconnected client recovering with a snapshot,
+and a second buyer taking the lead with a higher proxy limit. To continue the same flow through
+auction close, the `AUCTION_CLOSED` WebSocket event, and a pending-payment order, run:
+
+```powershell
+.\scripts\smoke.ps1 -RealtimeProxyTradeDemo
+```
+
 Stop only the application processes recorded by this checkout, then optionally stop middleware:
 
 ```powershell

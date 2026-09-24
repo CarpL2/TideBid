@@ -29,6 +29,9 @@ param(
     [switch]$RealtimeProxyDemo,
 
     [Parameter()]
+    [switch]$RealtimeProxyTradeDemo,
+
+    [Parameter()]
     [switch]$ReliableTrade,
 
     [Parameter()]
@@ -73,6 +76,10 @@ $script:currentStep = 'initialization'
 $script:currentTraceId = 'unavailable'
 $invariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+if ($RealtimeProxyTradeDemo) {
+    $RealtimeProxyDemo = $true
+}
 
 function ConvertTo-Sha256Hex {
     param([Parameter(Mandatory = $true)][byte[]]$Bytes)
@@ -703,7 +710,8 @@ function Invoke-RealtimeProxyDemoCheck {
         [Parameter(Mandatory = $true)][string]$BuyerOneAuthorization,
         [Parameter(Mandatory = $true)][string]$BuyerTwoAuthorization,
         [Parameter(Mandatory = $true)][string]$AuctionId,
-        [Parameter(Mandatory = $true)][string]$Suffix
+        [Parameter(Mandatory = $true)][string]$Suffix,
+        [Parameter()][switch]$AwaitTerminal
     )
 
     $sockets = [System.Collections.Generic.List[object]]::new()
@@ -874,6 +882,31 @@ function Invoke-RealtimeProxyDemoCheck {
         Assert-Value -Condition ([long]$latestHigherBid.sequenceNo -eq $higherSequence -and
             (ConvertTo-InvariantDecimal $latestHigherBid.amount 'higher proxy history amount') -eq [decimal]160.00) `
             -Message 'higher proxy history does not preserve the realtime winning amount'
+
+        if ($AwaitTerminal) {
+            $closed = Wait-AuctionTerminal -AuctionId $AuctionId -Authorization $BuyerTwoAuthorization -ExpectedStatus 'CLOSED_SOLD'
+            Assert-Value -Condition ((ConvertTo-InvariantDecimal $closed.finalPrice 'realtime closed finalPrice') -eq [decimal]160.00) `
+                -Message 'realtime closed event final price is not 160.00'
+            $closedEvents = @{}
+            foreach ($entry in @(
+                [pscustomobject]@{ Label = 'buyer1'; Socket = $sockets[0].Socket },
+                [pscustomobject]@{ Label = 'buyer2'; Socket = $reconnected }
+            )) {
+                $closedEvent = $null
+                while ($null -eq $closedEvent) {
+                    $message = Receive-RealtimeMessage -Socket $entry.Socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+                    if ([string]$message.type -eq 'AUCTION_CLOSED') { $closedEvent = $message }
+                }
+                $closedEvents[$entry.Label] = $closedEvent
+            }
+            Assert-Value -Condition ([string]$closedEvents['buyer1'].payload.status -eq 'CLOSED_SOLD' -and
+                [string]$closedEvents['buyer2'].payload.status -eq 'CLOSED_SOLD') `
+                -Message 'both realtime clients did not receive CLOSED_SOLD'
+            Assert-Value -Condition ((ConvertTo-InvariantDecimal $closedEvents['buyer2'].payload.finalPrice 'realtime closed event price') -eq [decimal]160.00 -and
+                [bool]$closedEvents['buyer2'].payload.wonByCurrentUser -and
+                -not [bool]$closedEvents['buyer1'].payload.wonByCurrentUser) `
+                -Message 'realtime closed winner or final price is inconsistent'
+        }
         Write-Host "[PASS] realtime-proxy-demo firstSequence=$proxySequence counterSequence=$secondSequence recoveredSequence=$([long]$recovery.payload.lastSequenceNo) higherProxySequence=$higherSequence"
         return [pscustomobject]@{ BidCount = $higherSequence; DisplayPrice = $buyerTwoProxy.data.displayPrice }
     } finally {
@@ -1692,7 +1725,8 @@ try {
             -BuyerOneAuthorization $buyerOneAuthorization `
             -BuyerTwoAuthorization $buyerTwoAuthorization `
             -AuctionId $auctionId `
-            -Suffix $suffix)
+            -Suffix $suffix `
+            -AwaitTerminal:$RealtimeProxyTradeDemo)
         $proxyDemo = $proxyDemoOutputs[$proxyDemoOutputs.Count - 1]
     } elseif ($RealtimeBrokerRecovery) {
         $buyerOneBid = Invoke-RealtimeBrokerRecoveryCheck `
@@ -1806,6 +1840,24 @@ try {
         -Message 'latest bid amount is not 110.00'
     Assert-Value -Condition ([long]$historyItems[1].sequenceNo -eq 1 -and -not [bool]$historyItems[1].mine) `
         -Message 'buyer1 bid history entry is missing or incorrectly exposed'
+    }
+
+    if ($RealtimeProxyTradeDemo) {
+        $closedHistory = Invoke-SmokeRequest `
+            -Step 'verify-proxy-trade-closed-history' -Method GET -Path "/api/auctions/$auctionId/bids?page=1&size=20" `
+            -ExpectedStatus 200 -Headers @{ Authorization = $buyerTwoAuthorization } -ApiEnvelope
+        Assert-Value -Condition ([long]$closedHistory.data.total -eq 5) `
+            -Message 'proxy trade closed history does not contain all five accepted bids'
+        $pendingOrder = Wait-BuyerOrder -AuctionId $auctionId -Authorization $buyerTwoAuthorization -ExpectedStatuses @('PENDING_PAYMENT')
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $pendingOrder.finalPrice 'proxy trade order finalPrice') -eq [decimal]160.00) `
+            -Message 'proxy trade order final price is not 160.00'
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $pendingOrder.capturedDepositAmount 'proxy trade capturedDepositAmount') -eq [decimal]50.00) `
+            -Message 'proxy trade order did not capture the winner deposit'
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $pendingOrder.payableAmount 'proxy trade payableAmount') -eq [decimal]110.00) `
+            -Message 'proxy trade order payable amount is not 110.00'
+        Assert-Value -Condition ([bool]$pendingOrder.paymentEligible) -Message 'proxy trade order is not payment eligible'
+        Write-Host "[PASS] realtime-proxy-trade-demo auctionId=$auctionId orderId=$([string]$pendingOrder.orderId) finalPrice=160.00"
+        return
     }
 
     if (-not $ReliableTrade) {
