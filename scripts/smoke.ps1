@@ -832,8 +832,50 @@ function Invoke-RealtimeProxyDemoCheck {
         }
         Assert-Value -Condition ([long]$recovery.payload.lastSequenceNo -ge $thirdSequence) `
             -Message 'reconnected client snapshot did not recover the latest sequence'
-        Write-Host "[PASS] realtime-proxy-demo firstSequence=$proxySequence counterSequence=$secondSequence recoveredSequence=$([long]$recovery.payload.lastSequenceNo)"
-        return [pscustomobject]@{ BidCount = [long]$recovery.payload.bidCount; DisplayPrice = $recovery.payload.displayPrice }
+
+        $buyerTwoProxy = Invoke-SmokeRequest `
+            -Step 'proxy-demo-buyer2-higher-proxy' -Method PUT -Path "/api/auctions/$AuctionId/proxy-bid" `
+            -ExpectedStatus 200 `
+            -Headers @{ Authorization = $BuyerTwoAuthorization; 'X-Request-Id' = "proxy-demo-higher-$($Suffix.Substring(0, 12))" } `
+            -Body @{ maxAmount = '200.00' } -ApiEnvelope
+        $higherSequence = [long]$buyerTwoProxy.data.bidCount
+        Assert-Value -Condition ($higherSequence -gt $thirdSequence) `
+            -Message 'higher proxy rule did not advance the public bid sequence'
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $buyerTwoProxy.data.displayPrice 'higher proxy displayPrice') -eq [decimal]160.00) `
+            -Message 'higher proxy rule did not reach the minimum necessary display price'
+
+        $higherEvents = @{}
+        foreach ($entry in @(
+            [pscustomobject]@{ Label = 'buyer1'; Socket = $sockets[0].Socket },
+            [pscustomobject]@{ Label = 'buyer2'; Socket = $reconnected }
+        )) {
+            $event = $null
+            while ($null -eq $event) {
+                $message = Receive-RealtimeMessage -Socket $entry.Socket -TimeoutMilliseconds ($RequestTimeoutSeconds * 1000)
+                if ([string]$message.type -eq 'BID_ACCEPTED' -and [long]$message.payload.sequenceNo -ge $higherSequence) {
+                    $event = $message
+                }
+            }
+            $higherEvents[$entry.Label] = $event
+        }
+        Assert-Value -Condition ([string]$higherEvents['buyer1'].payload.eventId -ceq [string]$higherEvents['buyer2'].payload.eventId) `
+            -Message 'higher proxy event was not identical on both clients'
+        Assert-Value -Condition ((ConvertTo-InvariantDecimal $higherEvents['buyer1'].payload.amount 'higher proxy event amount') -eq [decimal]160.00) `
+            -Message 'higher proxy event exposed an unexpected amount'
+        $higherEventJson = $higherEvents['buyer1'] | ConvertTo-Json -Compress -Depth 8
+        Assert-Value -Condition (-not ($higherEventJson -match 'maxAmount')) `
+            -Message 'higher proxy maximum leaked into the public realtime event'
+        $higherHistory = Invoke-SmokeRequest `
+            -Step 'proxy-demo-higher-proxy-history' -Method GET -Path "/api/auctions/$AuctionId/bids?page=1&size=20" `
+            -ExpectedStatus 200 -Headers @{ Authorization = $BuyerTwoAuthorization } -ApiEnvelope -Quiet
+        Assert-Value -Condition ([long]$higherHistory.data.total -eq $higherSequence) `
+            -Message 'higher proxy history count does not match the realtime sequence'
+        $latestHigherBid = @($higherHistory.data.items)[0]
+        Assert-Value -Condition ([long]$latestHigherBid.sequenceNo -eq $higherSequence -and
+            (ConvertTo-InvariantDecimal $latestHigherBid.amount 'higher proxy history amount') -eq [decimal]160.00) `
+            -Message 'higher proxy history does not preserve the realtime winning amount'
+        Write-Host "[PASS] realtime-proxy-demo firstSequence=$proxySequence counterSequence=$secondSequence recoveredSequence=$([long]$recovery.payload.lastSequenceNo) higherProxySequence=$higherSequence"
+        return [pscustomobject]@{ BidCount = $higherSequence; DisplayPrice = $buyerTwoProxy.data.displayPrice }
     } finally {
         foreach ($entry in $sockets) {
             if ($entry.Socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) { try { $entry.Socket.Abort() } catch { } }

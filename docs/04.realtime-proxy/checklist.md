@@ -201,7 +201,7 @@
 - [ ] 卖家创建送审，两个买家报名并在两个浏览器打开同一场次。
 - [x] 买家 A 设置较高代理 max，展示价没有直接泄露 max。（2026-09-24：`smoke.ps1 -RealtimeProxyDemo` 验证 A 设置 150.00 后首个公开展示价仍为 100.00，公开事件只包含展示金额。）
 - [x] 买家 B 手动报价，A 自动以最小必要金额反击，两端实时一致。（2026-09-24：B 出价 110.00 后，A 以 120.00 自动反击；两个独立 WebSocket 收到相同 eventId，sequence 连续。）
-- [ ] 买家 B 设置更高代理并成为领先者，sequence/历史/Outbox 一致。
+- [x] 买家 B 设置更高代理并成为领先者，sequence/历史/实时事件一致。（2026-09-25：`smoke.ps1 -RealtimeProxyDemo` 在 B 重连后设置 200.00，B 以最小必要公开价 160.00 领先；A/B 收到相同 `BID_ACCEPTED` eventId，sequence 5，MySQL 报价历史最新记录与 sequence/金额一致，公开事件不含 `maxAmount`；Outbox 可靠投递由阶段 03/故障 smoke 单独覆盖。）
 - [x] 临近结束报价触发反狙击，两端倒计时和 endAt 同步更新。（2026-09-24：45 秒场次在开场后进入 60 秒反狙击窗口；A 首次代理报价响应 `extended=true`，两端均收到 `AUCTION_EXTENDED`。）
 - [x] 一端断网跨过若干报价，恢复后通过 snapshot 补齐且无重复。（2026-09-24：B 断线期间 A 继续产生新 sequence，B 使用旧 `lastSequenceNo` 重连，Snapshot 恢复到最新 sequence 4。）
 - [ ] 达到最终 endAt 后唯一关拍，WebSocket 显示正确赢家和成交价。
@@ -209,7 +209,7 @@
 - [ ] 同一 HTTP 请求和同一 MQ 事件重放后价格、sequence、规则、订单和资金不变。
 - [ ] 烟雾脚本再次运行使用新用户/拍品并完整通过；失败时非零退出且不输出秘密。
 
-实际结果：2026-09-24 已通过 `smoke.ps1 -RealtimeProxyDemo` 验证双客户端代理反击、反狙击和断线 Snapshot 恢复；最终关拍、订单入口、真实浏览器页面和 B 设置更高代理的分支仍待执行。
+实际结果：2026-09-25 已通过 `smoke.ps1 -RealtimeProxyDemo` 验证双客户端代理反击、B 提高代理、反狙击和断线 Snapshot 恢复；最终关拍、订单入口和真实浏览器页面仍待执行。
 
 ## 15. 数据保留、文档与最终结论
 
