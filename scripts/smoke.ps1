@@ -32,6 +32,9 @@ param(
     [switch]$RealtimeProxyTradeDemo,
 
     [Parameter()]
+    [switch]$RealtimeProxyPaymentDemo,
+
+    [Parameter()]
     [switch]$ReliableTrade,
 
     [Parameter()]
@@ -78,6 +81,10 @@ $invariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 if ($RealtimeProxyTradeDemo) {
+    $RealtimeProxyDemo = $true
+}
+if ($RealtimeProxyPaymentDemo) {
+    $RealtimeProxyTradeDemo = $true
     $RealtimeProxyDemo = $true
 }
 
@@ -1856,6 +1863,40 @@ try {
         Assert-Value -Condition ((ConvertTo-InvariantDecimal $pendingOrder.payableAmount 'proxy trade payableAmount') -eq [decimal]110.00) `
             -Message 'proxy trade order payable amount is not 110.00'
         Assert-Value -Condition ([bool]$pendingOrder.paymentEligible) -Message 'proxy trade order is not payment eligible'
+        if ($RealtimeProxyPaymentDemo) {
+            $paymentRequestId = "proxy-trade-pay-$($suffix.Substring(0, 12))"
+            $payment = Invoke-SmokeRequest `
+                -Step 'proxy-trade-pay-order' -Method POST -Path "/api/orders/$([string]$pendingOrder.orderId)/pay" `
+                -ExpectedStatus 200 `
+                -Headers @{ Authorization = $buyerTwoAuthorization; 'X-Request-Id' = $paymentRequestId } `
+                -Body @{} -ApiEnvelope
+            Assert-Value -Condition ([string]$payment.data.status -eq 'SUCCEEDED') `
+                -Message 'proxy trade payment did not succeed'
+            Assert-Value -Condition ((ConvertTo-InvariantDecimal $payment.data.amount 'proxy trade payment amount') -eq [decimal]110.00) `
+                -Message 'proxy trade payment amount is not 110.00'
+            $paymentReplay = Invoke-SmokeRequest `
+                -Step 'proxy-trade-replay-payment' -Method POST -Path "/api/orders/$([string]$pendingOrder.orderId)/pay" `
+                -ExpectedStatus 200 `
+                -Headers @{ Authorization = $buyerTwoAuthorization; 'X-Request-Id' = $paymentRequestId } `
+                -Body @{} -ApiEnvelope
+            Assert-Value -Condition ([string]$paymentReplay.data.paymentAttemptId -ceq [string]$payment.data.paymentAttemptId) `
+                -Message 'proxy trade payment replay returned a different attempt'
+            $paidOrder = Wait-BuyerOrder -AuctionId $auctionId -Authorization $buyerTwoAuthorization `
+                -ExpectedStatuses @('PAID') -ExpectedSettlementStatus 'COMPLETED'
+            Assert-Value -Condition ((ConvertTo-InvariantDecimal $paidOrder.sellerReceivableAmount 'proxy trade seller receivable') -eq [decimal]160.00) `
+                -Message 'proxy trade seller receivable is not 160.00'
+            $sellerWalletAfter = Get-SmokeWallet -Label 'proxy-trade-seller-final' -Authorization $sellerAuthorization
+            $winnerWalletAfter = Get-SmokeWallet -Label 'proxy-trade-winner-final' -Authorization $buyerTwoAuthorization
+            $loserWalletAfter = Get-SmokeWallet -Label 'proxy-trade-loser-final' -Authorization $buyerOneAuthorization
+            Assert-Value -Condition ($sellerWalletAfter.Available -eq [decimal]10160.00 -and $sellerWalletAfter.Frozen -eq 0) `
+                -Message 'proxy trade seller wallet did not receive 160.00 exactly once'
+            Assert-Value -Condition ($winnerWalletAfter.Available -eq [decimal]9840.00 -and $winnerWalletAfter.Frozen -eq 0) `
+                -Message 'proxy trade winner wallet does not reflect 50.00 deposit plus 110.00 payment'
+            Assert-Value -Condition ($loserWalletAfter.Available -eq [decimal]10000.00 -and $loserWalletAfter.Frozen -eq 0) `
+                -Message 'proxy trade loser deposit was not released'
+            Write-Host "[PASS] realtime-proxy-payment-demo auctionId=$auctionId orderId=$([string]$pendingOrder.orderId) payment=110.00 sellerCredit=160.00"
+            return
+        }
         Write-Host "[PASS] realtime-proxy-trade-demo auctionId=$auctionId orderId=$([string]$pendingOrder.orderId) finalPrice=160.00"
         return
     }

@@ -206,6 +206,7 @@
 - [x] 一端断网跨过若干报价，恢复后通过 snapshot 补齐且无重复。（2026-09-24：B 断线期间 A 继续产生新 sequence，B 使用旧 `lastSequenceNo` 重连，Snapshot 恢复到最新 sequence 4。）
 - [x] 达到最终 endAt 后唯一关拍，WebSocket 显示正确赢家和成交价。（2026-09-25：`smoke.ps1 -RealtimeProxyTradeDemo` 等待 `CLOSED_SOLD`，两端均收到 `AUCTION_CLOSED`，B 被标记为赢家，成交价为 160.00；HTTP 终态和报价历史一致。）
 - [x] 阶段 03 的赢家保证金、订单、支付和卖家入账继续完成。（2026-09-24：`-ReliableTrade` 全量烟雾通过 sold/payment、unsold/release、payment-timeout/forfeit/credit。）
+- [x] 代理实时场景的订单支付和卖家结算继续完成。（2026-09-25：`smoke.ps1 -RealtimeProxyPaymentDemo` 支付 110.00，重复请求返回同一 paymentAttemptId，订单进入 `PAID/COMPLETED`，卖家入账 160.00，赢家/落败者钱包余额符合保证金和尾款变化。）
 - [ ] 同一 HTTP 请求和同一 MQ 事件重放后价格、sequence、规则、订单和资金不变。
 - [ ] 烟雾脚本再次运行使用新用户/拍品并完整通过；失败时非零退出且不输出秘密。
 

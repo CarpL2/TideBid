@@ -241,6 +241,15 @@ auction close, the `AUCTION_CLOSED` WebSocket event, and a pending-payment order
 .\scripts\smoke.ps1 -RealtimeProxyTradeDemo
 ```
 
+To continue through payment replay and completed seller settlement, run:
+
+```powershell
+.\scripts\smoke.ps1 -RealtimeProxyPaymentDemo
+```
+
+This pays the generated `110.00` balance, verifies the same request ID is idempotent, and checks
+the buyer, loser, and seller wallet balances after settlement.
+
 Stop only the application processes recorded by this checkout, then optionally stop middleware:
 
 ```powershell
