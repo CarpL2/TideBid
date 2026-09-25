@@ -12,7 +12,7 @@
 - [x] 前端 lint、类型检查、全部测试和生产构建通过。（2026-09-25：`pnpm lint`、`pnpm type-check`、`pnpm test` 通过，20 个测试文件/56 项测试全通过，`pnpm build-only` 成功。）
 - [ ] Git diff 无空白错误，仓库不包含 target、dist、node_modules 或运行产物。
 
-  实际结果：2026-09-24 停止应用进程后执行 `mvn clean verify`，11 个模块 BUILD SUCCESS；前端 `pnpm lint`、`pnpm type-check`、`pnpm test`（20 个文件/56 项测试）和 `pnpm build-only` 均通过。Maven 测试仍有按 profile 跳过的集成项，故本节“失败/错误/跳过均为 0”暂不勾选。
+  实际结果：2026-09-25 停止应用进程后执行 `mvn clean verify`，11 个模块 BUILD SUCCESS；前端 `pnpm lint`、`pnpm type-check`、`pnpm test`（20 个文件/56 项测试）和 `pnpm build-only` 均通过。Maven 测试仍有按 profile 跳过的集成项，故本节“失败/错误/跳过均为 0”暂不勾选。
 
 ## 2. Migration 与旧数据升级
 
