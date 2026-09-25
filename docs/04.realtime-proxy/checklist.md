@@ -4,13 +4,13 @@
 
 ## 1. 构建与技术基线
 
-- [ ] JDK 为 21，未启用 Preview Feature 或虚拟线程。
-- [ ] Spring Boot/Cloud/Alibaba、Nacos、Redis、RocketMQ 与固定基线一致。
-- [ ] 依赖树只有 RocketMQ 5.x gRPC Client，无旧 Remoting Client 冲突。
-- [ ] Realtime standalone profile 不连接 Redis、MQ、Nacos 或 Auction。
+- [x] JDK 为 21，未启用 Preview Feature 或虚拟线程。（2026-09-25：Java 21.0.6 LTS；父 POM release=21，服务配置显式关闭 virtual threads。）
+- [x] Spring Boot/Cloud/Alibaba、Nacos、Redis、RocketMQ 与固定基线一致。（2026-09-25：固定版本由父 POM/Nacos 模板/Compose 配置管理，完整构建和整栈 smoke 通过。）
+- [x] 依赖树只有 RocketMQ 5.x gRPC Client，无旧 Remoting Client 冲突。（2026-09-25：`mvn dependency:tree -Dincludes=org.apache.rocketmq` 仅出现 `rocketmq-client-java:5.2.2`。）
+- [x] Realtime standalone profile 不连接 Redis、MQ、Nacos 或 Auction。（2026-09-25：Realtime standalone 应用测试通过，外部客户端配置被排除。）
 - [ ] 根目录 `mvn clean verify` 全部模块通过，失败/错误/跳过均为 0。
 - [x] 前端 lint、类型检查、全部测试和生产构建通过。（2026-09-25：`pnpm lint`、`pnpm type-check`、`pnpm test` 通过，20 个测试文件/56 项测试全通过，`pnpm build-only` 成功。）
-- [ ] Git diff 无空白错误，仓库不包含 target、dist、node_modules 或运行产物。
+- [x] Git diff 无空白错误，仓库不包含 target、dist、node_modules 或运行产物。（2026-09-25：`git diff --check` 和 `git ls-files` 产物/密钥扫描通过。）
 
   实际结果：2026-09-25 停止应用进程后执行 `mvn clean verify`，11 个模块 BUILD SUCCESS；前端 `pnpm lint`、`pnpm type-check`、`pnpm test`（20 个文件/56 项测试）和 `pnpm build-only` 均通过。Maven 测试仍有按 profile 跳过的集成项，故本节“失败/错误/跳过均为 0”暂不勾选。
 
@@ -28,13 +28,13 @@
 
 ## 3. WebSocket Ticket 与握手安全
 
-- [ ] 只有有效 JWT 能签发 ticket。
-- [ ] ticket 使用安全随机数，原文不保存到 Redis、数据库或日志。
-- [ ] ticket TTL 为配置值且默认 30 秒。
-- [ ] 同一 ticket 首次握手成功，第二次重放失败。
-- [ ] 过期、畸形、未知 ticket 均拒绝 upgrade。
-- [ ] ticket 签发达到用户/IP 限额时返回统一 429。
-- [ ] Redis 不可用时 ticket 签发返回统一 503，不降级为匿名。
+- [x] 只有有效 JWT 能签发 ticket。（2026-09-25：RealtimeTicketController/Application 定向测试和整栈 smoke 通过。）
+- [x] ticket 使用安全随机数，原文不保存到 Redis、数据库或日志。（2026-09-25：ticket store 单测验证摘要存储、脱敏和原子消费；日志审计通过。）
+- [x] ticket TTL 为配置值且默认 30 秒。（2026-09-25：Realtime properties/config 测试通过。）
+- [x] 同一 ticket 首次握手成功，第二次重放失败。（2026-09-25：Handshake/ticket store 定向测试通过。）
+- [x] 过期、畸形、未知 ticket 均拒绝 upgrade。（2026-09-25：Handshake interceptor 定向测试覆盖非法票据。）
+- [x] ticket 签发达到用户/IP 限额时返回统一 429。（2026-09-25：RealtimeTicketControllerTest 覆盖 429。）
+- [x] Redis 不可用时 ticket 签发返回统一 503，不降级为匿名。（2026-09-25：RealtimeTicketControllerTest 和 Redis outage smoke 覆盖 503。）
 - [x] 允许的 localhost/127.0.0.1 Origin 可连接，未知/null Origin 被拒绝。（2026-09-22：`RealtimeWebSocketHandshakeInterceptorTest` 与 `RealtimeWebSocketPropertiesTest` 通过。）
 - [x] Gateway 剥离伪造身份头，Realtime 只信任 ticket 身份。（2026-09-22：`GatewayAuthenticationWebFilterTest`、`RealtimeWebSocketHandshakeInterceptorTest` 通过；Gateway WebSocket route 使用 ticket 交给 Realtime 消费。）
 - [x] JWT、ticket、内部 Token 不出现在 URL 之外的可持久日志、错误、指标或关闭原因；日志不打印含 ticket 的完整请求目标。（2026-09-22：ticket 摘要存储、脱敏 toString、拒绝响应和 Gateway Authorization 清理测试通过；本批未新增敏感日志。）
@@ -225,19 +225,19 @@
 
 | 检查项 | 结果 | 证据或备注 |
 | --- | --- | --- |
-| Migration 与旧数据升级 | 待验收 | |
-| Ticket 与 WebSocket 安全 | 待验收 | |
-| MQ 消费与 Redis 多实例扇出 | 待验收 | |
-| Snapshot 与断线恢复 | 待验收 | |
-| 代理竞价与并发 | 待验收 | |
-| 反狙击延时与可靠关拍 | 待验收 | |
-| Gateway、API 与权限 | 待验收 | |
-| Vue 实时演示 | 待验收 | |
-| 故障演练与端到端烟雾 | 待验收 | |
-| 构建、秘密与阶段边界 | 待验收 | |
+| Migration 与旧数据升级 | 自动化通过/集成 profile 待补 | V5/约束/历史保留测试已存在；部分数据库隔离测试因 profile 跳过 |
+| Ticket 与 WebSocket 安全 | 自动化通过 | ticket、Origin、连接租约、限流和握手测试通过 |
+| MQ 消费与 Redis 多实例扇出 | 自动化通过 | 双实例、Broker/Redis 故障、重复 eventId 和无订阅缓存测试通过 |
+| Snapshot 与断线恢复 | 自动化通过 | 重启恢复、断线游标、Snapshot 去重和实时支付 smoke 通过 |
+| 代理竞价与并发 | 自动化通过/并发集成待补 | 领域、CAS、代理 API 和整栈代理 smoke 通过 |
+| 反狙击延时与可靠关拍 | 自动化通过 | 领域/MySQL 集成与双客户端关拍 smoke 通过 |
+| Gateway、API 与权限 | 自动化通过 | Gateway/Realtime/Auction 定向测试和负向端点探测通过 |
+| Vue 实时演示 | headless 通过/人工待验 | DOM 挂载、前端测试和构建通过；Console/Network/布局待人工 |
+| 故障演练与端到端烟雾 | 自动化通过/乱序注入待补 | 冷启动、全 Realtime 停止、Broker/Redis/实例重启和支付 smoke 通过 |
+| 构建、秘密与阶段边界 | 自动化通过 | Maven、前端质量门禁、日志/仓库扫描通过 |
 
-最终结论：`待验收`
+最终结论：`待人工浏览器验收`
 
-遗留问题：待阶段实施后填写。
+遗留问题：真实浏览器 Console/Network/WebSocket/布局检查；人工乱序 MQ/PubSub 注入；部分迁移/并发集成 profile 的重复执行。
 
 进入阶段 05 的条件：所有阻塞项通过，最终结论为“通过”，并且实时链路故障不会影响 MySQL 最终裁决、可靠关拍、订单或资金一致性。
