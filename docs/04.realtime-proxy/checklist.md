@@ -157,7 +157,7 @@
 - [ ] 离线时 HTTP 手动/代理操作的可用性和风险提示准确，不伪装为实时。
 - [ ] 有限指数退避不会无限快速重连，达到上限可手动恢复。
 - [x] 刷新页面、切后台、断网恢复和 Realtime 重启后均恢复正确状态。（2026-09-25：前端状态机测试、`RealtimeRestartRecovery` 和 `RealtimeProxyPaymentDemo` Snapshot 恢复均通过。）
-- [ ] 浏览器 Console 无错误，Network 中 HTTP 经 5173→9000，WebSocket 经 Gateway upgrade。
+- [ ] 浏览器 Console 无错误，Network 中 HTTP 经 5173→9000，WebSocket 经 Gateway upgrade。（2026-09-25：新增 `scripts/browser-smoke.ps1`，Chrome headless DOM 检查通过；Console/Network/WebSocket 细节仍需人工浏览器检查。）
 - [ ] 页面在常见桌面宽度无明显遮挡、跳动或无法操作区域。
 
 实际结果：2026-09-22 已完成前端 ticket/WebSocket 客户端、连接状态机、有限重连、快照/报价/延时/终态应用、本人代理控制表单，以及页面隐藏/恢复和刷新游标恢复；前端 56 项测试、lint、type-check 和生产构建通过。双浏览器整栈演示、Realtime 重启和中间件故障恢复待后续批次。

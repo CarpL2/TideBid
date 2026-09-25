@@ -250,6 +250,15 @@ To continue through payment replay and completed seller settlement, run:
 This pays the generated `110.00` balance, verifies the same request ID is idempotent, and checks
 the buyer, loser, and seller wallet balances after settlement.
 
+Run the lightweight local browser smoke check:
+
+```powershell
+.\scripts\browser-smoke.ps1
+```
+
+It uses an installed Chrome/Edge headless binary to verify that the Vite page returns HTML, mounts
+the Vue application, and renders TideBid text. It does not replace manual Console, Network, or layout review.
+
 Stop only the application processes recorded by this checkout, then optionally stop middleware:
 
 ```powershell
