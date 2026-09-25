@@ -210,7 +210,7 @@
 - [ ] 同一 HTTP 请求和同一 MQ 事件重放后价格、sequence、规则、订单和资金不变。
 - [ ] 烟雾脚本再次运行使用新用户/拍品并完整通过；失败时非零退出且不输出秘密。
 
-实际结果：2026-09-25 已通过 `smoke.ps1 -RealtimeProxyPaymentDemo` 验证最终关拍、双端 `AUCTION_CLOSED`、支付幂等和 `PAID/COMPLETED` 结算；前端开发入口 HTTP 200，真实浏览器 Console/布局/Network 交互仍待人工或浏览器自动化验收。
+实际结果：2026-09-25 已通过 `smoke.ps1 -RealtimeProxyPaymentDemo` 验证最终关拍、双端 `AUCTION_CLOSED`、支付幂等和 `PAID/COMPLETED` 结算；前端开发入口 HTTP 200，Chrome headless DOM 检查确认 Vue 应用挂载并渲染 TideBid 文本。真实浏览器 Console/布局/Network 交互仍待人工验收。
 
 ## 15. 数据保留、文档与最终结论
 
