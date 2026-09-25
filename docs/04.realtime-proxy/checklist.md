@@ -134,12 +134,12 @@
 
 - [x] 代理 GET 只返回本人规则；其他用户和卖家无法查询。（2026-09-25：`AuctionProxyBidControllerTest` 和服务层权限测试通过。）
 - [x] 代理 PUT/DELETE 与手动报价都要求合法 X-Request-Id。（2026-09-25：代理 Controller 定向测试覆盖 PUT/DELETE 请求头与 400 边界。）
-- [ ] 大整数 ID、两位小数金额和 UTC 时间保持既有线协议。
+- [x] 大整数 ID、两位小数金额和 UTC 时间保持既有线协议。（2026-09-25：Auction Proxy Controller/Realtime contract 定向测试和代理实时 smoke 覆盖 64 位 ID、金额精度与 UTC 时间。）
 - [x] Realtime HTTP 和 WebSocket 只能通过 Gateway 对前端提供。（2026-09-25：`GatewayRouteConfigurationTest` 验证 HTTP `lb://` 与 WebSocket `lb:ws://` 路由。）
 - [x] `/api/realtime/**` 使用正常 JWT；`/ws/**` 只接受一次性 ticket。（2026-09-22：Gateway 与 Realtime 定向测试通过。）
-- [ ] 内部 snapshot、MQ 和 Redis 端点不在 Gateway route 中。
-- [ ] 无认证、越权、业务冲突和基础设施故障返回统一稳定错误。
-- [ ] CORS/WebSocket Origin 没有扩大为通配符。
+- [x] 内部 snapshot、MQ 和 Redis 端点不在 Gateway route 中。（2026-09-25：Gateway `/internal/realtime/auctions/1/snapshot` 返回 404；直连 Auction 内部 Snapshot 无 Token 返回 401；Gateway route 定向测试通过。）
+- [x] 无认证、越权、业务冲突和基础设施故障返回统一稳定错误。（2026-09-25：Gateway/Realtime/Auction 定向测试覆盖 401/403/404/409/503，错误响应不包含下游堆栈或内部地址。）
+- [x] CORS/WebSocket Origin 没有扩大为通配符。（2026-09-25：Gateway CORS 与 Realtime Origin 白名单测试通过，仅允许 localhost/127.0.0.1:5173。）
 - [x] Actuator 仍只暴露 health/info。（2026-09-25：Gateway 与 Realtime 应用测试验证 health/info 可用，`/actuator`、`env`、`beans` 不暴露。）
 
 实际结果：2026-09-25 Gateway 定向测试 21 项、Realtime 定向测试 18 项通过；路由、JWT/ticket、Actuator 暴露边界和代理 API 请求头已验证。内部端点负向探测、全量大整数/错误响应审查仍待收口。
@@ -207,7 +207,7 @@
 - [x] 达到最终 endAt 后唯一关拍，WebSocket 显示正确赢家和成交价。（2026-09-25：`smoke.ps1 -RealtimeProxyTradeDemo` 等待 `CLOSED_SOLD`，两端均收到 `AUCTION_CLOSED`，B 被标记为赢家，成交价为 160.00；HTTP 终态和报价历史一致。）
 - [x] 阶段 03 的赢家保证金、订单、支付和卖家入账继续完成。（2026-09-24：`-ReliableTrade` 全量烟雾通过 sold/payment、unsold/release、payment-timeout/forfeit/credit。）
 - [x] 代理实时场景的订单支付和卖家结算继续完成。（2026-09-25：`smoke.ps1 -RealtimeProxyPaymentDemo` 支付 110.00，重复请求返回同一 paymentAttemptId，订单进入 `PAID/COMPLETED`，卖家入账 160.00，赢家/落败者钱包余额符合保证金和尾款变化。）
-- [ ] 同一 HTTP 请求和同一 MQ 事件重放后价格、sequence、规则、订单和资金不变。
+- [x] 同一 HTTP 请求和同一 MQ 事件重放后价格、sequence、规则、订单和资金不变。（2026-09-25：注册、报名、手动报价、代理命令和支付请求重放均返回原结果；Realtime eventId Redis 幂等和重复 MQ/Pub/Sub 定向测试通过。）
 - [x] 烟雾脚本再次运行使用新用户/拍品并完整通过；失败时非零退出且不输出秘密。（2026-09-25：冷启动后 `-ReliableTrade` 和 `-RealtimeProxyPaymentDemo` 均使用新用户/拍品完整通过；输出未包含凭证、Token 或完整签名 URL。）
 
 实际结果：2026-09-25 冷启动后已通过 `smoke.ps1 -ReliableTrade` 和 `smoke.ps1 -RealtimeProxyPaymentDemo`，覆盖最终关拍、双端 `AUCTION_CLOSED`、支付幂等和 `PAID/COMPLETED` 结算；前端开发入口 HTTP 200，Chrome headless DOM 检查确认 Vue 应用挂载并渲染 TideBid 文本。真实浏览器 Console/布局/Network 交互仍待人工验收。
