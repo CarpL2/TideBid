@@ -134,7 +134,7 @@
 - [x] 验证 Redis 停止时新 ticket 返回 503、MQ 不丢 ACK，恢复后重新连接成功。（2026-09-23：预先取得 JWT 后暂停 Redis，`POST /api/realtime/tickets` 返回 503；`redis-outage.ps1 -Action Resume` 恢复健康，随后 Realtime smoke 通过。）
 - [x] 验证一个 Realtime 实例重启，另一个实例连接继续收到广播。（2026-09-24：同一 `-RealtimeRestartRecovery` 场景覆盖 9204 停止、9104 继续推送、9204 重启和 Snapshot 恢复。）
 - [x] 验证慢消费者被隔离，正常消费者仍持续收到有序消息。（2026-09-24：`RealtimeWebSocketSessionRegistryTest#slowConsumerOverflowDoesNotCloseHealthyConsumer` 通过，验证慢连接 `1013`/恢复消息和健康连接独立发送。）
-- [ ] 使用两个浏览器用户演示代理反击、反狙击延时、断线恢复和最终订单。（2026-09-25：冷启动后 `smoke.ps1 -RealtimeProxyPaymentDemo` 已补齐 B 提高代理、A/B 同 eventId、MySQL 历史、双端 `AUCTION_CLOSED`、支付幂等和 `PAID/COMPLETED` 结算；Chrome headless DOM 已确认前端挂载，当前仅待真实浏览器 Console/布局/Network 验收。）
+- [ ] 使用两个浏览器用户演示代理反击、反狙击延时、断线恢复和最终订单。（2026-09-25：Realtime 全停期间完整 `-ReliableTrade` 通过；恢复后 `-RealtimeProxyTradeDemo` 继续通过 Snapshot、代理、关拍和订单入口。Chrome headless DOM 已确认前端挂载，当前仅待真实浏览器 Console/布局/Network 验收。）
 - [x] 运行根目录 `mvn clean verify`，所有模块和真实 MySQL 核心测试通过。（2026-09-24：停止应用进程后执行 `mvn clean verify`，11 个 Reactor 模块 BUILD SUCCESS；真实 MySQL 核心链路另由 `-ReliableTrade`、`-RealtimeBrokerRecovery` 等整栈 smoke 覆盖。）
 - [x] 运行前端 lint、类型检查、全部测试和生产构建。（2026-09-24：`pnpm lint`、`pnpm type-check`、`pnpm test` 通过，20 个测试文件/56 项测试全通过，`pnpm build-only` 成功。）
 - [x] 从空应用进程和已停止中间件完成冷启动，不删除现有命名卷。（2026-09-25：`infra-down.ps1`/`infra-up.ps1` 后完整应用启动和 Nacos 注册检查通过，未删除卷。）

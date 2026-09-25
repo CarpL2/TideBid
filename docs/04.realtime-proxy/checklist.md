@@ -188,7 +188,7 @@
 - [x] 停 Broker 后报价与 Outbox 提交成功；恢复后实时/快照追平。（2026-09-24：`smoke.ps1 -RealtimeBrokerRecovery` 验证 Broker 停止期间报价提交成功，恢复后原 WebSocket 连接收到挂起 `BID_ACCEPTED`；后续报价、历史和 RocketMQ topology 校验通过。）
 - [x] 停 Redis 后新 ticket 失败且 MQ 不提前 ACK；恢复后消费和连接正常。（2026-09-23：Redis 停止时 ticket 明确返回 503；恢复后 Redis healthy，Realtime smoke 通过。）
 - [x] 停一个 Realtime 实例后另一实例连接不受影响，原连接可重连恢复。（2026-09-24：`smoke.ps1 -RealtimeRestartRecovery` 验证 9204 停止期间 9104 收到报价，9204 重启后新连接 Snapshot 收敛。）
-- [ ] 停全部 Realtime 时 Auction 报价、延时、关拍、订单和支付继续正确。
+- [x] 停全部 Realtime 时 Auction 报价、延时、关拍、订单和支付继续正确。（2026-09-25：`app-outage.ps1 -Service realtime -Action Suspend` 后运行完整 `smoke.ps1 -ReliableTrade`，成交支付、流拍释放和支付超时补偿全部通过；Realtime 恢复后 Nacos 注册和 `RealtimeProxyTradeDemo` Snapshot/关拍/订单入口继续通过。）
 - [ ] 人工制造重复 MQ、乱序 Pub/Sub 和 sequence gap，页面最终与 MySQL 一致。
 - [x] 慢客户端被关闭，正常客户端仍持续接收。（2026-09-24：Realtime 定向测试验证慢连接队列溢出后只发送 `RESYNC_REQUIRED(BUFFER_OVERFLOW)` 并关闭 1013，健康连接未被关闭且仍发送消息。）
 - [x] 重启整栈后代理规则、动态 endAt、报价和终态保持一致。（2026-09-25：冷启动后 `smoke.ps1 -RealtimeProxyPaymentDemo` 重新验证代理 sequence 1～5、反狙击、CLOSED_SOLD、支付和结算。）
