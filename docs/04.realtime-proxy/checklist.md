@@ -9,7 +9,7 @@
 - [ ] 依赖树只有 RocketMQ 5.x gRPC Client，无旧 Remoting Client 冲突。
 - [ ] Realtime standalone profile 不连接 Redis、MQ、Nacos 或 Auction。
 - [ ] 根目录 `mvn clean verify` 全部模块通过，失败/错误/跳过均为 0。
-- [ ] 前端 lint、类型检查、全部测试和生产构建通过。
+- [x] 前端 lint、类型检查、全部测试和生产构建通过。（2026-09-25：`pnpm lint`、`pnpm type-check`、`pnpm test` 通过，20 个测试文件/56 项测试全通过，`pnpm build-only` 成功。）
 - [ ] Git diff 无空白错误，仓库不包含 target、dist、node_modules 或运行产物。
 
   实际结果：2026-09-24 停止应用进程后执行 `mvn clean verify`，11 个模块 BUILD SUCCESS；前端 `pnpm lint`、`pnpm type-check`、`pnpm test`（20 个文件/56 项测试）和 `pnpm build-only` 均通过。Maven 测试仍有按 profile 跳过的集成项，故本节“失败/错误/跳过均为 0”暂不勾选。
@@ -169,11 +169,11 @@
 - [ ] 可观察当前连接、订阅、同步、推送、重复、重试、慢消费者和延迟。
 - [ ] 指标不以 userId、auctionId、eventId、connectionId 为 tag。
 - [ ] 日志可用 connectionId、auctionId、eventId、traceId 串联关键路径。
-- [ ] 日志不包含 JWT、ticket、内部 Token、AccessKey、OSS 签名、代理 maxAmount 或完整消息正文。
+- [x] 日志不包含 JWT、ticket、内部 Token、AccessKey、OSS 签名、代理 maxAmount 或完整消息正文。（2026-09-25：`audit-runtime-logs.ps1` 审计最新 14 个日志文件通过；仓库高置信秘密扫描通过，未发现 AK/Signed URL/私钥/Bearer 样本。）
 - [ ] Redis ticket、连接租约和事件幂等 key 均有 TTL。
 - [ ] 错误响应和 WebSocket ERROR 不包含堆栈、SQL、内部地址或下游正文。
 
-实际结果：待执行。
+实际结果：2026-09-25 已完成最新运行日志审计和仓库高置信秘密扫描；连接/订阅运行态观测、Nacos/Redis 样本和错误响应最终审查仍待阶段收口。
 
 ## 13. 整栈故障演练
 
@@ -210,7 +210,7 @@
 - [ ] 同一 HTTP 请求和同一 MQ 事件重放后价格、sequence、规则、订单和资金不变。
 - [ ] 烟雾脚本再次运行使用新用户/拍品并完整通过；失败时非零退出且不输出秘密。
 
-实际结果：2026-09-25 已通过 `smoke.ps1 -RealtimeProxyTradeDemo` 继续验证最终关拍、双端 `AUCTION_CLOSED` 和 `PENDING_PAYMENT` 订单入口；真实浏览器页面和支付后的订单/结算仍待执行。
+实际结果：2026-09-25 已通过 `smoke.ps1 -RealtimeProxyPaymentDemo` 验证最终关拍、双端 `AUCTION_CLOSED`、支付幂等和 `PAID/COMPLETED` 结算；前端开发入口 HTTP 200，真实浏览器 Console/布局/Network 交互仍待人工或浏览器自动化验收。
 
 ## 15. 数据保留、文档与最终结论
 
