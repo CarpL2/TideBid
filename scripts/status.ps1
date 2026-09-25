@@ -52,6 +52,27 @@ function Invoke-ComposeJson {
     return $items
 }
 
+function Read-DotEnvValue {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) { return '' }
+    foreach ($line in [System.IO.File]::ReadAllLines($EnvFile)) {
+        $trimmed = $line.Trim()
+        if ($trimmed.Length -eq 0 -or $trimmed.StartsWith('#')) { continue }
+        $separator = $line.IndexOf('=')
+        if ($separator -le 0) { continue }
+        if ($line.Substring(0, $separator).Trim() -cne $Name) { continue }
+        $value = $line.Substring($separator + 1).Trim()
+        if ($value.Length -ge 2 -and
+            (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+             ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        return $value
+    }
+    return ''
+}
+
 $gateway = $GatewayBaseUri.TrimEnd('/')
 $applications = [ordered]@{
     gateway = "$gateway/actuator/health"
@@ -77,6 +98,34 @@ foreach ($item in @(Invoke-ComposeJson -Services @('redis', 'rocketmq-broker', '
     $display = if ([string]::IsNullOrWhiteSpace($health)) { $state } else { "$state/$health" }
     Write-Host ('  {0,-16} {1}' -f $service, $display)
     if ($state -ne 'running' -or ($health -and $health -ne 'healthy')) { $failed.Add("middleware:$service") }
+}
+
+$internalToken = Read-DotEnvValue -Name 'TIDEBID_INTERNAL_SERVICE_TOKEN'
+if ([string]::IsNullOrWhiteSpace($internalToken)) {
+    Write-Host '  realtime-runtime unavailable (TIDEBID_INTERNAL_SERVICE_TOKEN is not configured)'
+    if ($AssertHealthy) { $failed.Add('realtime-runtime:token') }
+} else {
+    try {
+        $runtime = Invoke-RestMethod -Uri 'http://127.0.0.1:9104/internal/realtime/status' `
+            -Headers @{ 'X-TideBid-Internal-Token' = $internalToken } -TimeoutSec 2
+        $runtimeValues = @(
+            [int]$runtime.connections,
+            [int]$runtime.subscriptions,
+            [int]$runtime.syncingSubscriptions
+        )
+        if ($runtimeValues | Where-Object { $_ -lt 0 }) { throw 'runtime status contained a negative count.' }
+        $redisState = if ([bool]$runtime.redisListenerRunning) { 'UP' } else { 'DOWN' }
+        $rocketState = if ([bool]$runtime.rocketMqConsumerRunning) { 'UP' } else { 'DOWN' }
+        Write-Host ('  {0,-16} status={1} connections={2} subscriptions={3} syncing={4} redis={5} rocketmq={6}' -f `
+                'realtime-runtime', [string]$runtime.status, [int]$runtime.connections,
+                [int]$runtime.subscriptions, [int]$runtime.syncingSubscriptions, $redisState, $rocketState)
+        if ([string]$runtime.status -ne 'UP' -or $redisState -ne 'UP' -or $rocketState -ne 'UP') {
+            $failed.Add('realtime-runtime:degraded')
+        }
+    } catch {
+        Write-Host '  realtime-runtime DOWN/unreachable'
+        $failed.Add('realtime-runtime')
+    }
 }
 
 if ($AssertHealthy) {

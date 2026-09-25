@@ -18,6 +18,7 @@ import io.github.carpl2.tidebid.contracts.RealtimeSnapshot;
 import io.github.carpl2.tidebid.contracts.RealtimeBidView;
 import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketAttributes;
 import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketSendQueue;
+import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.time.Instant;
@@ -38,6 +39,7 @@ public final class RealtimeWebSocketSessionRegistry {
     private final ObjectMapper objectMapper;
     private final Executor executor;
     private final int sendCapacity;
+    private final RealtimeMetrics metrics;
     private final Map<Long, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
     private final Map<WebSocketSession, Map<Long, SyncBuffer>> syncing = new ConcurrentHashMap<>();
     private final Map<WebSocketSession, RealtimeWebSocketSendQueue> sendQueues = new ConcurrentHashMap<>();
@@ -51,10 +53,16 @@ public final class RealtimeWebSocketSessionRegistry {
     }
 
     public RealtimeWebSocketSessionRegistry(ObjectMapper objectMapper, int sendCapacity, Executor executor) {
+        this(objectMapper, sendCapacity, executor, null);
+    }
+
+    public RealtimeWebSocketSessionRegistry(ObjectMapper objectMapper, int sendCapacity, Executor executor,
+                                            RealtimeMetrics metrics) {
         this.objectMapper = objectMapper;
         if (sendCapacity < 1) throw new IllegalArgumentException("sendCapacity must be positive");
         this.sendCapacity = sendCapacity;
         this.executor = executor;
+        this.metrics = metrics;
     }
 
     public void register(WebSocketSession session) {
@@ -96,12 +104,16 @@ public final class RealtimeWebSocketSessionRegistry {
     }
 
     public void subscribe(long auctionId, WebSocketSession session) {
-        sessions.computeIfAbsent(auctionId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
+        if (sessions.computeIfAbsent(auctionId, ignored -> ConcurrentHashMap.newKeySet()).add(session)
+                && metrics != null) {
+            metrics.subscriptionOpened();
+        }
     }
 
     public void beginSync(long auctionId, WebSocketSession session, int capacity) {
-        syncing.computeIfAbsent(session, ignored -> new ConcurrentHashMap<>())
+        SyncBuffer previous = syncing.computeIfAbsent(session, ignored -> new ConcurrentHashMap<>())
                 .put(auctionId, new SyncBuffer(capacity));
+        if (previous == null && metrics != null) metrics.syncStarted();
     }
 
     public boolean sendSnapshot(long auctionId, WebSocketSession session, RealtimeSnapshot snapshot,
@@ -126,7 +138,8 @@ public final class RealtimeWebSocketSessionRegistry {
                 buffer.live = true;
                 Map<Long, SyncBuffer> values = syncing.get(session);
                 if (values != null) {
-                    values.remove(auctionId, buffer);
+                    boolean removed = values.remove(auctionId, buffer);
+                    if (removed && metrics != null) metrics.syncFinished();
                     if (values.isEmpty()) syncing.remove(session, values);
                 }
             }
@@ -138,21 +151,26 @@ public final class RealtimeWebSocketSessionRegistry {
 
     public void cancelSync(long auctionId, WebSocketSession session) {
         Map<Long, SyncBuffer> values = syncing.get(session);
-        if (values != null) values.remove(auctionId);
+        if (values != null && values.remove(auctionId) != null && metrics != null) metrics.syncFinished();
     }
 
     public void unsubscribe(long auctionId, WebSocketSession session) {
         Set<WebSocketSession> values = sessions.get(auctionId);
         if (values != null) {
-            values.remove(session);
+            if (values.remove(session) && metrics != null) metrics.subscriptionClosed();
             if (values.isEmpty()) sessions.remove(auctionId, values);
         }
     }
 
     public void remove(WebSocketSession session) {
-        sessions.values().forEach(values -> values.remove(session));
+        sessions.values().forEach(values -> {
+            if (values.remove(session) && metrics != null) metrics.subscriptionClosed();
+        });
         sessions.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-        syncing.remove(session);
+        Map<Long, SyncBuffer> syncValues = syncing.remove(session);
+        if (syncValues != null && metrics != null) {
+            syncValues.keySet().forEach(ignored -> metrics.syncFinished());
+        }
         RealtimeWebSocketSendQueue queue = sendQueues.remove(session);
         if (queue != null) queue.close(CloseStatus.NORMAL);
     }
@@ -237,6 +255,18 @@ public final class RealtimeWebSocketSessionRegistry {
 
     public Set<WebSocketSession> sessions() {
         return Set.copyOf(sendQueues.keySet());
+    }
+
+    public int connectionCount() {
+        return sendQueues.size();
+    }
+
+    public int subscriptionCount() {
+        return sessions.values().stream().mapToInt(Set::size).sum();
+    }
+
+    public int syncingSubscriptionCount() {
+        return syncing.values().stream().mapToInt(Map::size).sum();
     }
 
     private static long auctionId(Object payload) {

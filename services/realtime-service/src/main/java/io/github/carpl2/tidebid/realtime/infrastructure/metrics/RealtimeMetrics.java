@@ -42,4 +42,8 @@ public final class RealtimeMetrics {
     public void websocketHandshakeRejected(String reason) { handshakeFailure.increment(); }
     public void connectionOpened() { connections.incrementAndGet(); }
     public void connectionClosed() { connections.updateAndGet(value -> Math.max(0, value - 1)); }
+    public void subscriptionOpened() { subscriptions.incrementAndGet(); }
+    public void subscriptionClosed() { subscriptions.updateAndGet(value -> Math.max(0, value - 1)); }
+    public void syncStarted() { syncingSubscriptions.incrementAndGet(); }
+    public void syncFinished() { syncingSubscriptions.updateAndGet(value -> Math.max(0, value - 1)); }
 }

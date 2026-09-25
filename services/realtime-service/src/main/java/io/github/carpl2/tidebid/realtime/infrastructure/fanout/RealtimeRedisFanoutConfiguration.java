@@ -2,6 +2,7 @@ package io.github.carpl2.tidebid.realtime.infrastructure.fanout;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimeProperties;
+import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -25,10 +26,11 @@ public class RealtimeRedisFanoutConfiguration {
     @Bean(destroyMethod = "close")
     RealtimeWebSocketSessionRegistry realtimeWebSocketSessionRegistry(ObjectMapper objectMapper,
                                                                        RealtimeProperties properties,
+                                                                       RealtimeMetrics metrics,
                                                                        @Qualifier("realtimeWebSocketSendExecutor")
                                                                        Executor realtimeWebSocketSendExecutor) {
         return new RealtimeWebSocketSessionRegistry(objectMapper,
-                properties.queue().sendCapacity(), realtimeWebSocketSendExecutor);
+                properties.queue().sendCapacity(), realtimeWebSocketSendExecutor, metrics);
     }
 
     @Bean

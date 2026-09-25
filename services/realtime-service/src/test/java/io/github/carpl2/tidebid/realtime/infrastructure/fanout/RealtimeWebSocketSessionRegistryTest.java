@@ -12,6 +12,8 @@ import io.github.carpl2.tidebid.contracts.RealtimeServerMessage;
 import io.github.carpl2.tidebid.contracts.RealtimeSnapshot;
 import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketAttributes;
 import io.github.carpl2.tidebid.realtime.infrastructure.websocket.RealtimeWebSocketSendQueue;
+import io.github.carpl2.tidebid.realtime.infrastructure.metrics.RealtimeMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -126,6 +128,26 @@ class RealtimeWebSocketSessionRegistryTest {
         registry.broadcast(bidEvent(12L, 1L, 7L, "2026-09-22T08:00:00Z"));
 
         assertThat(registry.sessions()).isEmpty();
+    }
+
+    @Test
+    void keepsSubscriptionAndSyncMetricsInStepWithRegistryState() {
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.isOpen()).thenReturn(true);
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        RealtimeMetrics metrics = new RealtimeMetrics(meterRegistry);
+        RealtimeWebSocketSessionRegistry registry = new RealtimeWebSocketSessionRegistry(
+                new ObjectMapper().findAndRegisterModules(), 128, Runnable::run, metrics);
+
+        registry.subscribe(42L, session);
+        registry.beginSync(42L, session, 8);
+        assertThat(meterRegistry.get("tidebid.realtime.subscriptions").gauge().value()).isEqualTo(1.0);
+        assertThat(meterRegistry.get("tidebid.realtime.subscriptions.syncing").gauge().value()).isEqualTo(1.0);
+
+        registry.cancelSync(42L, session);
+        registry.unsubscribe(42L, session);
+        assertThat(meterRegistry.get("tidebid.realtime.subscriptions").gauge().value()).isZero();
+        assertThat(meterRegistry.get("tidebid.realtime.subscriptions.syncing").gauge().value()).isZero();
     }
 
     @Test
