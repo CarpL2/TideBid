@@ -182,8 +182,8 @@
 `smoke.ps1 -RealtimeProxy` 通过，停止后等待 Nacos 租约回收恢复单实例基线。两个独立浏览器
 连接跨实例收取同一事件、Redis/Broker 故障恢复和完整端到端演示仍未完成。
 
-- [ ] 从空应用进程和已停止中间件冷启动，保留全部命名卷和历史业务数据。
-- [ ] 七个应用健康，六个 Java 服务在 Nacos 注册唯一且端口正确。
+- [x] 从空应用进程和已停止中间件冷启动，保留全部命名卷和历史业务数据。（2026-09-25：先执行 `stop-apps.ps1`、`infra-down.ps1`，再执行 `infra-up.ps1`、`start-apps.ps1 -SkipBuild`；中间件、应用和历史卷恢复正常，未执行 `docker compose down -v`。）
+- [x] 七个应用健康，六个 Java 服务在 Nacos 注册唯一且端口正确。（2026-09-25：`status.ps1 -AssertHealthy` 和 `check-nacos-registrations.ps1 -ExpectedRealtimeInstances 1` 通过，Gateway/Account/Auction/Trade/Realtime/AI 均注册健康且端口正确。）
 - [x] 两个浏览器连接到不同 Realtime 实例时仍收到相同实时事件。（2026-09-23：`smoke.ps1 -RealtimeMultiInstance` 以两个直连 WebSocket 等价验证 9104/9204，均收到相同 `BID_ACCEPTED.eventId`/sequence；两个实例使用同一 RocketMQ Consumer Group + Redis Pub/Sub。）
 - [x] 停 Broker 后报价与 Outbox 提交成功；恢复后实时/快照追平。（2026-09-24：`smoke.ps1 -RealtimeBrokerRecovery` 验证 Broker 停止期间报价提交成功，恢复后原 WebSocket 连接收到挂起 `BID_ACCEPTED`；后续报价、历史和 RocketMQ topology 校验通过。）
 - [x] 停 Redis 后新 ticket 失败且 MQ 不提前 ACK；恢复后消费和连接正常。（2026-09-23：Redis 停止时 ticket 明确返回 503；恢复后 Redis healthy，Realtime smoke 通过。）
@@ -191,7 +191,7 @@
 - [ ] 停全部 Realtime 时 Auction 报价、延时、关拍、订单和支付继续正确。
 - [ ] 人工制造重复 MQ、乱序 Pub/Sub 和 sequence gap，页面最终与 MySQL 一致。
 - [x] 慢客户端被关闭，正常客户端仍持续接收。（2026-09-24：Realtime 定向测试验证慢连接队列溢出后只发送 `RESYNC_REQUIRED(BUFFER_OVERFLOW)` 并关闭 1013，健康连接未被关闭且仍发送消息。）
-- [ ] 重启整栈后代理规则、动态 endAt、报价和终态保持一致。
+- [x] 重启整栈后代理规则、动态 endAt、报价和终态保持一致。（2026-09-25：冷启动后 `smoke.ps1 -RealtimeProxyPaymentDemo` 重新验证代理 sequence 1～5、反狙击、CLOSED_SOLD、支付和结算。）
 - [ ] 全程未执行 `docker compose down -v` 或删除用户数据卷。
 
 实际结果：待执行。
@@ -208,9 +208,9 @@
 - [x] 阶段 03 的赢家保证金、订单、支付和卖家入账继续完成。（2026-09-24：`-ReliableTrade` 全量烟雾通过 sold/payment、unsold/release、payment-timeout/forfeit/credit。）
 - [x] 代理实时场景的订单支付和卖家结算继续完成。（2026-09-25：`smoke.ps1 -RealtimeProxyPaymentDemo` 支付 110.00，重复请求返回同一 paymentAttemptId，订单进入 `PAID/COMPLETED`，卖家入账 160.00，赢家/落败者钱包余额符合保证金和尾款变化。）
 - [ ] 同一 HTTP 请求和同一 MQ 事件重放后价格、sequence、规则、订单和资金不变。
-- [ ] 烟雾脚本再次运行使用新用户/拍品并完整通过；失败时非零退出且不输出秘密。
+- [x] 烟雾脚本再次运行使用新用户/拍品并完整通过；失败时非零退出且不输出秘密。（2026-09-25：冷启动后 `-ReliableTrade` 和 `-RealtimeProxyPaymentDemo` 均使用新用户/拍品完整通过；输出未包含凭证、Token 或完整签名 URL。）
 
-实际结果：2026-09-25 已通过 `smoke.ps1 -RealtimeProxyPaymentDemo` 验证最终关拍、双端 `AUCTION_CLOSED`、支付幂等和 `PAID/COMPLETED` 结算；前端开发入口 HTTP 200，Chrome headless DOM 检查确认 Vue 应用挂载并渲染 TideBid 文本。真实浏览器 Console/布局/Network 交互仍待人工验收。
+实际结果：2026-09-25 冷启动后已通过 `smoke.ps1 -ReliableTrade` 和 `smoke.ps1 -RealtimeProxyPaymentDemo`，覆盖最终关拍、双端 `AUCTION_CLOSED`、支付幂等和 `PAID/COMPLETED` 结算；前端开发入口 HTTP 200，Chrome headless DOM 检查确认 Vue 应用挂载并渲染 TideBid 文本。真实浏览器 Console/布局/Network 交互仍待人工验收。
 
 ## 15. 数据保留、文档与最终结论
 
