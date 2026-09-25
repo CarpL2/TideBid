@@ -45,7 +45,7 @@
 
 ## 4. 协议、限制与会话生命周期
 
-- [ ] CONNECTED 包含 connectionId、serverTime 和心跳参数。
+- [x] CONNECTED 包含 connectionId、serverTime 和心跳参数。（2026-09-25：Realtime WebSocket handler 定向测试通过，`RealtimeConnected` 契约校验覆盖三字段。）
 - [ ] SUBSCRIBE/UNSUBSCRIBE 重放幂等，非法 auctionId 返回可恢复 ERROR。
 - [ ] PING/PONG 正确回显时间且不改变订阅。
 - [ ] 未知 type、未知 protocolVersion、缺字段、畸形 JSON 和超过 8 KiB 消息被拒绝。
@@ -55,7 +55,7 @@
 - [ ] 90 秒空闲连接关闭；正常心跳连接保持。
 - [ ] 应用优雅停止拒绝新会话并给现有客户端可恢复关闭语义。
 
-实际结果：2026-09-24 已完成运行日志审计，14 个日志文件未发现配置秘密、Bearer 凭证、OSS 签名或私钥；仓库历史、Nacos/Redis 样本和指标/错误响应的最终审计仍待阶段收口。
+实际结果：2026-09-25 Realtime handler、Gateway 和前端状态机定向测试通过；剩余项主要是浏览器真实 Console/Network 观察和优雅停止的人工验证。
 
 ## 5. RocketMQ 消费与 Redis 多实例扇出
 
@@ -113,7 +113,7 @@
 - [ ] 场次关闭后代理不能继续执行或改变终态。
 - [ ] 他人 API、历史、WebSocket、日志和指标均看不到 maxAmount。
 
-实际结果：待执行。
+实际结果：2026-09-25 Auction 代理 API 定向测试通过；`RealtimeProxyDemo`/`RealtimeProxyPaymentDemo` 已覆盖代理提升、公开价、sequence、历史和支付终态。迁移/MySQL profile 测试在本次定向命令中跳过 12 项，未将其误标为通过。
 
 ## 9. 反狙击延时
 
@@ -132,17 +132,17 @@
 
 ## 10. API、Gateway 与权限
 
-- [ ] 代理 GET 只返回本人规则；其他用户和卖家无法查询。
-- [ ] 代理 PUT/DELETE 与手动报价都要求合法 X-Request-Id。
+- [x] 代理 GET 只返回本人规则；其他用户和卖家无法查询。（2026-09-25：`AuctionProxyBidControllerTest` 和服务层权限测试通过。）
+- [x] 代理 PUT/DELETE 与手动报价都要求合法 X-Request-Id。（2026-09-25：代理 Controller 定向测试覆盖 PUT/DELETE 请求头与 400 边界。）
 - [ ] 大整数 ID、两位小数金额和 UTC 时间保持既有线协议。
-- [ ] Realtime HTTP 和 WebSocket 只能通过 Gateway 对前端提供。
+- [x] Realtime HTTP 和 WebSocket 只能通过 Gateway 对前端提供。（2026-09-25：`GatewayRouteConfigurationTest` 验证 HTTP `lb://` 与 WebSocket `lb:ws://` 路由。）
 - [x] `/api/realtime/**` 使用正常 JWT；`/ws/**` 只接受一次性 ticket。（2026-09-22：Gateway 与 Realtime 定向测试通过。）
 - [ ] 内部 snapshot、MQ 和 Redis 端点不在 Gateway route 中。
 - [ ] 无认证、越权、业务冲突和基础设施故障返回统一稳定错误。
 - [ ] CORS/WebSocket Origin 没有扩大为通配符。
-- [ ] Actuator 仍只暴露 health/info。
+- [x] Actuator 仍只暴露 health/info。（2026-09-25：Gateway 与 Realtime 应用测试验证 health/info 可用，`/actuator`、`env`、`beans` 不暴露。）
 
-实际结果：待执行。
+实际结果：2026-09-25 Gateway 定向测试 21 项、Realtime 定向测试 18 项通过；路由、JWT/ticket、Actuator 暴露边界和代理 API 请求头已验证。内部端点负向探测、全量大整数/错误响应审查仍待收口。
 
 ## 11. Vue 实时演示
 
@@ -153,10 +153,10 @@
 - [x] 本人可设置、修改、停用代理并看到自己的 maxAmount。（2026-09-22：详情页本人代理面板接入 GET/PUT/DELETE，测试覆盖启用和停用。）
 - [x] 其他登录用户看不到代理 maxAmount 或是否仍有剩余额度。（2026-09-22：maxAmount 只来自本人接口并只渲染在本人代理控制区；测试确认公开文本不出现最高价。）
 - [x] 被代理超过、当前领先、规则已停用和终态文案明确。（2026-09-22：代理面板按 `leading`/status 展示状态，终态沿用成交/流拍结果。）
-- [ ] 收到关闭事件后按钮禁用并出现成交/流拍与订单入口。
+- [x] 收到关闭事件后按钮禁用并出现成交/流拍与订单入口。（2026-09-25：前端终态 Vitest 与 `RealtimeProxyPaymentDemo` 的 `AUCTION_CLOSED`/订单入口整栈链路通过。）
 - [ ] 离线时 HTTP 手动/代理操作的可用性和风险提示准确，不伪装为实时。
 - [ ] 有限指数退避不会无限快速重连，达到上限可手动恢复。
-- [ ] 刷新页面、切后台、断网恢复和 Realtime 重启后均恢复正确状态。
+- [x] 刷新页面、切后台、断网恢复和 Realtime 重启后均恢复正确状态。（2026-09-25：前端状态机测试、`RealtimeRestartRecovery` 和 `RealtimeProxyPaymentDemo` Snapshot 恢复均通过。）
 - [ ] 浏览器 Console 无错误，Network 中 HTTP 经 5173→9000，WebSocket 经 Gateway upgrade。
 - [ ] 页面在常见桌面宽度无明显遮挡、跳动或无法操作区域。
 
@@ -167,7 +167,7 @@
 ## 12. 可观测性与秘密
 
 - [ ] 可观察当前连接、订阅、同步、推送、重复、重试、慢消费者和延迟。
-- [ ] 指标不以 userId、auctionId、eventId、connectionId 为 tag。
+- [x] 指标不以 userId、auctionId、eventId、connectionId 为 tag。（2026-09-25：`RealtimeMetricsTest` 通过，指标仅使用固定 outcome 标签；连接/订阅使用无标签 Gauge。）
 - [ ] 日志可用 connectionId、auctionId、eventId、traceId 串联关键路径。
 - [x] 日志不包含 JWT、ticket、内部 Token、AccessKey、OSS 签名、代理 maxAmount 或完整消息正文。（2026-09-25：`audit-runtime-logs.ps1` 审计最新 14 个日志文件通过；仓库高置信秘密扫描通过，未发现 AK/Signed URL/私钥/Bearer 样本。）
 - [ ] Redis ticket、连接租约和事件幂等 key 均有 TTL。
@@ -192,9 +192,9 @@
 - [ ] 人工制造重复 MQ、乱序 Pub/Sub 和 sequence gap，页面最终与 MySQL 一致。
 - [x] 慢客户端被关闭，正常客户端仍持续接收。（2026-09-24：Realtime 定向测试验证慢连接队列溢出后只发送 `RESYNC_REQUIRED(BUFFER_OVERFLOW)` 并关闭 1013，健康连接未被关闭且仍发送消息。）
 - [x] 重启整栈后代理规则、动态 endAt、报价和终态保持一致。（2026-09-25：冷启动后 `smoke.ps1 -RealtimeProxyPaymentDemo` 重新验证代理 sequence 1～5、反狙击、CLOSED_SOLD、支付和结算。）
-- [ ] 全程未执行 `docker compose down -v` 或删除用户数据卷。
+- [x] 全程未执行 `docker compose down -v` 或删除用户数据卷。（2026-09-25：本批仅执行 `infra-down.ps1`/`infra-up.ps1`，脚本输出明确保留容器和命名卷。）
 
-实际结果：待执行。
+实际结果：2026-09-25 已完成停应用/停中间件后的冷启动，Nacos 注册、完整可靠交易和实时支付场景均通过；“停全部 Realtime”和人工乱序注入仍未执行。
 
 ## 14. 端到端烟雾
 
