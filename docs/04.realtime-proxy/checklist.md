@@ -63,9 +63,9 @@
 - [x] 正确消费 BidAccepted、AuctionTimeExtended、ClosedSold 和 ClosedUnsold。（2026-09-22：统一 EventMessageDecoder 注册四类事件，handler 逐类转换为 Realtime contract。）
 - [x] 只有解码及 Redis Lua 原子“eventId 幂等 + publish”成功后才 ACK，不存在 SET 成功但未 publish 的窗口。（2026-09-22：Lua 在一个脚本中执行 EXISTS、SET PX 和 PUBLISH；transport 仅在 handler 返回后 SUCCESS。）
 - [x] Redis publish 失败时 MQ 重试，同一 eventId 恢复后只产生一次有效 fanout。（2026-09-22：Redis 异常向 handler 抛出，消费结果 FAILURE；publisher 单测覆盖首次 1/重复 0。）
-- [x] 重复 MQ 消息、重复 Pub/Sub 消息不会导致客户端重复报价。（2026-09-22：eventId 幂等标记和本地 session 广播测试通过。）
+- [x] 重复 MQ 消息、重复 Pub/Sub 消息不会导致客户端重复报价。（2026-09-25：新增同步缓冲重复 eventId 回放测试；同一事件只发送一次，前端实时客户端 9 项定向测试覆盖重复/gap 重订阅。）
 - [x] 两个 Realtime 实例分别持有连接时，都能收到同一事件。（2026-09-23：两个直连 WebSocket 分别连接 9104/9204，收到同一 `BID_ACCEPTED` eventId/sequence。）
-- [ ] 没有相关订阅的实例不会创建无界 auction 缓存。
+- [x] 没有相关订阅的实例不会创建无界 auction 缓存。（2026-09-25：新增 `RealtimeWebSocketSessionRegistryTest#broadcastWithoutSubscribersDoesNotCreateSessionState`，无订阅广播后 session registry 保持为空。）
 - [x] 公共消息不包含 bidderId、winnerId、代理最高价或消息原始正文。（2026-09-22：session registry 只构造 RealtimeBidAccepted/RealtimeAuctionClosed 等公开 contract，广播测试确认不含 bidderId。）
 - [x] RocketMQ Broker 恢复后 backlog 可追平，没有静默丢失或永久 DEAD。（2026-09-24：`smoke.ps1 -RealtimeBrokerRecovery` 在 Broker 停止期间提交报价，恢复后同一 WebSocket 收到对应 `BID_ACCEPTED`；后续 sequence、报价历史和拓扑检查均通过。）
 
@@ -189,7 +189,7 @@
 - [x] 停 Redis 后新 ticket 失败且 MQ 不提前 ACK；恢复后消费和连接正常。（2026-09-23：Redis 停止时 ticket 明确返回 503；恢复后 Redis healthy，Realtime smoke 通过。）
 - [x] 停一个 Realtime 实例后另一实例连接不受影响，原连接可重连恢复。（2026-09-24：`smoke.ps1 -RealtimeRestartRecovery` 验证 9204 停止期间 9104 收到报价，9204 重启后新连接 Snapshot 收敛。）
 - [x] 停全部 Realtime 时 Auction 报价、延时、关拍、订单和支付继续正确。（2026-09-25：`app-outage.ps1 -Service realtime -Action Suspend` 后运行完整 `smoke.ps1 -ReliableTrade`，成交支付、流拍释放和支付超时补偿全部通过；Realtime 恢复后 Nacos 注册和 `RealtimeProxyTradeDemo` Snapshot/关拍/订单入口继续通过。）
-- [ ] 人工制造重复 MQ、乱序 Pub/Sub 和 sequence gap，页面最终与 MySQL 一致。
+- [ ] 人工制造重复 MQ、乱序 Pub/Sub 和 sequence gap，页面最终与 MySQL 一致。（2026-09-25：服务端重复 eventId、前端重复/gap 定向测试通过；真实 Broker/PubSub 人工注入仍待执行。）
 - [x] 慢客户端被关闭，正常客户端仍持续接收。（2026-09-24：Realtime 定向测试验证慢连接队列溢出后只发送 `RESYNC_REQUIRED(BUFFER_OVERFLOW)` 并关闭 1013，健康连接未被关闭且仍发送消息。）
 - [x] 重启整栈后代理规则、动态 endAt、报价和终态保持一致。（2026-09-25：冷启动后 `smoke.ps1 -RealtimeProxyPaymentDemo` 重新验证代理 sequence 1～5、反狙击、CLOSED_SOLD、支付和结算。）
 - [x] 全程未执行 `docker compose down -v` 或删除用户数据卷。（2026-09-25：本批仅执行 `infra-down.ps1`/`infra-up.ps1`，脚本输出明确保留容器和命名卷。）

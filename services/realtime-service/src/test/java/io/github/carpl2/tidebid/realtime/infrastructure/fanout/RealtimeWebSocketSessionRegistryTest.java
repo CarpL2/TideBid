@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -88,6 +89,46 @@ class RealtimeWebSocketSessionRegistryTest {
     }
 
     @Test
+    void dropsDuplicateEventIdsWhileReplayingSyncBuffer() throws Exception {
+        WebSocketSession session = mock(WebSocketSession.class);
+        Map<String, Object> attributes = new HashMap<>();
+        attributes.put(RealtimeWebSocketAttributes.USER_ID, 7L);
+        when(session.getAttributes()).thenReturn(attributes);
+        when(session.isOpen()).thenReturn(true);
+        RealtimeWebSocketSessionRegistry registry = new RealtimeWebSocketSessionRegistry(
+                new ObjectMapper().findAndRegisterModules());
+        registry.subscribe(42L, session);
+        registry.beginSync(42L, session, 8);
+
+        EventEnvelope<BidAcceptedEvent> duplicate = bidEventWithId(
+                UUID.fromString("11111111-1111-1111-1111-111111111111"), 10L, 1L, 8L,
+                "2026-09-22T08:00:00Z");
+        registry.broadcast(duplicate);
+        registry.broadcast(duplicate);
+
+        RealtimeSnapshot snapshot = new RealtimeSnapshot(
+                42L, RealtimeAuctionStatus.OPEN, new BigDecimal("12.00"),
+                new BigDecimal("13.00"), 0L, Instant.parse("2026-09-22T09:00:00Z"),
+                null, 0, 0L, false, false, List.of());
+
+        assertThat(registry.sendSnapshot(42L, session, snapshot, "sub-duplicate")).isTrue();
+        org.mockito.ArgumentCaptor<TextMessage> captor = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, times(2)).sendMessage(captor.capture());
+        assertThat(captor.getAllValues().get(0).getPayload()).contains("\"type\":\"SNAPSHOT\"");
+        assertThat(captor.getAllValues().get(1).getPayload()).contains("\"bidId\":\"10\"");
+    }
+
+    @Test
+    void broadcastWithoutSubscribersDoesNotCreateSessionState() {
+        RealtimeWebSocketSessionRegistry registry = new RealtimeWebSocketSessionRegistry(
+                new ObjectMapper().findAndRegisterModules());
+
+        registry.broadcast(bidEvent(12L, 1L, 7L, "2026-09-22T08:00:00Z"));
+
+        assertThat(registry.sessions()).isEmpty();
+    }
+
+    @Test
     void slowConsumerOverflowDoesNotCloseHealthyConsumer() throws Exception {
         WebSocketSession slow = mock(WebSocketSession.class);
         WebSocketSession healthy = mock(WebSocketSession.class);
@@ -125,8 +166,13 @@ class RealtimeWebSocketSessionRegistryTest {
 
     private static EventEnvelope<BidAcceptedEvent> bidEvent(long bidId, long sequenceNo, long bidderId,
                                                               String acceptedAt) {
+        return bidEventWithId(UUID.randomUUID(), bidId, sequenceNo, bidderId, acceptedAt);
+    }
+
+    private static EventEnvelope<BidAcceptedEvent> bidEventWithId(UUID eventId, long bidId, long sequenceNo,
+                                                                   long bidderId, String acceptedAt) {
         Instant timestamp = Instant.parse(acceptedAt);
-        return new EventEnvelope<>(java.util.UUID.randomUUID(), BidAcceptedEvent.EVENT_TYPE, 1,
+        return new EventEnvelope<>(eventId, BidAcceptedEvent.EVENT_TYPE, 1,
                 timestamp, "auction",
                 new BidAcceptedEvent(42L, bidId, bidderId, new BigDecimal("12.00"), sequenceNo, timestamp));
     }
