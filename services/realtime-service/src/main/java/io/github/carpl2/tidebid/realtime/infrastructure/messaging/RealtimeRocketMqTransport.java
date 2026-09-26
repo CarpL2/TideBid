@@ -15,6 +15,8 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -28,12 +30,15 @@ import java.util.concurrent.ConcurrentHashMap;
 @Profile({"local-db", "nacos"})
 public final class RealtimeRocketMqTransport implements SmartLifecycle {
 
+    private static final Logger log = LoggerFactory.getLogger(RealtimeRocketMqTransport.class);
+
     private final RealtimeProperties properties;
     private final RealtimeAuctionEventHandler handler;
     private final MeterRegistry meters;
     private final ClientServiceProvider provider;
     private final Map<String, PushConsumer> consumers = new ConcurrentHashMap<>();
     private volatile boolean running;
+    private volatile String lastConnectFailure;
 
     @Autowired
     public RealtimeRocketMqTransport(RealtimeProperties properties, RealtimeAuctionEventHandler handler,
@@ -68,9 +73,24 @@ public final class RealtimeRocketMqTransport implements SmartLifecycle {
             PushConsumer previous = consumers.putIfAbsent(properties.rocketmq().consumerGroup(), consumer);
             if (previous != null) {
                 try { consumer.close(); } catch (java.io.IOException ignored) { }
+            } else {
+                meters.counter("tidebid.realtime.rocketmq.consumer.connect", "outcome", "success").increment();
+                if (lastConnectFailure != null) {
+                    log.info("Realtime RocketMQ consumer connection recovered consumerGroup={}",
+                            properties.rocketmq().consumerGroup());
+                    lastConnectFailure = null;
+                }
             }
         } catch (RuntimeException | ClientException exception) {
             meters.counter("tidebid.realtime.rocketmq.consumer.connect", "outcome", "failure").increment();
+            Throwable root = rootCause(exception);
+            String failure = exception.getClass().getName() + '|' + safeReason(exception)
+                    + '|' + root.getClass().getName() + '|' + safeReason(root);
+            if (!failure.equals(lastConnectFailure)) {
+                lastConnectFailure = failure;
+                log.warn("Realtime RocketMQ consumer connection failed exceptionType={} reason={} rootType={} rootReason={}",
+                        exception.getClass().getName(), safeReason(exception), root.getClass().getName(), safeReason(root));
+            }
         }
     }
 
@@ -81,6 +101,9 @@ public final class RealtimeRocketMqTransport implements SmartLifecycle {
             return ConsumeResult.SUCCESS;
         } catch (RuntimeException exception) {
             meters.counter("tidebid.realtime.rocketmq.consume", "outcome", "failure").increment();
+            log.warn("Realtime RocketMQ message rejected messageId={} topic={} tag={} exceptionType={}",
+                    message.getMessageId(), message.getTopic(), message.getTag().orElse(""),
+                    exception.getClass().getName());
             return ConsumeResult.FAILURE;
         }
     }
@@ -92,6 +115,19 @@ public final class RealtimeRocketMqTransport implements SmartLifecycle {
     }
 
     @Override public boolean isRunning() { return running; }
+
+    private static String safeReason(Throwable exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) return "unspecified";
+        return message.replaceAll("(?i)(token|password|secret|accesskey)[^,; ]*", "$1=[redacted]")
+                .replaceAll("[\\r\\n\\t]+", " ");
+    }
+
+    private static Throwable rootCause(Throwable exception) {
+        Throwable current = exception;
+        while (current.getCause() != null && current.getCause() != current) current = current.getCause();
+        return current;
+    }
 
     private ClientConfiguration clientConfiguration() {
         return ClientConfiguration.newBuilder().setEndpoints(properties.rocketmq().endpoints())

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RealtimeAuctionClient } from '@/features/realtime/client'
 
@@ -39,6 +39,37 @@ class FakeWebSocket {
 describe('RealtimeAuctionClient', () => {
   beforeEach(() => {
     FakeWebSocket.instances = []
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('invokes default browser timers with their global receiver', async () => {
+    const setTimer = vi.fn<(
+      handler: TimerHandler,
+      timeout?: number,
+    ) => ReturnType<typeof setTimeout>>(function (this: typeof globalThis) {
+      expect(this).toBe(globalThis)
+      return 1 as unknown as ReturnType<typeof setTimeout>
+    })
+    const clearTimer = vi.fn<(handle?: ReturnType<typeof setTimeout>) => void>(function (this: typeof globalThis) {
+      expect(this).toBe(globalThis)
+    })
+    vi.stubGlobal('setTimeout', setTimer)
+    vi.stubGlobal('clearTimeout', clearTimer)
+    const client = new RealtimeAuctionClient({}, {
+      ticketProvider: async () => 'ticket-value',
+      webSocketFactory: (url: string) => new FakeWebSocket(url) as unknown as WebSocket,
+    })
+
+    client.start('42')
+    await Promise.resolve()
+    FakeWebSocket.instances[0]!.open()
+    client.stop()
+
+    expect(setTimer).toHaveBeenCalledOnce()
+    expect(clearTimer).toHaveBeenCalledOnce()
   })
 
   it('subscribes with lastSequenceNo and ignores duplicate or gapped bids', async () => {

@@ -19,6 +19,7 @@ import { RealtimeAuctionClient } from '@/features/realtime/client'
 import ApiErrorNotice from '@/components/ApiErrorNotice.vue'
 import AppHeader from '@/components/AppHeader.vue'
 import { validateBidAmount } from '@/features/auction/bid-validation'
+import { mergeRealtimeSnapshotBids } from '@/features/auction/bid-history'
 import {
   conditionLabel,
   formatMoney,
@@ -94,14 +95,7 @@ function applyRealtimeSnapshot(snapshot: RealtimeSnapshot): void {
   detail.value.endAt = snapshot.endAt
   detail.value.closedAt = snapshot.closedAt
   detail.value.finalPrice = snapshot.status === 'CLOSED_SOLD' ? snapshot.displayPrice : null
-  bids.value = snapshot.bids.map((bid) => ({
-    bidId: bid.bidId,
-    amount: bid.amount,
-    previousPrice: null,
-    sequenceNo: bid.sequenceNo,
-    createdAt: bid.acceptedAt,
-    mine: bid.mine,
-  }))
+  bids.value = mergeRealtimeSnapshotBids(bids.value, snapshot.bids)
   bidAmount.value = String(snapshot.minimumNextBid)
   proxyLeading.value = snapshot.leading
   if (!snapshot.proxyActive) {

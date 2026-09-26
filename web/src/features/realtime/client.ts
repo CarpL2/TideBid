@@ -78,8 +78,8 @@ export class RealtimeAuctionClient {
     this.random = options.random ?? Math.random
     this.webSocketFactory = options.webSocketFactory ?? ((url) => new WebSocket(url))
     this.ticketProvider = options.ticketProvider ?? this.defaultTicketProvider
-    this.setTimer = options.setTimeout ?? globalThis.setTimeout
-    this.clearTimer = options.clearTimeout ?? globalThis.clearTimeout
+    this.setTimer = options.setTimeout ?? globalThis.setTimeout.bind(globalThis)
+    this.clearTimer = options.clearTimeout ?? globalThis.clearTimeout.bind(globalThis)
   }
 
   get currentState(): RealtimeConnectionState {

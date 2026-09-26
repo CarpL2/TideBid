@@ -22,6 +22,8 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.PongMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.nio.charset.StandardCharsets;
@@ -31,6 +33,8 @@ import java.util.Map;
 import java.util.UUID;
 
 final class RealtimeWebSocketHandler extends TextWebSocketHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(RealtimeWebSocketHandler.class);
 
     private final ObjectMapper objectMapper;
     private final RealtimeMetrics metrics;
@@ -69,8 +73,7 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         metrics.connectionOpened();
         if (sessionRegistry != null) sessionRegistry.register(session);
-        String connectionId = String.valueOf(session.getAttributes()
-                .get(RealtimeWebSocketHandshakeInterceptor.CONNECTION_ID_ATTRIBUTE));
+        String connectionId = connectionId(session);
         RealtimeServerMessage<?> connected = new RealtimeServerMessage<>(
                 RealtimeMessageType.CONNECTED, 1, connectionId,
                 Instant.now(), new io.github.carpl2.tidebid.contracts.RealtimeConnected(
@@ -79,6 +82,7 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
                 properties.subscription().maxPerConnection(), properties.queue().controlWindow(),
                 properties.queue().controlMaxMessages()));
         send(session, connected);
+        log.info("Realtime WebSocket connected connectionId={}", connectionId);
     }
 
     @Override
@@ -135,6 +139,9 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
                                         io.github.carpl2.tidebid.contracts.RealtimeResyncReason.BUFFER_OVERFLOW,
                                         subscribe.lastSequenceNo());
                             }
+                            log.info("Realtime WebSocket subscribed connectionId={} auctionId={} traceId={} lastSequenceNo={}",
+                                    connectionId(session), subscribe.auctionId(), decoded.requestId(),
+                                    snapshot.lastSequenceNo());
                         } catch (RuntimeException exception) {
                             sessionRegistry.cancelSync(subscribe.auctionId(), session);
                             sendResync(session, decoded.requestId(), subscribe.auctionId(),
@@ -175,10 +182,17 @@ final class RealtimeWebSocketHandler extends TextWebSocketHandler {
         if (userId instanceof Long user && connectionId instanceof String id) {
             leaseStore.release(user, id);
         }
+        log.info("Realtime WebSocket closed connectionId={} closeCode={}",
+                connectionId(session), status.getCode());
     }
 
     private SubscriptionState state(WebSocketSession session) {
         return (SubscriptionState) session.getAttributes().get(SubscriptionState.class.getName());
+    }
+
+    private static String connectionId(WebSocketSession session) {
+        return String.valueOf(session.getAttributes().getOrDefault(
+                RealtimeWebSocketAttributes.CONNECTION_ID, "unknown"));
     }
 
     private void send(WebSocketSession session, RealtimeServerMessage<?> message) throws Exception {

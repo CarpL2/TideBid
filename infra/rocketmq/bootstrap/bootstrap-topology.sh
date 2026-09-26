@@ -68,6 +68,10 @@ upsert_consumer_group() {
         -a true
 }
 
+# The Proxy creates this cluster-wide heartbeat topic during startup. Our
+# broker intentionally disables automatic topic/group creation, so bootstrap
+# it explicitly before Compose starts the Proxy.
+upsert_normal_topic DefaultHeartBeatSyncerTopic
 upsert_normal_topic tidebid-auction-events
 upsert_normal_topic tidebid-account-events
 upsert_normal_topic tidebid-trade-events
@@ -80,5 +84,6 @@ upsert_consumer_group tidebid-trade-account-v1
 upsert_consumer_group tidebid-trade-timeout-v1
 upsert_consumer_group tidebid-account-credit-v1
 upsert_consumer_group tidebid-realtime-auction-v1
+upsert_consumer_group CID_DefaultHeartBeatSyncerTopic
 
 echo "TideBid RocketMQ topology bootstrap completed successfully."

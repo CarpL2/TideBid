@@ -402,7 +402,8 @@ schemas and the four restricted service accounts after MySQL becomes healthy, th
 each account can write only its own schema. `rocketmq-volume-init` gives new named volumes to the
 non-root RocketMQ user before RocketMQ starts. After the Broker is healthy, `rocketmq-bootstrap`
 idempotently creates the three normal event topics, the delay-command topic and six consumer
-groups before the Proxy accepts application traffic. All three jobs finish as `Exited (0)`; that
+groups, plus the Proxy-required `DefaultHeartBeatSyncerTopic` and matching consumer group, before
+the Proxy accepts application traffic. All three jobs finish as `Exited (0)`; that
 status is expected. The standalone Proxy has a bounded restart policy because the Broker can open
 its TCP port shortly before it finishes registering with the NameServer.
 

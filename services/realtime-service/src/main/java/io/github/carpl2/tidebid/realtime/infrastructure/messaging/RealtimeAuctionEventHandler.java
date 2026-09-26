@@ -12,6 +12,8 @@ import io.github.carpl2.tidebid.realtime.infrastructure.config.RealtimePropertie
 import io.github.carpl2.tidebid.realtime.infrastructure.fanout.RedisRealtimeEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -21,6 +23,8 @@ import java.util.Set;
 @Component
 @Profile({"local-db", "nacos"})
 public final class RealtimeAuctionEventHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(RealtimeAuctionEventHandler.class);
 
     private static final Set<String> EVENT_TAGS = Set.of(
             BidAcceptedEvent.EVENT_TYPE,
@@ -43,8 +47,10 @@ public final class RealtimeAuctionEventHandler {
         EventEnvelope<?> envelope = decoder.decode(message.body());
         validateMetadata(message, envelope);
         long auctionId = auctionId(envelope.payload());
-        publisher.publish(envelope.eventId().toString(), auctionId,
+        boolean published = publisher.publish(envelope.eventId().toString(), auctionId,
                 new String(message.body(), java.nio.charset.StandardCharsets.UTF_8));
+        log.info("Realtime auction event handled eventId={} auctionId={} eventType={} outcome={}",
+                envelope.eventId(), auctionId, envelope.eventType(), published ? "published" : "duplicate");
     }
 
     private void validateMetadata(RealtimeRocketMqTransport.RealtimeInboundMessage message,
