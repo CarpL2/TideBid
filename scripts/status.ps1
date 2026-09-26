@@ -33,14 +33,51 @@ function Test-HttpHealth {
     }
 }
 
+function Read-DotEnvEntries {
+    $entries = [ordered]@{}
+    foreach ($line in [System.IO.File]::ReadAllLines($EnvFile)) {
+        $trimmed = $line.Trim()
+        if ($trimmed.Length -eq 0 -or $trimmed.StartsWith('#')) { continue }
+        $separator = $line.IndexOf('=')
+        if ($separator -le 0) { throw 'Invalid .env entry; expected NAME=value.' }
+        $name = $line.Substring(0, $separator).Trim()
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or $entries.Contains($name)) {
+            throw 'Invalid or duplicate environment variable name in .env.'
+        }
+        $value = $line.Substring($separator + 1).Trim()
+        if ($value.Length -ge 2 -and
+            (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+             ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        $entries[$name] = $value
+    }
+    return $entries
+}
+
 function Invoke-ComposeJson {
     param([Parameter(Mandatory = $true)][string[]]$Services)
 
     $docker = Get-Command docker -ErrorAction SilentlyContinue
     if ($null -eq $docker) { throw 'Docker CLI was not found.' }
     if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) { throw "Environment file does not exist: $EnvFile" }
-    $output = @(& $docker.Source compose --env-file $EnvFile -f $composeFile ps --format json @Services)
-    if ($LASTEXITCODE -ne 0) { throw 'Docker Compose status query failed.' }
+    $originalEnvironment = @{}
+    foreach ($entry in (Read-DotEnvEntries).GetEnumerator()) {
+        $originalEnvironment[$entry.Key] = [pscustomobject]@{
+            Existed = Test-Path -LiteralPath "Env:$($entry.Key)"
+            Value = [Environment]::GetEnvironmentVariable($entry.Key, 'Process')
+        }
+        [Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, 'Process')
+    }
+    try {
+        $output = @(& $docker.Source compose --env-file $EnvFile -f $composeFile ps --format json @Services)
+        if ($LASTEXITCODE -ne 0) { throw 'Docker Compose status query failed.' }
+    } finally {
+        foreach ($entry in $originalEnvironment.GetEnumerator()) {
+            $value = if ($entry.Value.Existed) { $entry.Value.Value } else { $null }
+            [Environment]::SetEnvironmentVariable($entry.Key, $value, 'Process')
+        }
+    }
     $items = [System.Collections.Generic.List[object]]::new()
     foreach ($line in $output) {
         if ([string]::IsNullOrWhiteSpace([string]$line)) { continue }
@@ -129,7 +166,22 @@ if ([string]::IsNullOrWhiteSpace($internalToken)) {
 }
 
 if ($AssertHealthy) {
-    & (Join-Path $PSScriptRoot 'check-rocketmq-topology.ps1') -EnvFile $EnvFile
+    $originalEnvironment = @{}
+    foreach ($entry in (Read-DotEnvEntries).GetEnumerator()) {
+        $originalEnvironment[$entry.Key] = [pscustomobject]@{
+            Existed = Test-Path -LiteralPath "Env:$($entry.Key)"
+            Value = [Environment]::GetEnvironmentVariable($entry.Key, 'Process')
+        }
+        [Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, 'Process')
+    }
+    try {
+        & (Join-Path $PSScriptRoot 'check-rocketmq-topology.ps1') -EnvFile $EnvFile
+    } finally {
+        foreach ($entry in $originalEnvironment.GetEnumerator()) {
+            $value = if ($entry.Value.Existed) { $entry.Value.Value } else { $null }
+            [Environment]::SetEnvironmentVariable($entry.Key, $value, 'Process')
+        }
+    }
     if ($failed.Count -gt 0) { throw "TideBid status check failed: $($failed -join ', ')" }
     Write-Host '[PASS] TideBid applications and Realtime middleware are healthy.'
 } elseif ($failed.Count -gt 0) {

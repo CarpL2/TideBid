@@ -544,7 +544,9 @@ $environmentRestore = @()
 foreach ($entry in $dotEnvValues.GetEnumerator()) {
     $existingValue = [Environment]::GetEnvironmentVariable($entry.Key, 'Process')
     if ([string]::IsNullOrEmpty($existingValue)) {
-        $environmentRestore += [pscustomobject]@{ Name = $entry.Key; Value = $existingValue }
+        # An empty process variable overrides Docker Compose --env-file values.
+        # Treat missing and empty values alike, then remove them after this script.
+        $environmentRestore += [pscustomobject]@{ Name = $entry.Key; Value = $null }
         [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
     }
 }

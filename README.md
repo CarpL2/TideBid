@@ -2,12 +2,13 @@
 
 TideBid is a Java 21 distributed auction platform built around a verifiable bidding and transaction flow. It is designed as a portfolio project for reasoning about concurrency, money consistency, reliable events, real-time updates, and service boundaries—not as a real-money trading system.
 
-The project currently implements the realtime-proxy stage on top of the reliable-trade flow: account security, private auction assets,
+The current `v1.0.0` release candidate implements the complete reliable-trade and realtime-proxy flow: account security, private auction assets,
 review, deposit-backed registration, concurrent manual bidding, reliable closing, virtual-fund
 settlement, winning orders, simulated payment, payment timeout and seller credit all run end to end.
 Transactional Outbox/Inbox processing and database reconciliation provide recovery across duplicate
 delivery, process restarts and Broker outages. Realtime WebSocket delivery, proxy bidding and bounded
-anti-sniping are implemented in stage 04; AI inference remains the stage 05 scope.
+anti-sniping are implemented and verified. AI inference is intentionally deferred to an optional
+`v1.x` enhancement so the auction path has no model or external AI dependency.
 
 ## Core flow
 
@@ -18,6 +19,45 @@ anti-sniping are implemented in stage 04; AI inference remains the stage 05 scop
 5. Closing produces a reliable event, creates an order, and releases or captures virtual deposits.
 6. The winner pays any remaining virtual amount; timeout and seller credit converge asynchronously.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser[Vue 3 browser] -->|HTTP / WebSocket| Gateway[Spring Cloud Gateway]
+    Gateway --> Account[Account service]
+    Gateway --> Auction[Auction service]
+    Gateway --> Trade[Trade service]
+    Gateway --> Realtime[Realtime service]
+
+    Account --> AccountDB[(Account MySQL)]
+    Auction --> AuctionDB[(Auction MySQL)]
+    Trade --> TradeDB[(Trade MySQL)]
+    Auction --> OSS[Private Alibaba OSS]
+
+    Account --> MQ[RocketMQ]
+    Auction --> MQ
+    Trade --> MQ
+    MQ --> Account
+    MQ --> Auction
+    MQ --> Trade
+    MQ --> Realtime
+
+    Realtime --> Redis[(Redis)]
+    Realtime -->|Snapshot via internal API| Auction
+    Realtime -->|ordered events| Browser
+    Gateway -. service discovery/config .-> Nacos[Nacos]
+    Account -.-> Nacos
+    Auction -.-> Nacos
+    Trade -.-> Nacos
+    Realtime -.-> Nacos
+```
+
+The database transaction is the final business decision. Auction commits the session CAS update,
+bid records and Outbox rows together; RocketMQ provides at-least-once delivery, while consumers use
+event IDs, request IDs and unique constraints for idempotency. Redis and WebSocket improve delivery
+latency only. A client that detects a sequence gap returns to an Auction/MySQL snapshot instead of
+treating Pub/Sub as durable history.
+
 ## Modules
 
 | Module | Responsibility |
@@ -27,7 +67,7 @@ anti-sniping are implemented in stage 04; AI inference remains the stage 05 scop
 | `auction-service` | Items, review, enrollment, bids, and auction state |
 | `trade-service` | Winning orders, simulated payment, and payment timeout |
 | `realtime-service` | One-time ticket authentication, WebSocket subscriptions, snapshot recovery, RocketMQ consumption and Redis multi-instance fanout |
-| `ai-service` | Stage 05 health-check skeleton; model inference is not implemented yet |
+| `ai-service` | Reserved health-check skeleton; model inference is intentionally outside `v1.0.0` |
 | `common/*` | Stable response, security, web, and cross-service contract modules |
 | `web` | Vue 3 user and administration interface |
 
@@ -37,11 +77,11 @@ anti-sniping are implemented in stage 04; AI inference remains the stage 05 scop
 - Spring Boot 3.5, Spring Cloud 2025, and Spring Cloud Alibaba 2025
 - MySQL 8.4, Redis 7, RocketMQ 5, Nacos 3, MyBatis-Plus, and Flyway
 - Vue 3, TypeScript, Vite, pnpm, and Element Plus
-- Alibaba Cloud OSS and Qwen VL as optional integrations
+- Alibaba Cloud OSS for private auction assets; Qwen VL is deferred to an optional `v1.x` enhancement
 
 ## Development prerequisites
 
-Install the following tools before running the completed stage 04 local environment:
+Install the following tools before running the `v1.0.0` release-candidate local environment:
 
 - JDK 21
 - Maven 3.9 or newer
