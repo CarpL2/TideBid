@@ -31,9 +31,46 @@ if ($null -eq $docker) {
 }
 
 $compose = @('compose', '--env-file', $EnvFile, '-f', $composeFile)
-$mysqlIds = @(& $docker.Source @($compose + @('ps', '--quiet', 'mysql')))
-if ($LASTEXITCODE -ne 0) {
-    throw 'Could not inspect the TideBid MySQL container.'
+function Read-DotEnvEntries {
+    $entries = [ordered]@{}
+    foreach ($line in [System.IO.File]::ReadAllLines($EnvFile)) {
+        $trimmed = $line.Trim()
+        if ($trimmed.Length -eq 0 -or $trimmed.StartsWith('#')) { continue }
+        $separator = $line.IndexOf('=')
+        if ($separator -le 0) { throw 'Invalid .env entry; expected NAME=value.' }
+        $name = $line.Substring(0, $separator).Trim()
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or $entries.Contains($name)) {
+            throw 'Invalid or duplicate environment variable name in .env.'
+        }
+        $value = $line.Substring($separator + 1).Trim()
+        if ($value.Length -ge 2 -and
+            (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+             ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        $entries[$name] = $value
+    }
+    return $entries
+}
+
+$originalEnvironment = @{}
+foreach ($entry in (Read-DotEnvEntries).GetEnumerator()) {
+    $originalEnvironment[$entry.Key] = [pscustomobject]@{
+        Existed = Test-Path -LiteralPath "Env:$($entry.Key)"
+        Value = [Environment]::GetEnvironmentVariable($entry.Key, 'Process')
+    }
+    [Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, 'Process')
+}
+try {
+    $mysqlIds = @(& $docker.Source @($compose + @('ps', '--quiet', 'mysql')))
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not inspect the TideBid MySQL container.'
+    }
+} finally {
+    foreach ($entry in $originalEnvironment.GetEnumerator()) {
+        $value = if ($entry.Value.Existed) { $entry.Value.Value } else { $null }
+        [Environment]::SetEnvironmentVariable($entry.Key, $value, 'Process')
+    }
 }
 $mysqlIds = @($mysqlIds | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 if ($mysqlIds.Count -ne 1) {

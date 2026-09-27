@@ -14,6 +14,9 @@ param(
     [switch]$AuctionCore,
 
     [Parameter()]
+    [string]$ExportBenchmarkConfig = '',
+
+    [Parameter()]
     [switch]$RealtimeProxy,
 
     [Parameter()]
@@ -82,6 +85,24 @@ $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 if ($RealtimeProxyTradeDemo) {
     $RealtimeProxyDemo = $true
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) {
+    if ($ReliableTrade -or $RealtimeProxy -or $RealtimeMultiInstance -or $RealtimeRestartRecovery -or
+        $RealtimeBrokerRecovery -or $RealtimeProxyDemo -or $RealtimeProxyTradeDemo -or
+        $RealtimeProxyPaymentDemo) {
+        throw 'ExportBenchmarkConfig cannot be combined with reliable-trade or realtime smoke modes.'
+    }
+    $runtimeRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot '.runtime'))
+    if (-not [System.IO.Path]::IsPathRooted($ExportBenchmarkConfig)) {
+        $ExportBenchmarkConfig = Join-Path $repositoryRoot $ExportBenchmarkConfig
+    }
+    $ExportBenchmarkConfig = [System.IO.Path]::GetFullPath($ExportBenchmarkConfig)
+    if (-not $ExportBenchmarkConfig.StartsWith($runtimeRoot + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "ExportBenchmarkConfig must stay under the ignored runtime directory $runtimeRoot."
+    }
+    $AuctionCore = $true
 }
 if ($RealtimeProxyPaymentDemo) {
     $RealtimeProxyTradeDemo = $true
@@ -1055,7 +1076,9 @@ function Register-SmokeActor {
         [Parameter(Mandatory = $true)][string]$Suffix
     )
 
-    $username = "smoke_${Label}_$Suffix"
+    $usernamePrefix = if ([string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) { 'smoke' } else { 'benchmark' }
+    $usernameSuffix = if ([string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) { $Suffix } else { $Suffix.Substring(0, 12) }
+    $username = "${usernamePrefix}_${Label}_$usernameSuffix"
     $password = "Smoke-$([Guid]::NewGuid().ToString('N').Substring(0, 20))!"
     $response = Invoke-SmokeRequest `
         -Step "register-$Label" `
@@ -1063,7 +1086,11 @@ function Register-SmokeActor {
         -Path '/api/auth/register' `
         -ExpectedStatus 201 `
         -Headers @{ 'X-Request-Id' = "smoke-register-$Label-$($Suffix.Substring(0, 8))" } `
-        -Body @{ username = $username; password = $password; nickname = "Smoke $Label" } `
+        -Body @{
+            username = $username
+            password = $password
+            nickname = if ([string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) { "Smoke $Label" } else { "Benchmark $Label" }
+        } `
         -ApiEnvelope
     Assert-Value -Condition ($response.data.userId -is [string]) -Message "$Label userId must be a JSON string"
     return [pscustomobject]@{
@@ -1583,13 +1610,15 @@ try {
         -RequiredHeaders $uploadIntent.data.requiredHeaders `
         -Content $imageBytes
 
-    $startAt = if ($ReliableTrade -or $RealtimeProxyDemo) {
+    $startAt = if ($ReliableTrade -or $RealtimeProxyDemo -or -not [string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) {
         [DateTimeOffset]::UtcNow.AddSeconds(75)
     } else {
         [DateTimeOffset]::UtcNow.AddMinutes(2)
     }
-    $endAt = if ($ReliableTrade -or $RealtimeProxyDemo) {
-        $duration = if ($RealtimeProxyDemo -and -not $ReliableTrade) { 45 } else { $ReliableTradeAuctionDurationSeconds }
+    $endAt = if ($ReliableTrade -or $RealtimeProxyDemo -or -not [string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) {
+        $duration = if (-not [string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) {
+            1800
+        } elseif ($RealtimeProxyDemo -and -not $ReliableTrade) { 45 } else { $ReliableTradeAuctionDurationSeconds }
         $startAt.AddSeconds($duration)
     } else {
         $startAt.AddMinutes(10)
@@ -1604,8 +1633,16 @@ try {
             'X-Request-Id' = "smoke-draft-$($suffix.Substring(0, 12))"
         } `
         -Body @{
-            title = "Smoke auction $($suffix.Substring(0, 8))"
-            description = 'Stage 02 end-to-end smoke auction with two registered bidders.'
+            title = if ([string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) {
+                "Smoke auction $($suffix.Substring(0, 8))"
+            } else {
+                "Benchmark auction $($suffix.Substring(0, 8))"
+            }
+            description = if ([string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) {
+                'Stage 02 end-to-end smoke auction with two registered bidders.'
+            } else {
+                'Dedicated phase 05 performance fixture; do not use for manual demonstrations.'
+            }
             category = 'COLLECTIBLES'
             itemCondition = 'GOOD'
             startPrice = '100.00'
@@ -1726,6 +1763,34 @@ try {
     $opened = Wait-AuctionOpen -AuctionId $auctionId -Authorization $buyerOneAuthorization
     Assert-Value -Condition ((ConvertTo-InvariantDecimal $opened.minimumNextBid 'minimumNextBid') -eq [decimal]100.00) `
         -Message 'first minimum bid is not the start price'
+
+    if (-not [string]::IsNullOrWhiteSpace($ExportBenchmarkConfig)) {
+        $benchmarkDirectory = Split-Path -Parent $ExportBenchmarkConfig
+        New-Item -ItemType Directory -Path $benchmarkDirectory -Force | Out-Null
+        [ordered]@{
+            version = 1
+            gatewayBaseUri = $GatewayBaseUri
+            auctionId = $auctionId
+            auctionTitlePrefix = 'Benchmark '
+            actors = @(
+                [ordered]@{ username = $buyerOne.Username; password = $buyerOne.Password }
+                [ordered]@{ username = $buyerTwo.Username; password = $buyerTwo.Password }
+            )
+            bid = [ordered]@{
+                requests = 40
+                concurrency = 8
+                increment = '10.00'
+                timeoutMs = 10000
+            }
+            realtime = [ordered]@{
+                connections = 2
+                timeoutMs = 15000
+            }
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ExportBenchmarkConfig -Encoding utf8
+        Write-Host "[PASS] Dedicated benchmark fixture is OPEN. Sensitive config: $ExportBenchmarkConfig"
+        Write-Host 'Run node .\scripts\benchmark.mjs --config .\.runtime\benchmark.json --mode all before the 30-minute auction ends.'
+        return
+    }
 
     if ($RealtimeProxyDemo) {
         $proxyDemoOutputs = @(Invoke-RealtimeProxyDemoCheck `

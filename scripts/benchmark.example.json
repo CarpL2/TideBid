@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "gatewayBaseUri": "http://127.0.0.1:9000",
+  "auctionId": "1",
+  "auctionTitlePrefix": "Benchmark ",
+  "actors": [
+    {
+      "username": "benchmark_buyer_01",
+      "password": "replace-with-local-password"
+    },
+    {
+      "username": "benchmark_buyer_02",
+      "password": "replace-with-local-password"
+    }
+  ],
+  "bid": {
+    "requests": 40,
+    "concurrency": 8,
+    "increment": "10.00",
+    "timeoutMs": 10000
+  },
+  "realtime": {
+    "connections": 2,
+    "timeoutMs": 15000
+  }
+}

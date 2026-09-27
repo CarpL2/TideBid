@@ -228,6 +228,38 @@ data. If a check fails, start with this index:
 Never add `-v` to the Compose shutdown command unless destroying all local TideBid data is the
 explicit goal.
 
+### Reproducible local performance baseline
+
+Performance checks always create a dedicated 30-minute auction and two `benchmark_` accounts; they
+do not reuse or delete demonstration data. The generated credentials stay under ignored `.runtime/`
+and are never written to a result report:
+
+```powershell
+.\scripts\smoke.ps1 -ExportBenchmarkConfig .runtime/benchmark.json
+node .\scripts\benchmark.mjs --config .\.runtime\benchmark.json --dry-run
+node .\scripts\benchmark.mjs --config .\.runtime\benchmark.json --mode all
+```
+
+The report is written to `.runtime/benchmarks/<UTC timestamp>/` and records the local hardware,
+request parameters, HTTP/API-code distribution, throughput, latency percentiles, bid-count
+consistency, WebSocket broadcast latency and Snapshot recovery. These figures are a single-machine
+engineering baseline, not a production capacity or SLA claim. Broker outage/Outbox recovery remains
+an explicit fault drill through `rocketmq-outage.ps1` and `outbox-status.ps1`; it is not hidden inside
+the ordinary benchmark command.
+
+The 2026-09-27 baseline on a Windows 11 development machine (i9-13900HX, 32 logical cores, 15.7 GiB
+available memory) produced the following deliberately small local result:
+
+| Check | Parameters | Result |
+| --- | --- | --- |
+| Concurrent bid | 40 requests, concurrency 8, 2 actors | 106.22 req/s; p50 70.64 ms; p95 81.49 ms; 10 accepted, 26 CAS conflicts, 4 stale/low bids; accepted rows exactly matched `bidCount` delta |
+| Realtime | 2 authenticated WebSockets | connect p95 14.44 ms; Snapshot p95 16.70 ms; exact-sequence `BID_ACCEPTED` p95 581.76 ms; reconnect plus Snapshot 46.15 ms |
+| Outbox recovery | Broker stopped, 10 due events | all events drained with 0 DEAD rows in 68.796 s, including Broker health and topology restoration |
+
+The broadcast figure includes the persistent Outbox scan, RocketMQ delivery, Redis fan-out and
+WebSocket send path. The Outbox recovery figure includes infrastructure readiness checks, so neither
+number should be presented as a broker-only latency or production capacity measurement.
+
 ## Run the complete local stack
 
 After creating `.env`, start the middleware and all host applications from the repository root:
