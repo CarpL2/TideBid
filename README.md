@@ -197,6 +197,7 @@ Copy-Item .env.example .env
 The full release gate is intentionally longer and should be run from the repository root:
 
 ```powershell
+.\scripts\stop-apps.ps1
 mvn clean verify
 Push-Location web
 pnpm install --frozen-lockfile
@@ -205,16 +206,24 @@ pnpm type-check
 pnpm test
 pnpm build-only
 Pop-Location
+.\scripts\infra-up.ps1
+.\scripts\start-apps.ps1 -SkipBuild
 .\scripts\start-apps.ps1 -CheckOnly
 .\scripts\status.ps1 -AssertHealthy
 .\scripts\check-nacos-registrations.ps1
+.\scripts\check-rocketmq-topology.ps1
 .\scripts\smoke.ps1 -ReliableTrade
 .\scripts\smoke.ps1 -RealtimeProxyTradeDemo
+.\scripts\audit-release-secrets.ps1
+.\scripts\audit-runtime-logs.ps1
 ```
 
 The two extended smoke commands require the private OSS and development administrator settings
 documented below. They always create fresh test users and auctions; they do not delete historical
-data. If a check fails, start with this index:
+data. Stop only the recorded application process trees before `mvn clean verify`, because Windows
+locks executable JARs while they are running. `infra-up.ps1` is idempotent and does not delete named
+volumes. The release-secret audit reports only file/category counts and never prints matched values.
+If a check fails, start with this index:
 
 | Symptom | First check |
 | --- | --- |
@@ -812,9 +821,10 @@ After the drill, audit the latest application run without printing any matched s
 .\scripts\audit-runtime-logs.ps1 -LogDirectory .runtime/apps/logs/<timestamp>
 ```
 
-The audit compares logs with configured sensitive environment values and detects bearer
-credentials, OSS signature query parameters and private-key material. It exits nonzero and reports
-only the affected file and finding category when a leak is detected.
+The audit compares logs with configured sensitive environment values and detects bearer/JWT
+credentials, WebSocket tickets, OSS signature query parameters, proxy maximum amounts and
+private-key material. It exits nonzero and reports only the affected file and finding category when
+a leak is detected.
 
 The first pull is large because Nacos and RocketMQ are Java images. Nacos is available at
 `http://127.0.0.1:8080`, and RocketMQ Dashboard at `http://127.0.0.1:8088`. Host Java applications

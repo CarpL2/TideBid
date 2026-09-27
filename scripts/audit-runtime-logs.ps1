@@ -65,7 +65,10 @@ foreach ($line in [System.IO.File]::ReadAllLines($EnvFile)) {
 
 $highConfidencePatterns = [ordered]@{
     'Authorization bearer value' = '(?i)Authorization\s*[:=]\s*Bearer\s+[^\s,;]+'
+    'JWT-shaped value' = '(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])'
+    'WebSocket ticket value' = '(?i)(?:[?&]ticket=|ticket["'']?\s*[:=]\s*["'']?)[A-Za-z0-9_-]{16,}'
     'OSS signed credential query' = '(?i)(x-oss-signature|x-oss-credential|OSSAccessKeyId)='
+    'proxy maximum amount' = '(?i)(?:proxyMaxAmount|maximumAmount|maxAmount)\s*[:=]\s*["'']?[0-9]'
     'private key material' = '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
 }
 $findings = [System.Collections.Generic.List[string]]::new()
@@ -110,5 +113,5 @@ if ($findings.Count -gt 0) {
     throw "Runtime log audit failed with $($findings.Count) finding(s)."
 }
 
-Write-Host "[PASS] Audited $($logFiles.Count) log file(s) without exposing or finding configured secrets, bearer credentials, OSS signatures or private keys."
+Write-Host "[PASS] Audited $($logFiles.Count) log file(s) without exposing or finding configured secrets, bearer/JWT credentials, WebSocket tickets, OSS signatures, proxy maximum amounts or private keys."
 Write-Host "Log directory: $LogDirectory"
