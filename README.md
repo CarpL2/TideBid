@@ -58,6 +58,40 @@ event IDs, request IDs and unique constraints for idempotency. Redis and WebSock
 latency only. A client that detects a sequence gap returns to an Auction/MySQL snapshot instead of
 treating Pub/Sub as durable history.
 
+### Reliable close and settlement
+
+```mermaid
+sequenceDiagram
+    participant Scheduler as Close scheduler
+    participant Auction as Auction service
+    participant ADB as Auction MySQL
+    participant Outbox as Outbox workers
+    participant MQ as RocketMQ
+    participant Trade as Trade service
+    participant TDB as Trade MySQL
+    participant Account as Account service
+    participant UDB as Account MySQL
+
+    Scheduler->>Auction: close(auctionId, expectedEndAt)
+    Auction->>ADB: lock session and recheck endAt/status
+    Auction->>ADB: commit CLOSED + AuctionClosed Outbox
+    Outbox->>ADB: lease unpublished event
+    Outbox->>MQ: publish AuctionClosed
+    MQ->>Trade: AuctionClosed (at least once)
+    Trade->>TDB: Inbox dedupe + create winning order + Outbox
+    Outbox->>TDB: lease unpublished requests
+    Outbox->>MQ: publish settlement requests
+    MQ->>Account: capture/release deposits
+    Account->>UDB: idempotent wallet ledger transaction
+    MQ->>Trade: settlement result
+    Trade->>TDB: advance order/settlement state
+```
+
+An old delayed close command cannot close an extended auction because `expectedEndAt` must still
+match the database value. Closing, order creation and wallet changes are separate local transactions;
+they converge through explicit states, idempotent messages and reconciliation jobs rather than a
+distributed transaction. Every balance change has a unique business key and an immutable ledger row.
+
 ## Modules
 
 | Module | Responsibility |
@@ -138,6 +172,61 @@ The browser stores the demonstration Access Token in `sessionStorage`, so refres
 restores the session and closing the tab clears it. This is a local portfolio-project tradeoff, not
 a production security recommendation: an XSS payload running in the page could still read the
 Token. A 401 from an authenticated request clears the session and returns the user to login.
+
+## Quick start and release verification
+
+For an existing configured checkout, the shortest healthy-start path is:
+
+```powershell
+.\scripts\infra-up.ps1
+.\scripts\start-apps.ps1 -SkipBuild
+.\scripts\status.ps1 -AssertHealthy
+.\scripts\smoke.ps1
+```
+
+On the first run, copy `.env.example` to `.env`, replace every `change-me` value, generate the local
+JWT keys, and omit `-SkipBuild`:
+
+```powershell
+Copy-Item .env.example .env
+.\scripts\generate-jwt-keys.ps1
+.\scripts\infra-up.ps1
+.\scripts\start-apps.ps1
+```
+
+The full release gate is intentionally longer and should be run from the repository root:
+
+```powershell
+mvn clean verify
+Push-Location web
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm type-check
+pnpm test
+pnpm build-only
+Pop-Location
+.\scripts\start-apps.ps1 -CheckOnly
+.\scripts\status.ps1 -AssertHealthy
+.\scripts\check-nacos-registrations.ps1
+.\scripts\smoke.ps1 -ReliableTrade
+.\scripts\smoke.ps1 -RealtimeProxyTradeDemo
+```
+
+The two extended smoke commands require the private OSS and development administrator settings
+documented below. They always create fresh test users and auctions; they do not delete historical
+data. If a check fails, start with this index:
+
+| Symptom | First check |
+| --- | --- |
+| Application or middleware unavailable | `.\scripts\status.ps1 -AssertHealthy` |
+| Nacos instance count or port mismatch | `.\scripts\check-nacos-registrations.ps1` |
+| RocketMQ topic/group mismatch | `.\scripts\check-rocketmq-topology.ps1` |
+| Outbox backlog or retry | `.\scripts\outbox-status.ps1 -AssertHealthy` |
+| Host application startup failure | `.runtime/apps/logs/<latest>/` |
+| Container startup failure | `docker compose --env-file .env -f infra/compose.yaml logs <service>` |
+
+Never add `-v` to the Compose shutdown command unless destroying all local TideBid data is the
+explicit goal.
 
 ## Run the complete local stack
 
